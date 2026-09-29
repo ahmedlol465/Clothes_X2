@@ -43,3 +43,19 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Node/NestJS backend
+node_modules/
+backend/dist/
+backend/coverage/
+backend/storage/
+backend/data/
+*.tsbuildinfo
+
+# Environment files (.env.example is tracked on purpose)
+.env
+.env.*
+!.env.example
+
+# Playwright MCP debug artifacts
+.playwright-mcp/
