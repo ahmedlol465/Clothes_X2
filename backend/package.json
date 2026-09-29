@@ -21,7 +21,11 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
-    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
+    "embeddings:install": "npm install @xenova/transformers"
+  },
+  "optionalDependencies": {
+    "@xenova/transformers": "^2.17.2"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.12",
@@ -43,8 +47,10 @@
     "compression": "^1.8.0",
     "cors": "^2.8.5",
     "dayjs": "^1.11.13",
+    "dotenv": "^18.0.4",
     "express": "^4.19.2",
     "helmet": "^8.1.0",
+    "multer": "^1.4.5-lts.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.14.1",
@@ -77,13 +83,19 @@
     "typescript": "^5.8.2"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
-    "collectCoverageFrom": ["**/*.(t|j)s"],
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
   }

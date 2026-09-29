@@ -273,12 +273,20 @@ class _Hero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final photo = image.startsWith('http://') || image.startsWith('https://')
+        ? Image.network(
+            image,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stack) =>
+                const ColoredBox(color: AppColors.tint),
+          )
+        : Image.asset(image, fit: BoxFit.cover);
     return SizedBox(
       height: 380,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Image.asset(image, fit: BoxFit.cover),
+          photo,
           Positioned(
             top: Insets.md,
             left: Insets.lg,

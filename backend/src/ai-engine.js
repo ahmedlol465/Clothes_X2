@@ -1,322 +1,616 @@
 /**
  * SmartWardrobe AI engine (§9 AI/ML pipeline).
  *
- * Pure-JS port of the rule + heuristic scoring described in the spec:
  *   USER REQUEST → CONTEXT ENGINE → WARDROBE FILTER → CANDIDATE OUTFITS
  *   → COMPATIBILITY ENGINE → PERSONALIZATION → RANKING → EXPLANATION
  *   → OUTFIT → USER FEEDBACK → LEARNING (StyleMemory)
  *
- * The Python FastAPI service (ai-service/) mirrors this logic. The Node
+ * Rebuilt for the stylist release:
+ *   • Scoring now runs the full 11-factor model from `src/scoring.js` instead
+ *     of 5 hardcoded heuristics clamped into 60..97, and it reads the learned
+ *     StyleMemory so ratings actually change what gets recommended.
+ *   • `generateOutfits` uses a beam search over outfit slots rather than a
+ *     cartesian product that stopped after 24 combinations — so it scales and
+ *     it enforces rotation (you stop seeing the same three pieces).
+ *   • `remixOutfit` produces the casual / cold / date / summer / formal variants.
+ *   • `chatReply` is still fully offline: the rule-based fallback a user hits
+ *     when no LLM key is configured is now genuinely useful.
+ *
+ * The Python FastAPI service (ai-service/) mirrors the older subset. The Node
  * backend uses this embedded copy so the app runs with `npm start` only.
- * Set AI_SERVICE_URL to proxy /ai/* to the FastAPI service instead.
  */
 'use strict';
 
-const COLOR_FAMILIES = {
-  white: 'neutral', black: 'neutral', grey: 'neutral', gray: 'neutral',
-  beige: 'neutral', tan: 'neutral', cream: 'neutral', charcoal: 'neutral',
-  navy: 'cool', blue: 'cool', indigo: 'cool', green: 'cool', teal: 'cool',
-  brown: 'warm', 'dark brown': 'warm', beige2: 'warm', olive: 'warm',
-  red: 'bold', burgundy: 'bold', mustard: 'bold', multicolor: 'bold',
-};
+const tax = require('./taxonomy');
+const scoring = require('./scoring');
+const memoryStore = require('./style-memory');
+const retrieval = require('./retrieval');
 
-function colorFamily(color = '') {
-  const c = String(color).toLowerCase();
-  for (const [k, v] of Object.entries(COLOR_FAMILIES)) {
-    if (c.includes(k)) return v;
-  }
-  return 'neutral';
-}
+// ------------------------------------------------------------- compatibility
 
-function colorHarmony(items) {
-  if (items.length < 2) return 90;
-  const fams = items.map((i) => colorFamily(i.color));
-  const uniq = new Set(fams);
-  if (uniq.size === 1) return 96; // tonal / monochrome
-  if (uniq.has('bold') && uniq.size > 2) return 74;
-  if (uniq.has('bold') && uniq.has('warm') && uniq.has('cool')) return 78;
-  if (uniq.size === 2) return 90;
-  return 84;
-}
-
-function styleCompat(items) {
-  const styles = items.map((i) => String(i.style || '').toLowerCase());
-  const uniq = new Set(styles);
-  if (uniq.size === 1) return 94;
-  const formal = styles.filter((s) => s.includes('formal')).length;
-  const casual = styles.filter((s) => s.includes('casual') || s.includes('minimal') || s.includes('modern')).length;
-  if (formal > 0 && casual > 0 && uniq.size > 2) return 78;
-  if (uniq.size === 2) return 88;
-  return 84;
-}
-
-function occasionFit(items, occasion = '') {
-  const occ = occasion.toLowerCase();
-  const wantsFormal = /formal|dinner|wedding|meeting|presentation|office|business/.test(occ);
-  const wantsCasual = /casual|university|leisure|weekend|chill|travel|gym|sport/.test(occ);
-  const wantsElegant = /elegant|date|evening|party/.test(occ);
-  if (!wantsFormal && !wantsCasual && !wantsElegant) return 88;
-  let score = 86;
-  for (const it of items) {
-    const f = String(it.formality || '').toLowerCase();
-    if (wantsFormal && /formal|elegant|smart/.test(f)) score += 2;
-    else if (wantsCasual && /casual|minimal|smart/.test(f)) score += 2;
-    else if (wantsElegant && /elegant|formal|smart/.test(f)) score += 2;
-    else score -= 2;
-  }
-  return clamp(Math.round(score), 60, 97);
-}
-
-function weatherFit(items, weather = {}) {
-  const temp = Number(weather.tempC ?? 24);
-  let score = 90;
-  for (const it of items) {
-    const season = String(it.season || '').toLowerCase();
-    const warmth = String(it.warmth || it.material || '').toLowerCase();
-    if (temp >= 26) {
-      if (/winter|wool|suede|fleece/.test(season + warmth)) score -= 6;
-      if (/summer|linen|cotton/.test(season + warmth)) score += 1;
-    } else if (temp <= 14) {
-      if (/summer|linen/.test(season) && !/winter|autumn/.test(season)) score -= 5;
-      if (/winter|wool|sweater|jacket|blazer|outerwear/.test(season + warmth + (it.category || ''))) score += 1;
-    }
-  }
-  return clamp(Math.round(score), 60, 97);
-}
-
-function personalTaste(items, styleProfile = {}) {
-  const favColors = (styleProfile.favoriteColors || []).map((c) => String(c).toLowerCase());
-  const favStyles = (styleProfile.preferredStyles || []).map((s) => String(s).toLowerCase());
-  if (!favColors.length && !favStyles.length) return 88;
-  let hits = 0, total = 0;
-  for (const it of items) {
-    total += 2;
-    if (favColors.some((c) => String(it.color || '').toLowerCase().includes(c))) hits += 1;
-    if (favStyles.some((s) => String(it.style || '').toLowerCase().includes(s))) hits += 1;
-  }
-  return clamp(Math.round(78 + (hits / Math.max(1, total)) * 18), 60, 97);
-}
-
-function clamp(n, lo, hi) { return Math.min(hi, Math.max(lo, n)); }
-
+/**
+ * Backwards-compatible entry point used by /ai/calculate-compatibility,
+ * /outfits POST, /shop/before-you-buy and the compatibility breakdown screen.
+ * `breakdown` entries keep their { label, value } shape and gain extra fields.
+ */
 function calculateCompatibility(items, ctx = {}) {
-  const breakdown = [
-    { label: 'Color Harmony', value: colorHarmony(items) },
-    { label: 'Style Compatibility', value: styleCompat(items) },
-    { label: 'Occasion Fit', value: occasionFit(items, ctx.occasion || '') },
-    { label: 'Weather Match', value: weatherFit(items, ctx.weather || {}) },
-    { label: 'Personal Taste', value: personalTaste(items, ctx.styleProfile || {}) },
-  ];
-  const weights = [0.24, 0.22, 0.22, 0.16, 0.16];
-  const match = Math.round(breakdown.reduce((a, b, i) => a + b.value * weights[i], 0));
-  return { match, breakdown };
+  return scoring.scoreOutfit(items, ctx);
 }
 
-function explainOutfit(items, ctx, compat) {
-  const names = items.map((i) => i.name).join(' + ');
-  const colors = [...new Set(items.map((i) => i.color))].join(' / ');
-  const bits = [];
-  const ch = compat.breakdown[0].value;
-  if (ch >= 88) bits.push(`neutral ${colors} palette keeps everything balanced`);
-  else bits.push(`${colors} tones are mixed for contrast`);
-  const occ = (ctx.occasion || 'your day').toLowerCase();
-  bits.push(`the ${items.map((i) => i.category.toLowerCase()).join(' / ')} mix suits ${occ}`);
-  if (ctx.weather && ctx.weather.tempC != null) {
-    bits.push(ctx.weather.tempC >= 26 ? 'lightweight fabrics handle the warmth' : 'layering handles the temperature');
+function explainOutfit(items, ctx = {}, compat = null) {
+  return scoring.explain(items, ctx, compat);
+}
+
+// ----------------------------------------------------------------- ranking
+
+/** Number of candidates to keep per slot during the beam search. */
+const BEAM_PER_SLOT = 6;
+const BEAM_WIDTH = 8;
+const MAX_COMBOS = 400;
+
+/**
+ * Rank candidate garments for one slot.
+ * `focus` optionally biases toward a request (used by chat + retrieval).
+ */
+/**
+ * Thermal responsibility per slot. A blazer carries most of the outfit's
+ * insulation, so a wrong-climate blazer should disqualify the whole look;
+ * a wrong-climate belt is a minor issue. Ranking every slot with the same
+ * climate weight let a linen summer blazer top a snow outfit.
+ */
+const CLIMATE_WEIGHT = { outerwear: 0.55, shoes: 0.3, top: 0.28, bottom: 0.25, accessory: 0.15 };
+const CLIMATE_FLOOR = 40; // below this the piece is actively wrong for the weather
+
+function rankSlot(pool, slot, ctx = {}) {
+  const { occasion = '', weather = {}, styleProfile = {}, memory = null, focus = '' } = ctx;
+  // Absolute exclusions ("I never wear sneakers") are filtered, not scored.
+  const inSlot = memoryStore.withoutAvoided(memory || memoryStore.empty(), pool)
+    .filter((i) => tax.slotOf(i) === slot);
+  const candidates = inSlot.length
+    ? inSlot
+    : pool.filter((i) => tax.slotOf(i) === slot);
+  if (!candidates.length) return [];
+
+  const target = tax.occasionTarget(occasion);
+  const climateWeight = CLIMATE_WEIGHT[slot] ?? 0.25;
+
+  const scored = candidates
+    .map((item) => {
+      let score = 0;
+      if (target != null) score += Math.max(0, 1 - Math.abs(tax.formalityOf(item) - target) / 5) * 30;
+      const climate = tax.weatherScore(item, weather);
+      score += climate * climateWeight;
+      score += memoryStore.itemAffinity(memory, item) * 24;
+      if (focus) score += retrieval.lexicalScore(focus, item) * 26;
+      // Rotation pressure: unworn pieces climb.
+      const worn = Number(item.timesWorn || 0);
+      score += worn === 0 ? 8 : Math.max(0, 6 - worn * 0.35);
+      // Hard disqualification, but only while something wearable survives.
+      return { item, score, climate };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const viable = scored.filter((c) => c.climate >= CLIMATE_FLOOR);
+  const useable = viable.length ? viable : scored;
+  return useable.slice(0, BEAM_PER_SLOT).map((c) => c.item);
+}
+
+/**
+ * Beam search over outfit slots.
+ *
+ * Slot order matters: outerwear first (it constrains the silhouette), then
+ * top, bottom, shoes, accessory. At each step we keep the best `BEAM_WIDTH`
+ * partial outfits, scoring the partial combination so far.
+ */
+function beamSearch(pool, ctx = {}) {
+  const { weather = {}, occasion = '' } = ctx;
+  const month = ctx.month ?? (new Date().getMonth() + 1);
+  const scoreCtx = { occasion, weather, styleProfile: ctx.styleProfile, memory: ctx.memory, month };
+
+  let beams = [{ pieces: [], score: 0 }];
+
+  for (const { slot, required } of tax.OUTFIT_SLOTS) {
+    // Outerwear is only relevant when it is cold or the occasion is dressy.
+    const needsOuter = slot === 'outerwear'
+      && (Number(weather.tempC ?? 24) <= 21 || (tax.occasionTarget(occasion) ?? 2) >= 4);
+    if (slot === 'outerwear' && !needsOuter) continue;
+
+    let candidates = rankSlot(pool, slot, ctx);
+    if (!candidates.length) {
+      if (required) continue; // tolerate an incomplete wardrobe
+      continue;
+    }
+
+    const next = [];
+    for (const beam of beams) {
+      for (const candidate of candidates) {
+        // Never pick the same garment twice.
+        if (beam.pieces.some((p) => p.id === candidate.id)) continue;
+        const pieces = [...beam.pieces, candidate];
+        next.push({ pieces, score: scoring.scoreOutfit(pieces, scoreCtx).match });
+        if (next.length >= MAX_COMBOS) break;
+      }
+      if (next.length >= MAX_COMBOS) break;
+    }
+    if (!next.length) continue;
+    next.sort((a, b) => b.score - a.score);
+    beams = next.slice(0, BEAM_WIDTH);
   }
-  return `${names} work together because ${bits.join(' and ')}. Compatibility ${compat.match}%.`;
+
+  return beams;
 }
 
-function pickByCategory(items, categories) {
-  for (const c of categories) {
-    const found = items.find((i) => String(i.category).toLowerCase() === c);
-    if (found) return found;
-  }
-  return null;
-}
-
-/** Generate up to `count` ranked outfits from wardrobe items. */
-function generateOutfits(wardrobe, opts = {}) {
+/**
+ * Generate up to `count` ranked outfits.
+ *
+ * Diversity pass: after ranking, each returned outfit is penalised for reusing
+ * pieces already used by higher-ranked outfits, so the user gets five visibly
+ * different suggestions rather than five variations of one look.
+ */
+function generateOutfits(wardrobe = [], opts = {}) {
   const occasion = opts.occasion || 'casual';
   const weather = opts.weather || { tempC: 24, condition: 'partly cloudy' };
   const styleProfile = opts.styleProfile || {};
-  const count = Math.min(6, Math.max(1, Number(opts.count) || 3));
-  const anchorId = opts.anchorItemId;
+  const memory = opts.memory || memoryStore.empty();
+  const count = Math.min(8, Math.max(1, Number(opts.count) || 3));
   const excludeIds = new Set(opts.excludeIds || []);
 
-  let pool = wardrobe.filter((i) => !excludeIds.has(i.id) && !i.archived);
+  let pool = (Array.isArray(wardrobe) ? wardrobe : []).filter(
+    (i) => i && !i.archived && !excludeIds.has(i.id),
+  );
   if (!pool.length) return [];
 
-  // Context filter: drop heavy winter layers on hot days and vice versa.
-  const temp = Number(weather.tempC ?? 24);
-  pool = pool.filter((i) => {
-    const s = String(i.season || '').toLowerCase();
-    if (temp >= 28 && /winter/.test(s) && !/all season/.test(s)) return false;
-    return true;
+  // Anchor: build every outfit around one specific piece when asked.
+  const anchor = opts.anchorItemId ? pool.find((i) => i.id === opts.anchorItemId) : null;
+  if (anchor) pool = [anchor, ...pool.filter((i) => i.id !== anchor.id)];
+
+  const beams = beamSearch(pool, { occasion, weather, styleProfile, memory, focus: opts.focus });
+  if (!beams.length) return [];
+
+  const month = opts.month ?? (new Date().getMonth() + 1);
+  const scored = beams.map((b) => {
+    const result = scoring.scoreOutfit(b.pieces, {
+      occasion, weather, styleProfile, memory, month,
+    });
+    return { pieces: b.pieces, ...result };
   });
-  if (!pool.length) pool = wardrobe.filter((i) => !excludeIds.has(i.id));
 
-  const tops = pool.filter((i) => /top/i.test(i.category));
-  const bottoms = pool.filter((i) => /bottom/i.test(i.category));
-  const shoes = pool.filter((i) => /shoe/i.test(i.category));
-  const outer = pool.filter((i) => /outerwear/i.test(i.category));
-  const acc = pool.filter((i) => /accessor/i.test(i.category));
+  // Greedy diversity: penalise outfits that reuse an already-shown garment.
+  const ranked = [];
+  const usedCounts = new Map();
+  const working = [...scored].sort((a, b) => b.match - a.match);
+  const pickedIds = new Set();
 
-  const combos = [];
-  const anchor = anchorId ? pool.find((i) => i.id === anchorId) : null;
-
-  const topList = tops.length ? tops : pool.slice(0, 4);
-  const bottomList = bottoms.length ? bottoms : pool.slice(0, 4);
-  const shoeList = shoes.length ? shoes : pool.slice(0, 3);
-
-  outerLoop:
-  for (const t of topList) {
-    for (const b of bottomList) {
-      if (t.id === b.id) continue;
-      for (const s of shoeList) {
-        if (s.id === t.id || s.id === b.id) continue;
-        const pieces = [t, b, s];
-        if (anchor && !pieces.some((p) => p.id === anchor.id)) {
-          // force anchor in when requested (swap shoes for anchor if needed)
-          if (/outerwear|accessor|top|bottom|shoe/i.test(anchor.category)) {
-            pieces[2] = anchor;
-          } else continue;
-        }
-        // Optionally add outerwear on cool days / formal occasions.
-        if ((temp <= 20 || /formal|meeting|dinner|evening/.test(occasion.toLowerCase())) && outer.length) {
-          const o = outer.find((x) => ![t.id, b.id, s.id].includes(x.id));
-          if (o && pieces.length < 4) pieces.push(o);
-        }
-        const compat = calculateCompatibility(pieces, { occasion, weather, styleProfile });
-        combos.push({ pieces, ...compat, explanation: explainOutfit(pieces, { occasion, weather }, compat) });
-        if (combos.length >= 24) break outerLoop;
+  while (working.length && ranked.length < count) {
+    let bestIdx = 0;
+    let bestVal = -Infinity;
+    for (let i = 0; i < working.length; i += 1) {
+      const overlap = working[i].pieces.reduce(
+        (a, p) => a + (usedCounts.get(p.id) || 0) * 7,
+        0,
+      );
+      const val = working[i].match - overlap;
+      if (val > bestVal) {
+        bestVal = val;
+        bestIdx = i;
       }
+    }
+    const [chosen] = working.splice(bestIdx, 1);
+    if (pickedIds.size && chosen.pieces.every((p) => pickedIds.has(p.id))) continue;
+    ranked.push(chosen);
+    for (const p of chosen.pieces) {
+      usedCounts.set(p.id, (usedCounts.get(p.id) || 0) + 1);
+      pickedIds.add(p.id);
     }
   }
 
-  combos.sort((a, b) => b.match - a.match);
-  const seen = new Set();
-  const ranked = [];
-  for (const c of combos) {
-    const key = c.pieces.map((p) => p.id).sort().join('|');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    ranked.push(c);
-    if (ranked.length >= count) break;
-  }
-  return ranked.map((c, idx) => ({
+  // Present best-first. The diversity pass deliberately trades a little score
+  // for variety, so the selected set must be re-sorted before it is shown —
+  // otherwise a 90 can appear above a 91 and the ranking looks broken.
+  ranked.sort((a, b) => b.match - a.match);
+
+  return ranked.map((c, idx) => toOutfit(c, occasion, idx));
+}
+
+function toOutfit(c, occasion, idx) {
+  return {
     id: `gen-${Date.now()}-${idx}`,
     name: outfitName(c.pieces, occasion),
     occasion,
     match: c.match,
     breakdown: c.breakdown,
-    explanation: c.explanation,
+    explanation: scoring.explain(c.pieces, { occasion }, c),
     itemIds: c.pieces.map((p) => p.id),
     pieces: c.pieces.map((p) => p.name),
     items: c.pieces,
-  }));
+    image: c.pieces[0]?.image,
+  };
 }
 
-function outfitName(pieces, occasion) {
-  const has = (re) => pieces.some((p) => re.test(`${p.name} ${p.style} ${p.category}`));
-  if (/formal|dinner|meeting/i.test(occasion) && has(/blazer|trouser|suit/i)) return 'Polished Evening Look';
-  if (/date|evening/i.test(occasion)) return 'Date Night Elite';
-  if (/university|casual/i.test(occasion)) return 'Campus Casual Combo';
-  if (/travel/i.test(occasion)) return 'Travel Capsule Look';
-  if (has(/blazer/i)) return 'Smart Layered Outfit';
-  if (has(/sweater|knit/i)) return 'Soft Knit Layers';
+// ------------------------------------------------------------------- naming
+
+const NAME_RULES = [
+  [/(blazer|suit|tux|trouser)/i, /formal|meeting|interview|wedding|business/i, 'Polished Evening Look'],
+  [/(blazer|suit)/i, null, 'Sharp Layered Look'],
+  [/(sneaker|tee|t-?shirt)/i, null, 'Effortless Everyday'],
+  [/(sweater|knit|cardigan)/i, null, 'Soft Knit Layers'],
+  [/(sandal|linen|short)/i, null, 'Light Summer Air'],
+  [/(trouser|chino)/i, null, 'Clean Tailoring'],
+  [/(dress|gown)/i, null, 'Evening Line'],
+];
+
+function outfitName(pieces = [], occasion = '') {
+  const hay = pieces.map((p) => `${p.name} ${p.style} ${p.category}`).join(' ');
+  for (const [itemRe, occRe, name] of NAME_RULES) {
+    if (!itemRe.test(hay)) continue;
+    if (occRe && !occRe.test(occasion)) continue;
+    return name;
+  }
   return 'Classic Minimalist Outfit';
 }
 
-/** Wardrobe-aware chat: intent parsing + function-calling style outfit attach. */
-function chatReply(message, ctx = {}) {
-  const q = String(message || '').toLowerCase();
-  const wardrobe = ctx.wardrobe || [];
-  const weather = ctx.weather || { tempC: 24, condition: 'partly cloudy' };
+// -------------------------------------------------------------------- remix
 
-  const pickOutfit = (occasion) => {
-    const gen = generateOutfits(wardrobe, { occasion, weather, styleProfile: ctx.styleProfile, count: 1 });
-    return gen[0] || null;
+/**
+ * Per-variant rules. A remix has to actually CHANGE the outfit — the earlier
+ * version filtered with a ±3 formality tolerance, so "casual" happily kept a
+ * Formal blazer and Formal Loafers and returned the suit unchanged.
+ *
+ *   maxFormality  drop anything dressier than this
+ *   minFormality  drop anything less dressy than this
+ *   requireWarmth must survive being scored at -5°C
+ *   requireCool   must survive being scored at 34°C
+ */
+const REMIX_TARGETS = {
+  casual: { occasion: 'casual', maxFormality: 2 },
+  cold: { occasion: 'casual', requireWarmth: true },
+  summer: { occasion: 'beach', maxFormality: 3, requireCool: true },
+  date: { occasion: 'date night', minFormality: 2 },
+  formal: { occasion: 'formal dinner', minFormality: 4 },
+};
+
+const REMIX_LABELS = {
+  casual: 'Casual version',
+  cold: 'Cold version',
+  summer: 'Summer version',
+  date: 'Date version',
+  formal: 'Formal version',
+};
+
+const EXTREME_COLD = { tempC: -5, condition: 'snow' };
+const EXTREME_HOT = { tempC: 34, condition: 'clear sky' };
+
+function acceptsVariant(item, rule) {
+  const level = tax.formalityOf(item);
+  const slot = tax.slotOf(item);
+  // Footwear finishes an outfit rather than setting its register: a casual look
+  // in leather loafers is unremarkable, while a casual look with no shoes at
+  // all cannot be worn. The ceiling is relaxed for shoes; the floor is not,
+  // because sneakers really do sink a formal look.
+  if (rule.maxFormality != null && slot !== 'shoes' && level > rule.maxFormality) return false;
+  if (rule.minFormality != null && level < rule.minFormality) return false;
+  // Climate rules apply only to pieces that carry real thermal load. Applying
+  // them to shoes left the cold remix with no footwear at all, which is worse
+  // than a slightly-chilly shoe: an incomplete outfit cannot be worn.
+  const thermal = slot === 'outerwear' || slot === 'top' || slot === 'bottom';
+  if (thermal) {
+    if (rule.requireWarmth && tax.weatherScore(item, EXTREME_COLD) < 55) return false;
+    if (rule.requireCool && tax.weatherScore(item, EXTREME_HOT) < 55) return false;
+  }
+  return true;
+}
+
+/**
+ * Re-dress an existing outfit for a different context, keeping the pieces the
+ * user already picked wherever they still work.
+ *
+ * Guarantees the result differs from the input where a different outfit
+ * exists; when the original already fits the target context (a suit is a
+ * perfectly good date-night outfit) it is returned as-is with a note saying
+ * so, rather than pretending a regeneration happened.
+ */
+function remixOutfit(wardrobe, { itemIds = [], variant = 'casual', weather, styleProfile, memory }) {
+  const rule = REMIX_TARGETS[variant];
+  if (!rule) {
+    throw new Error(`Unknown remix variant "${variant}". Use: ${Object.keys(REMIX_TARGETS).join('|')}`);
+  }
+
+  const live = (Array.isArray(wardrobe) ? wardrobe : []).filter((i) => !i.archived);
+  // Dedupe on the garment, not the id: the wardrobe can hold two "White Shirt"
+  // rows, and a remix of an outfit that listed one must not produce a pair.
+  const original = [];
+  const seen = new Set();
+  for (const id of itemIds) {
+    const item = live.find((i) => i.id === id);
+    if (!item) continue;
+    const key = tax.garmentKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    original.push(item);
+  }
+  const w = weather || { tempC: 24, condition: 'partly cloudy' };
+  const mem = memory || memoryStore.empty();
+  const ctx = {
+    occasion: rule.occasion,
+    weather: w,
+    styleProfile: styleProfile || {},
+    memory: mem,
   };
 
-  if (/(hate|don't like|dont like).*shoe|hate these shoes/.test(q)) {
-    const shoeIds = wardrobe.filter((i) => /shoe/i.test(i.category)).map((i) => i.id);
-    const gen = generateOutfits(wardrobe, {
-      occasion: detectOccasion(q) || 'casual', weather,
-      styleProfile: ctx.styleProfile, excludeIds: shoeIds.slice(0, 1), count: 1,
-    });
-    return { text: 'Got it — swapping the shoes out. Here is a version without that pair:', outfit: gen[0] || null };
+  const sameIds = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+  // Compare against the resolved, deduped originals — a raw `itemIds` list can
+  // repeat a garment, which would make an unchanged remix look like a change.
+  const originalIds = original.map((i) => i.id);
+  // An item the user has ruled out outright never survives a remix, even if it
+  // was in the outfit they handed us.
+  const allowed = memoryStore.withoutAvoided(mem, live);
+  const viable = original.filter((i) => acceptsVariant(i, rule) && !memoryStore.isAvoided(mem, i));
+
+  // If strict filtering leaves nothing usable, go straight to a fresh search.
+  if (!viable.length) {
+    const fresh = generateOutfits(allowed, { ...ctx, count: 1, excludeIds: originalIds })[0]
+      || generateOutfits(allowed, { ...ctx, count: 1 })[0];
+    return finishRemix(fresh ? fresh.items : [], original, rule, ctx, variant, true);
   }
-  if (/haven.?t worn|not worn|unworn|new/i.test(q)) {
-    const sorted = [...wardrobe].sort((a, b) => (a.timesWorn || 0) - (b.timesWorn || 0));
-    const anchor = sorted[0];
-    const gen = anchor
-      ? generateOutfits(wardrobe, { occasion: detectOccasion(q) || 'casual', weather, styleProfile: ctx.styleProfile, anchorItemId: anchor.id, count: 1 })
-      : [];
-    return {
-      text: anchor
-        ? `Let's rotate in your least-worn piece — the ${anchor.name} (worn ${anchor.timesWorn || 0}×). I built an outfit around it:`
-        : 'Add a few pieces to your wardrobe and I will rotate the unworn ones in.',
-      outfit: gen[0] || null,
-    };
-  }
-  if (/less formal|more casual|casual version/.test(q)) {
-    const gen = generateOutfits(wardrobe, { occasion: 'casual', weather, styleProfile: ctx.styleProfile, count: 1 });
-    return { text: 'Here is a more relaxed take with the same palette:', outfit: gen[0] || null };
-  }
-  if (/more formal|formal version|dress (it )?up/.test(q)) {
-    const gen = generateOutfits(wardrobe, { occasion: 'formal dinner', weather, styleProfile: ctx.styleProfile, count: 1 });
-    return { text: 'Dressed up — blazer and smarter shoes dial up the formality:', outfit: gen[0] || null };
-  }
-  if (/wear.*(blue|white|beige|black|navy|brown|grey|gray|green)/.test(q) || /i want to wear/.test(q)) {
-    const colorMatch = q.match(/blue|white|beige|black|navy|brown|grey|gray|green|tan|charcoal|indigo/);
-    const anchor = colorMatch && wardrobe.find((i) => String(i.color || '').toLowerCase().includes(colorMatch[0]));
-    if (anchor) {
-      const gen = generateOutfits(wardrobe, { occasion: detectOccasion(q) || 'casual', weather, styleProfile: ctx.styleProfile, anchorItemId: anchor.id, count: 1 });
-      return { text: `Anchoring on your ${anchor.name} — here's a ${gen[0]?.match ?? 90}% match built around it:`, outfit: gen[0] || null };
+
+  // Keep the survivors, then top up any slot they left empty.
+  const kept = [...viable];
+  const haveSlots = new Set(kept.map(tax.slotOf));
+  for (const { slot } of tax.OUTFIT_SLOTS) {
+    if (haveSlots.has(slot)) continue;
+    const pick = rankSlot(allowed.filter((i) => acceptsVariant(i, rule)), slot, ctx)
+      .find((c) => !kept.some((k) => k.id === c.id));
+    if (pick) {
+      kept.push(pick);
+      haveSlots.add(slot);
     }
   }
-  if (/date/.test(q)) {
-    const o = pickOutfit('date night');
-    return { text: `Date night calls for something sharper. ${o ? `Try ${o.pieces.join(' + ')} — ${o.match}% match for an elegant evening.` : 'Add evening pieces to unlock a sharper look.'}`, outfit: o };
+
+  // The remix should change something. If it did not, try to substitute.
+  if (sameIds(kept.map((k) => k.id), originalIds)) {
+    const fresh = generateOutfits(allowed, { ...ctx, count: 1 })[0];
+    if (fresh && !sameIds(fresh.itemIds, originalIds)) {
+      return finishRemix(fresh.items, original, rule, ctx, variant, true);
+    }
+    // Nothing better exists for this context — the original already fits.
+    return finishRemix(kept, original, rule, ctx, variant, false,
+      'Your original outfit already fits this context well.');
   }
-  if (/formal|interview|wedding|meeting|presentation/.test(q)) {
-    const o = pickOutfit('formal dinner');
-    return { text: `For formal moments I'd suggest ${o ? o.pieces.join(' + ') + ` (${o.match}% match). Polished without feeling stiff.` : 'a blazer + tailored trousers combo.'}`, outfit: o };
-  }
-  if (/weather|hot|cold|rain|temperature/.test(q)) {
-    const o = pickOutfit(detectOccasion(q) || 'casual');
-    return { text: `It's ${weather.tempC}°C and ${weather.condition} — lightweight layers are ideal. ${o ? `Try ${o.pieces.join(' + ')}.` : ''}`, outfit: o };
-  }
-  if (/travel|trip|pack|dubai|flight/.test(q)) {
-    return { text: 'For a capsule trip, pack the White Oxford Shirt, Beige Knit Sweater, Raw Denim, Beige Chinos, Minimalist Sneakers and the Silk Scarf — that gives you seven distinct outfits from six pieces.', outfit: pickOutfit('travel') };
-  }
-  if (/universit|college|school|class|lecture/.test(q) || /what.*wear|dress me|build me|suggest|outfit/.test(q)) {
-    const o = pickOutfit(detectOccasion(q) || 'university casual');
-    return {
-      text: o
-        ? `Based on your wardrobe and today's weather (${weather.tempC}°C, ${weather.condition}), I recommend: ${o.pieces.join(' + ')} (${o.match}% match).`
-        : 'Add clothes to your wardrobe and I will build outfits from them.',
-      outfit: o,
-    };
-  }
-  const o = pickOutfit(detectOccasion(q) || 'casual');
+  return finishRemix(kept, original, rule, ctx, variant, false, avoidedNote(kept, mem));
+}
+
+/**
+ * If an excluded item only appears because every alternative was worse, say so
+ * rather than quietly handing back something the user ruled out.
+ */
+function avoidedNote(items, mem) {
+  const excluded = (items || []).filter((i) => memoryStore.isAvoided(mem, i)).map((i) => i.name);
+  if (!excluded.length) return '';
+  return `Includes ${excluded.join(' and ')} — you said you never wear ${excluded.length > 1 ? 'them' : 'it'}, but nothing else in this slot works here.`;
+}
+
+function finishRemix(items, original, rule, ctx, variant, wasRegenerated, note = '') {
+  const result = scoring.scoreOutfit(items, ctx);
   return {
-    text: o
-      ? `I rebuilt that from your wardrobe: ${o.pieces.join(' + ')} is a reliable ${o.match}% match — ${o.explanation}`
-      : 'Tell me the occasion (university, date, formal, travel) and I will build it from your wardrobe.',
-    outfit: o,
+    outfit: {
+      id: `remix-${variant}-${Date.now()}`,
+      name: `${outfitName(items, rule.occasion)} · ${REMIX_LABELS[variant]}`,
+      variant,
+      occasion: rule.occasion,
+      match: result.match,
+      breakdown: result.breakdown,
+      completeness: result.completeness,
+      explanation: scoring.explain(items, ctx, result),
+      itemIds: items.map((p) => p.id),
+      pieces: items.map((p) => p.name),
+      items,
+      image: items[0]?.image,
+      keptFromOriginal: items.filter((k) => original.some((o) => o.id === k.id)).length,
+      regenerated: !!wasRegenerated,
+      ...(note ? { note } : {}),
+    },
+    variants: Object.keys(REMIX_TARGETS),
+    labels: REMIX_LABELS,
   };
 }
 
+// --------------------------------------------------------------------- chat
+
+/**
+ * Turn a phrase into an occasion label, or null when it names none.
+ *
+ * Checked most-specific-first rather than by token length. "formal dinner"
+ * used to resolve to "date night" because both matched and the enumeration
+ * order happened to favour dinner.
+ */
+const OCCASION_PRECEDENCE = [
+  // "formal" is only an occasion when it modifies one. A bare "not too formal"
+  // is the user steering away from formality, and must not be read as a request
+  // for it — hence the qualifier below rather than a bare /formal/.
+  [/formal (?:dinner|event|occasion|wear|attire|black ?tie)|black ?tie/, 'formal dinner'],
+  [/wedding|gala|ceremony/, 'formal dinner'],
+  [/interview|job interview|client/, 'formal dinner'],
+  [/business|office|work|meeting|presentation/, 'meeting'],
+  [/date ?night|\bdate\b|romantic/, 'date night'],
+  [/evening|night out|going out|bar|pub|club|dinner|restaurant/, 'date night'],
+  [/brunch|lunch|breakfast|coffee/, 'casual'],
+  [/party|birthday|celebration/, 'party'],
+  [/beach|swim|pool/, 'beach'],
+  [/gym|workout|run|running|sport|training/, 'gym'],
+  [/university|college|school|lecture|class|campus/, 'university casual'],
+  [/travel|trip|flight|airport|capsule/, 'travel'],
+  [/weekend|leisure|chill|relaxed|brunch|casual/, 'casual'],
+  [/smart casual/, 'meeting'],
+];
+
+/** "less formal", "nothing too dressy" — an explicit walk-away from formality. */
+const ANTI_FORMAL = /\b(?:less|not|no[nt]?)\b[^.?!]{0,20}\bformal|dress(?:ed)? down|laid[- ]back|more casual|toned down/i;
+
 function detectOccasion(q = '') {
-  if (/date|evening|dinner/.test(q)) return 'date night';
-  if (/formal|interview|wedding|meeting|presentation/.test(q)) return 'formal dinner';
-  if (/travel|trip|pack/.test(q)) return 'travel';
-  if (/gym|sport|run/.test(q)) return 'sport';
-  if (/universit|college|class|lecture/.test(q)) return 'university casual';
+  const text = tax.normalize(q);
+  const antiFormal = ANTI_FORMAL.test(q) || ANTI_FORMAL.test(text);
+  for (const [re, occasion] of OCCASION_PRECEDENCE) {
+    if (re.test(text)) {
+      if (antiFormal && /formal|tie/.test(re.source)) continue;
+      return occasion;
+    }
+  }
   return null;
 }
+
+/**
+ * Offline stylist: intent routing + outfit attachment.
+ *
+ * This is the fallback whenever no LLM key is configured, so it has to carry
+ * the product on its own. It is memory-aware (honours "less formal", "not
+ * these shoes", "I haven't worn it") and always returns a real outfit built
+ * from the user's own wardrobe.
+ */
+function chatReply(message, ctx = {}) {
+  const q = tax.normalize(message);
+  const wardrobe = (ctx.wardrobe || []).filter((i) => !i.archived);
+  const weather = ctx.weather || { tempC: 24, condition: 'partly cloudy', summary: '24°C' };
+  const styleProfile = ctx.styleProfile || {};
+  const memory = ctx.memory || memoryStore.empty();
+
+  const build = (occasion, extra = {}) =>
+    generateOutfits(wardrobe, {
+      occasion: occasion || 'casual',
+      weather,
+      styleProfile,
+      memory,
+      count: 1,
+      ...extra,
+    })[0] || null;
+
+  const intro = `It's ${weather.summary || `${weather.tempC}°C`}`;
+
+  // "I haven't worn X" / "surprise me" → rotation.
+  if (/(haven'?t worn|not worn|unworn|new (thing|piece)|something different|surprise me|rotate)/.test(q)) {
+    const ranked = generateOutfits(wardrobe, { occasion: detectOccasion(q) || 'casual', weather, styleProfile, memory, count: 3 });
+    const unworn = ranked.find((o) => o.items.some((i) => !i.timesWorn));
+    const chosen = unworn || ranked[0];
+    const fresh = chosen?.items.find((i) => !i.timesWorn);
+    return {
+      text: chosen && fresh
+        ? `${intro} and your least-worn piece is the ${fresh.name} (never worn). I built a look around it:`
+        : 'You have worn everything at least once, so I mixed the pieces you reach for least.',
+      outfit: chosen || null,
+      intent: 'build_outfit',
+    };
+  }
+
+  // "not these shoes" / "something else" → exclusion.
+  if (/(hate|don'?t like|dont like|not these?|something else|change the (shoes?|top|bottom))/.test(q)) {
+    const target = q.match(/\b(shoes?|sneakers?|boots?|loafers?|top|shirt|tee|jacket|blazer|pants?|jeans?)\b/);
+    const excluded = target
+      ? wardrobe.filter((i) => tax.normalize(`${i.category} ${i.name}`).includes(target[0].replace(/s$/, ''))).map((i) => i.id)
+      : wardrobe.filter((i) => tax.slotOf(i) === 'shoes').slice(0, 1).map((i) => i.id);
+    const outfit = build(detectOccasion(q) || 'casual', { excludeIds: excluded });
+    return {
+      text: outfit
+        ? `${intro} — swapped the ${target ? target[0] : 'shoes'} out. This works instead:`
+        : `Add a ${target ? target[0] : 'second'} option and I will show you the swap.`,
+      outfit,
+      intent: 'remix',
+    };
+  }
+
+  // Formality shifts.
+  if (/(less formal|more casual|casual version|relaxed|laid ?back|toned down)/.test(q)) {
+    return {
+      text: `${intro} — here is the relaxed version, same palette:`,
+      outfit: build('casual'),
+      intent: 'remix',
+    };
+  }
+  if (/(more formal|dress (it )?up|sharper|smarter|business)/.test(q)) {
+    return {
+      text: `${intro} — dressed up. Blazers and smarter shoes dial the formality in:`,
+      outfit: build('formal dinner'),
+      intent: 'remix',
+    };
+  }
+
+  // Weather-led.
+  if (/(weather|hot|cold|rain|snow|temperature|what do i wear today)/.test(q)) {
+    const outfit = build(detectOccasion(q) || 'casual');
+    const advice = Number(weather.tempC) >= 26
+      ? 'keep it light and breathable'
+      : Number(weather.tempC) <= 14 ? 'layer up' : 'a mid-layer is enough';
+    return {
+      text: `${weather.summary} in ${weather.city || 'your area'} — ${advice}. ${outfit ? `Try:` : ''}`,
+      outfit,
+      intent: 'build_outfit',
+    };
+  }
+
+  // Travel / packing.
+  if (/(travel|trip|pack|flight|dubai|capsule)/.test(q)) {
+    const days = Number((q.match(/(\d+)\s*(day|night)/) || [])[1]) || 5;
+    const outfit = build('travel');
+    const list = packingList(wardrobe, { days });
+    return {
+      text: `${intro}. Pack ${list.items.length} pieces for ${days} days — that gives you about ${list.outfitsEstimate} combinations without repeating anything.`,
+      outfit,
+      intent: 'build_outfit',
+      packing: list,
+    };
+  }
+
+  // Colour-led.
+  const colorWord = q.match(/\b(blue|white|beige|black|navy|brown|grey|gray|green|red|olive|cream|denim|khaki|tan|charcoal|indigo)\b/);
+  if (colorWord && /(wear|put|with|around|find|show|has)/.test(q)) {
+    const anchor = wardrobe.find((i) => tax.normalize(i.color).includes(colorWord[0]));
+    if (anchor) {
+      const outfit = build(detectOccasion(q) || 'casual', { anchorItemId: anchor.id });
+      return {
+        text: outfit
+          ? `Anchored on the ${anchor.name} — ${outfit.match}% match built around it:`
+          : `The ${anchor.name} is the anchor. Add a bottom and shoes to complete it.`,
+        outfit,
+        intent: 'build_outfit',
+      };
+    }
+    return {
+      text: `You do not own anything in ${colorWord[0]}. I could suggest what to add — want that?`,
+      outfit: null,
+      intent: 'learn',
+    };
+  }
+
+  // Occasion-led (covers "date", "interview", "university", ...).
+  const occasion = detectOccasion(q);
+  if (occasion || /(what.*wear|dress me|build me|suggest|outfit|recommend|help me)/.test(q)) {
+    const use = occasion || 'casual';
+    const outfit = build(use);
+    return {
+      text: outfit
+        ? `${intro}. For ${use}: ${outfit.pieces.join(' + ')} — ${outfit.match}% match.`
+        : 'Add a few pieces and I will build looks from what you own.',
+      outfit,
+      intent: 'build_outfit',
+      occasion: use,
+    };
+  }
+
+  // Fallback: still return something wearable rather than a dead end.
+  const outfit = build(occasion || 'casual');
+  const note = memory.facts?.[0]?.text;
+  return {
+    text: outfit
+      ? `${note ? `${cap(note)} — and yes, ` : ''}${outfit.pieces.join(' + ')} is your strongest ${outfit.match}% look right now. ${outfit.explanation}`
+      : 'Tell me the occasion — university, date, work, travel — and I will build it from your wardrobe.',
+    outfit,
+    intent: 'chat',
+  };
+}
+
+function cap(s) {
+  return String(s).replace(/\b\w/, (c) => c.toUpperCase());
+}
+
+// ------------------------------------------------------------- other tools
 
 /** Heuristic clothing analysis from upload filename + hints. */
 function analyzeClothing(input = {}) {
@@ -350,60 +644,170 @@ function analyzeClothing(input = {}) {
   };
 }
 
-function wardrobeGap(wardrobe) {
-  const cats = {};
-  for (const i of wardrobe) cats[i.category] = (cats[i.category] || 0) + 1;
+/**
+ * Wardrobe gap analysis.
+ *
+ * Real gaps only: a missing category that actually blocks occasions the user
+ * already has clothes for, plus occasion coverage and rotation health.
+ */
+function wardrobeGap(wardrobe = []) {
+  const live = wardrobe.filter((i) => !i.archived);
+  const byCategory = live.reduce((acc, i) => {
+    acc[i.category] = (acc[i.category] || 0) + 1;
+    return acc;
+  }, {});
   const gaps = [];
-  if (!wardrobe.some((i) => /white/i.test(i.color) && /formal/i.test(i.formality + i.style))) {
-    gaps.push({ gap: 'No formal white shirt', suggestion: 'White Formal Shirt', reason: 'You own casual layers but no formal white shirt for events.' });
+
+  const has = (re) => live.some((i) => re.test(`${i.name} ${i.style} ${i.formality}`));
+  const count = (re) => live.filter((i) => re.test(`${i.category} ${i.name}`)).length;
+
+  if (!has(/blazer/i) && byCategory.Tops) {
+    gaps.push({
+      gap: 'No versatile blazer', suggestion: 'Navy Blazer',
+      reason: 'One blazer layers with every top and bottom you already own.',
+      unlocks: ['work', 'formal dinner', 'date night'],
+    });
   }
-  if ((cats['Shoes'] || 0) < 3 || !wardrobe.some((i) => /shoe/i.test(i.category) && /formal/i.test(i.formality))) {
-    gaps.push({ gap: 'Missing formal footwear', suggestion: 'Black Oxford Shoes', reason: 'Formal shoes complete 6+ smart outfit gaps.' });
+  if (!has(/formal/i) && live.some((i) => /shirt|top/i.test(i.category))) {
+    gaps.push({
+      gap: 'No formal top', suggestion: 'White Formal Shirt',
+      reason: 'Your tops are all casual, so dressier occasions are uncovered.',
+      unlocks: ['interview', 'wedding'],
+    });
   }
-  if (!wardrobe.some((i) => /blazer/i.test(i.name))) {
-    gaps.push({ gap: 'No versatile blazer', suggestion: 'Navy Blazer', reason: 'Layers with all your existing tees and trousers.' });
+  if (count(/shoe|boot/i) < 3) {
+    gaps.push({
+      gap: 'Shoe rotation is thin', suggestion: 'Black Oxford Shoes',
+      reason: 'Three or more pairs unlock distinct formality levels per outfit.',
+      unlocks: ['formal dinner', 'office'],
+    });
   }
-  return { gaps, totalItems: wardrobe.length, byCategory: cats };
+  if (!live.some((i) => /outerwear|jacket|coat|blazer/i.test(`${i.category} ${i.name}`))) {
+    gaps.push({
+      gap: 'No outer layer', suggestion: 'Trench Coat',
+      reason: 'Without one, nothing works below 18°C and the winter half of the year is unusable.',
+      unlocks: ['cold weather', 'travel'],
+    });
+  }
+
+  // Occasion coverage: which contexts currently produce a wearable outfit?
+  const contexts = ['casual', 'university', 'work', 'formal dinner', 'date night', 'travel', 'gym'];
+  const coverage = contexts.map((occasion) => {
+    const outfits = generateOutfits(live, { occasion, weather: { tempC: 22 }, count: 1 });
+    return { occasion, covered: outfits.length > 0, match: outfits[0]?.match ?? 0 };
+  });
+  for (const c of coverage.filter((x) => !x.covered)) {
+    gaps.push({
+      gap: `No outfit for ${c.occasion}`, suggestion: 'Add a versatile piece',
+      reason: 'Your wardrobe cannot currently build a complete look for this context.',
+      unlocks: [c.occasion],
+    });
+  }
+
+  const unworn = live.filter((i) => !i.timesWorn);
+  return {
+    gaps: gaps.slice(0, 6),
+    totalItems: live.length,
+    byCategory,
+    coverage,
+    health: {
+      unworn: unworn.length,
+      rotationScore: live.length ? Math.round(((live.length - unworn.length) / live.length) * 100) : 0,
+      paletteHarmony: live.length >= 2 ? Math.round(tax.colorHarmony(live.slice(0, 8))) : 0,
+    },
+  };
 }
 
-function styleProfileFromWardrobe(wardrobe, feedback = []) {
-  const styleCount = {}, colorCount = {};
-  for (const i of wardrobe) {
-    styleCount[i.style] = (styleCount[i.style] || 0) + 1;
-    colorCount[i.color] = (colorCount[i.color] || 0) + 1;
-  }
-  const top = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
+/** Style profile derived from wardrobe composition. */
+function styleProfileFromWardrobe(wardrobe = [], feedback = []) {
+  const live = wardrobe.filter((i) => !i.archived);
+  const top = (values) => {
+    const counts = values.filter(Boolean).reduce((acc, v) => {
+      acc[v] = (acc[v] || 0) + 1;
+      return acc;
+    }, {});
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
+  };
+  const avgFormality = live.length
+    ? live.reduce((a, i) => a + tax.formalityOf(i), 0) / live.length
+    : 2;
   return {
-    preferredStyles: top(styleCount),
-    favoriteColors: top(colorCount),
-    totalItems: wardrobe.length,
+    preferredStyles: top(live.map((i) => i.style)),
+    favoriteColors: top(live.map((i) => i.color)),
+    dominantFormality: ['Loungewear', 'Casual', 'Smart Casual', 'Business Casual', 'Formal', 'Elegant', 'Black Tie'][
+      Math.round(avgFormality)
+    ] || 'Casual',
+    totalItems: live.length,
     feedbackCount: feedback.length,
   };
 }
 
-function packingList(wardrobe, trip = {}) {
-  const days = Math.min(14, Math.max(1, Number(trip.days) || 5));
-  const needed = Math.min(wardrobe.length, Math.max(4, Math.ceil(days * 1.6)));
-  const sorted = [...wardrobe].sort((a, b) => (b.timesWorn || 0) - (a.timesWorn || 0));
-  const picked = sorted.slice(0, needed);
-  const combos = Math.max(days, Math.round((picked.length * (picked.length - 1)) / 4));
+/**
+ * Packing list.
+ *
+ * Picks a minimal set that still covers every required slot, then reports the
+ * real number of distinct outfits those pieces can produce.
+ */
+function packingList(wardrobe = [], trip = {}) {
+  const days = Math.min(21, Math.max(1, Number(trip.days) || 5));
+  const live = (Array.isArray(wardrobe) ? wardrobe : []).filter((i) => !i.archived);
+  if (!live.length) {
+    return { destination: trip.destination || 'Trip', days, items: [], outfitsEstimate: 0, message: 'Add clothes to your wardrobe first.' };
+  }
+
+  // One of every slot first, then fill toward the day target.
+  const chosen = [];
+  const slots = new Set();
+  for (const { slot } of tax.OUTFIT_SLOTS) {
+    const pick = live
+      .filter((i) => !chosen.includes(i) && tax.slotOf(i) === slot)
+      .sort((a, b) => (b.timesWorn || 0) - (a.timesWorn || 0))[0];
+    if (pick) {
+      chosen.push(pick);
+      slots.add(slot);
+    }
+  }
+  const target = Math.min(live.length, Math.max(4, Math.ceil(days * 1.5)));
+  const rest = live
+    .filter((i) => !chosen.includes(i))
+    .sort((a, b) => (b.timesWorn || 0) - (a.timesWorn || 0));
+  while (chosen.length < target && rest.length) chosen.push(rest.shift());
+
+  // Real combination maths from the slots actually covered.
+  const perSlot = tax.OUTFIT_SLOTS.map(({ slot }) => chosen.filter((i) => tax.slotOf(i) === slot).length);
+  let outfitsEstimate = 1;
+  for (const n of perSlot) {
+    if (n > 0) outfitsEstimate *= n;
+    else outfitsEstimate = 0;
+  }
+  // Outerwear multiplies rather than adds: any layer works with any base.
+  const layers = chosen.filter((i) => tax.slotOf(i) === 'outerwear').length;
+  const bases = perSlot[1] * Math.max(1, perSlot[2]) * Math.max(1, perSlot[3]);
+  outfitsEstimate = Math.max(bases, outfitsEstimate) * Math.max(1, layers + 1);
+
   return {
     destination: trip.destination || 'Trip',
     days,
-    items: picked,
-    outfitsEstimate: combos,
-    message: `You can create ${combos} outfits using only ${picked.length} items.`,
+    items: chosen,
+    outfitsEstimate,
+    slotsFilled: [...slots],
+    complete: tax.requiredSlots().every((s) => chosen.some((i) => tax.slotOf(i) === s)),
+    message: `${chosen.length} pieces cover ${outfitsEstimate} outfits across ${days} days without repeating a look.`,
   };
 }
 
 module.exports = {
   calculateCompatibility,
   generateOutfits,
+  remixOutfit,
   outfitName,
   explainOutfit,
   chatReply,
+  detectOccasion,
   analyzeClothing,
   wardrobeGap,
   styleProfileFromWardrobe,
   packingList,
+  REMIX_TARGETS,
+  REMIX_LABELS,
 };

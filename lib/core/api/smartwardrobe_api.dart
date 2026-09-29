@@ -1,4 +1,5 @@
 import 'api_client.dart';
+import 'dart:convert';
 
 /// Typed wrapper over every backend module (§8 API Overview).
 /// Auth token is held by the underlying [ApiClient].
@@ -81,6 +82,18 @@ class SmartWardrobeApi {
     await _client.delete('/wardrobe/items/$id');
   }
 
+  /// Uploads device photos (§8.3). Each entry is (filename, bytes, mimeType).
+  /// Returns the stored file list [{url, filename, mime, size}].
+  Future<List<Map<String, dynamic>>> uploadWardrobePhotos(
+    List<({String filename, List<int> bytes, String mimeType})> photos,
+  ) async {
+    final res = await _client.uploadPhotos('/wardrobe/upload', photos);
+    final files = (res as Map)['files'] as List? ?? const [];
+    return [
+      for (final f in files) Map<String, dynamic>.from(f as Map),
+    ];
+  }
+
   // ------------------------------------------------------------- 8.4 AI
   Future<Map<String, dynamic>> analyzeClothing(
     Map<String, dynamic> input,
@@ -88,6 +101,29 @@ class SmartWardrobeApi {
       Map<String, dynamic>.from(
         await _client.post('/ai/analyze-clothing', input),
       );
+
+  /// Analysis of a real photo: pass the stored [imageUrl] from
+  /// [uploadWardrobePhotos] (server reads the pixels off disk for vision),
+  /// or raw [imageBytes] which are sent as a data URL.
+  Future<Map<String, dynamic>> analyzePhoto({
+    String? imageUrl,
+    List<int>? imageBytes,
+    String mimeType = 'image/jpeg',
+    String filename = 'photo.jpg',
+    String name = '',
+  }) async {
+    final Map<String, dynamic> body = {
+      'filename': filename,
+      if (name.isNotEmpty) 'name': name,
+    };
+    if (imageUrl != null) {
+      body['imageUrl'] = imageUrl;
+    } else if (imageBytes != null) {
+      body['imageBase64'] = base64Encode(imageBytes);
+      body['mime'] = mimeType;
+    }
+    return analyzeClothing(body);
+  }
 
   Future<List<dynamic>> generateOutfit({
     String occasion = 'casual',
@@ -118,13 +154,99 @@ class SmartWardrobeApi {
         }),
       );
 
+  /// The stylist turn (`POST /ai/chat`).
+  ///
+  /// [history] is the already-sent turns as `{fromUser: bool, text: String}`.
+  /// When empty the server recalls its own log for [conversationId], so the
+  /// conversation survives a client restart either way.
   Future<Map<String, dynamic>> chat(
     String message, {
-    List<Map<String, String>> history = const [],
+    List<Map<String, dynamic>> history = const [],
+    String? conversationId,
   }) async =>
       Map<String, dynamic>.from(
-        await _client.post('/ai/chat', {'message': message, 'history': history}),
+        await _client.post('/ai/chat', {
+          'message': message,
+          'history': history,
+          'conversationId': ?conversationId,
+        }),
       );
+
+  /// Streaming variant (`POST /ai/chat/stream`): `delta` events carry text
+  /// fragments, `done` carries the assembled turn. The server still answers
+  /// with the rule engine when no LLM key is configured, so this never hangs.
+  Stream<({String event, Map<String, dynamic> data})> chatStream(
+    String message, {
+    List<Map<String, dynamic>> history = const [],
+    String? conversationId,
+  }) =>
+      _client.streamPost('/ai/chat/stream', {
+        'message': message,
+        'history': history,
+        'conversationId': ?conversationId,
+      });
+
+  /// Match a photo of an outfit someone else wears against the user's own
+  /// wardrobe (`POST /ai/match-outfit`). Pass [imageBytes] (raw photo) or
+  /// [dataUrl]; [filename] is used as the no-key fallback signal.
+  Future<Map<String, dynamic>> matchOutfit({
+    List<int>? imageBytes,
+    String? dataUrl,
+    String mimeType = 'image/jpeg',
+    String filename = 'reference.jpg',
+    String note = '',
+  }) async {
+    final Map<String, dynamic> body = {'filename': filename};
+    if (note.isNotEmpty) body['note'] = note;
+    if (dataUrl != null) {
+      body['dataUrl'] = dataUrl;
+    } else if (imageBytes != null) {
+      body['dataUrl'] = 'data:$mimeType;base64,${base64Encode(imageBytes)}';
+    }
+    return Map<String, dynamic>.from(
+      await _client.post('/ai/match-outfit', body),
+    );
+  }
+
+  /// Re-dress an outfit for another context (`POST /ai/remix`).
+  /// [variant] is one of casual | cold | summer | date | formal.
+  Future<Map<String, dynamic>> remix(
+    List<String> itemIds,
+    String variant, {
+    double? tempC,
+  }) async =>
+      Map<String, dynamic>.from(
+        await _client.post('/ai/remix', {
+          'itemIds': itemIds,
+          'variant': variant,
+          if (tempC != null)
+            'weather': {'tempC': tempC, 'condition': tempC >= 26 ? 'sunny' : 'partly cloudy'},
+        }),
+      );
+
+  /// What the stylist has learned about this user (`GET /ai/style-dna`).
+  Future<Map<String, dynamic>> styleDna() async =>
+      Map<String, dynamic>.from(await _client.get('/ai/style-dna'));
+
+  /// Recent stylist turns, oldest first (`GET /ai/conversations`).
+  Future<List<Map<String, dynamic>>> conversations({int limit = 40}) async {
+    final res = await _client.get('/ai/conversations', {'limit': '$limit'});
+    return [
+      for (final t in (res as Map)['turns'] as List? ?? const [])
+        Map<String, dynamic>.from(t as Map),
+    ];
+  }
+
+  /// Forget the conversation, keep the learned taste
+  /// (`DELETE /ai/conversations`).
+  Future<void> clearConversations() async {
+    await _client.delete('/ai/conversations');
+  }
+
+  /// What the stylist can currently do, and how to enable the rest
+  /// (`GET /ai/capabilities`).
+  Future<Map<String, dynamic>> capabilities() async =>
+      Map<String, dynamic>.from(await _client.get('/ai/capabilities'));
 
   Future<Map<String, dynamic>> wardrobeGap() async =>
       Map<String, dynamic>.from(await _client.post('/ai/wardrobe-gap'));

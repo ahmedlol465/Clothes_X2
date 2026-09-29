@@ -88,6 +88,49 @@ class ClothingItem {
       );
 }
 
+/// One scored factor of the 11-factor compatibility engine
+/// (`backend/src/scoring.js`).
+///
+/// [applied] is false when the engine had no evidence for the factor (no style
+/// profile, no ratings). Such factors are excluded from the weighted mean and
+/// renormalised, so they must be shown as "no signal" rather than as a score.
+@immutable
+class MatchFactor {
+  const MatchFactor({
+    this.key = '',
+    required this.label,
+    required this.value,
+    this.weight = 0,
+    this.applied = true,
+    this.contribution = 0,
+  });
+
+  final String key;
+  final String label;
+  final int value;
+
+  /// Renormalised share of the total score, 0..1.
+  final double weight;
+
+  /// False when the engine had no evidence and dropped the factor.
+  final bool applied;
+
+  /// [value] x [weight] — the points this factor actually contributed.
+  final double contribution;
+
+  factory MatchFactor.fromJson(Map<String, dynamic> json) => MatchFactor(
+        key: '${json['key'] ?? ''}',
+        label: '${json['label'] ?? ''}',
+        value: (json['value'] as num?)?.toInt() ?? 0,
+        weight: (json['weight'] as num?)?.toDouble() ?? 0,
+        applied: json['applied'] != false,
+        contribution: (json['contribution'] as num?)?.toDouble() ?? 0,
+      );
+
+  /// Matches the legacy `(label, value)` shape used by the mock data.
+  ({String label, int value}) get row => (label: label, value: value);
+}
+
 /// A saved or AI generated outfit.
 @immutable
 class Outfit {
@@ -101,8 +144,14 @@ class Outfit {
     this.summary,
     this.itemIds,
     this.breakdown,
+    this.factors,
     this.explanation,
     this.favorite = false,
+    this.completeness,
+    this.variant,
+    this.note,
+    this.keptFromOriginal,
+    this.regenerated = false,
   });
 
   final String id;
@@ -118,8 +167,27 @@ class Outfit {
   /// Backend outfit fields (§8.5). Null when the outfit is a local mock.
   final List<String>? itemIds;
   final List<({String label, int value})>? breakdown;
+
+  /// Full 11-factor report with weights and signal flags. Preferred over
+  /// [breakdown] wherever the UI can show which factors actually counted.
+  final List<MatchFactor>? factors;
   final String? explanation;
   final bool favorite;
+
+  /// Completeness of the look (0..1) from the scoring engine's gate.
+  final double? completeness;
+
+  /// Remix variant key (`casual`, `cold`, `summer`, `date`, `formal`).
+  final String? variant;
+
+  /// Set by `/ai/remix` when the original outfit already suits the context.
+  final String? note;
+
+  /// How many pieces of the submitted outfit survived the remix.
+  final int? keptFromOriginal;
+
+  /// True when the remix had to rebuild the look from scratch.
+  final bool regenerated;
 
   /// JSON mapping for the backend outfits API (§8.5).
   factory Outfit.fromJson(Map<String, dynamic> json) => Outfit(
@@ -142,19 +210,192 @@ class Outfit {
               value: (b['value'] ?? 0).toInt(),
             ),
         ],
+        factors: [
+          for (final b in (json['breakdown'] as List? ?? const []))
+            if (b is Map)
+              MatchFactor.fromJson(Map<String, dynamic>.from(b)),
+        ],
         explanation: json['explanation'] as String?,
         favorite: json['favorite'] == true,
+        completeness: (json['completeness'] as num?)?.toDouble(),
+        variant: json['variant'] as String?,
+        note: json['note'] as String?,
+        keptFromOriginal: (json['keptFromOriginal'] as num?)?.toInt(),
+        regenerated: json['regenerated'] == true,
       );
 }
 
 /// A single row in the AI stylist conversation.
 @immutable
 class ChatMessage {
-  const ChatMessage({required this.fromUser, required this.text, this.outfit});
+  const ChatMessage({
+    required this.fromUser,
+    required this.text,
+    this.outfit,
+    this.source,
+    this.followUp,
+    this.match,
+  });
 
   final bool fromUser;
   final String text;
   final Outfit? outfit;
+
+  /// Which engine answered: `gemini` / `groq` / `openrouter` / `openai`, or
+  /// `rules` when no key is configured. Surfaced so the UI never implies an LLM
+  /// answered when the rule engine did.
+  final String? source;
+
+  /// The stylist's suggested next question, from the LLM turn.
+  final String? followUp;
+
+  /// Set when the turn answered a reference photo
+  /// (`POST /ai/match-outfit`).
+  final OutfitMatch? match;
+}
+
+/// Result of matching a photographed outfit against the user's own wardrobe
+/// (`POST /ai/match-outfit`, `backend/src/vision.js`).
+@immutable
+class OutfitMatch {
+  const OutfitMatch({
+    required this.title,
+    required this.occasion,
+    required this.notes,
+    required this.matches,
+    required this.gaps,
+    required this.similarity,
+    required this.averageMatch,
+    required this.wearable,
+    required this.exactCount,
+    this.outfit,
+    this.source = '',
+  });
+
+  /// Title of the reference look as read by the vision model.
+  final String title;
+  final String occasion;
+  final String notes;
+
+  /// Per-slot results, in reference order.
+  final List<SlotMatch> matches;
+
+  /// Slots the wardrobe cannot fill (or fills poorly).
+  final List<SlotGap> gaps;
+
+  /// 0..100 — how close the assembled look is to the reference.
+  final int similarity;
+
+  /// 0..100 — mean per-slot match score.
+  final int averageMatch;
+
+  /// True when every required slot is filled, so the look is wearable.
+  final bool wearable;
+  final int exactCount;
+
+  /// Scored assembly of the matched pieces, when two or more were found.
+  final Outfit? outfit;
+  final String source;
+
+  factory OutfitMatch.fromJson(Map<String, dynamic> json) {
+    final outfit = json['outfit'];
+    return OutfitMatch(
+      title: '${(json['reference'] as Map?)?['title'] ?? 'Reference outfit'}',
+      occasion: '${(json['reference'] as Map?)?['occasion'] ?? ''}',
+      notes: '${(json['reference'] as Map?)?['notes'] ?? ''}',
+      matches: [
+        for (final m in (json['matches'] as List? ?? const []))
+          if (m is Map) SlotMatch.fromJson(Map<String, dynamic>.from(m)),
+      ],
+      gaps: [
+        for (final g in (json['gaps'] as List? ?? const []))
+          if (g is Map) SlotGap.fromJson(Map<String, dynamic>.from(g)),
+      ],
+      similarity: (json['similarity'] as num?)?.toInt() ?? 0,
+      averageMatch: (json['averageMatch'] as num?)?.toInt() ?? 0,
+      wearable: json['wearable'] == true,
+      exactCount: (json['exactCount'] as num?)?.toInt() ?? 0,
+      outfit: outfit is Map
+          ? Outfit.fromJson(Map<String, dynamic>.from(outfit))
+          : null,
+      source: '${json['source'] ?? ''}',
+    );
+  }
+}
+
+/// One slot of a reference look matched against the wardrobe.
+@immutable
+class SlotMatch {
+  const SlotMatch({
+    required this.slotLabel,
+    required this.requestedGarment,
+    required this.itemName,
+    required this.image,
+    required this.score,
+    required this.exact,
+    required this.closeEnough,
+    required this.reason,
+  });
+
+  final String slotLabel;
+  final String requestedGarment;
+
+  /// Empty when nothing in the wardrobe fills the slot.
+  final String itemName;
+  final String image;
+  final int score;
+
+  /// True when the wardrobe hit the reference exactly.
+  final bool exact;
+  final bool closeEnough;
+  final String reason;
+
+  factory SlotMatch.fromJson(Map<String, dynamic> json) {
+    final item = json['item'] is Map
+        ? Map<String, dynamic>.from(json['item'] as Map)
+        : null;
+    final request = json['request'] is Map
+        ? Map<String, dynamic>.from(json['request'] as Map)
+        : null;
+    return SlotMatch(
+      slotLabel: '${json['slotLabel'] ?? ''}',
+      requestedGarment: '${request?['garment'] ?? ''}',
+      itemName: '${item?['name'] ?? ''}',
+      image: '${item?['image'] ?? ''}',
+      score: (json['score'] as num?)?.toInt() ?? 0,
+      exact: json['exact'] == true,
+      closeEnough: json['closeEnough'] == true,
+      reason: '${json['reason'] ?? ''}',
+    );
+  }
+}
+
+/// A slot the wardrobe cannot fill properly.
+@immutable
+class SlotGap {
+  const SlotGap({
+    required this.slotLabel,
+    required this.missing,
+    required this.color,
+    required this.material,
+    required this.reason,
+  });
+
+  final String slotLabel;
+
+  /// The garment described by the reference look, e.g. "Leather jacket".
+  final String missing;
+  final String color;
+  final String material;
+  final String reason;
+
+  factory SlotGap.fromJson(Map<String, dynamic> json) => SlotGap(
+        slotLabel: '${json['slotLabel'] ?? ''}',
+        missing: '${json['missing'] ?? ''}',
+        color: '${json['color'] ?? ''}',
+        material: '${json['material'] ?? ''}',
+        reason: '${json['reason'] ?? ''}',
+      );
 }
 
 /// A garment recommendation produced by the shopping assistant.

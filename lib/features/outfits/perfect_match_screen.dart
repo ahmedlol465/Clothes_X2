@@ -27,7 +27,7 @@ class PerfectMatchScreen extends StatefulWidget {
 }
 
 class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
-  List<({String label, int value})>? _breakdown;
+  List<MatchFactor>? _factors;
   List<ClothingItem>? _pieces;
 
   @override
@@ -49,8 +49,19 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
       ];
       if (found.isNotEmpty && mounted) setState(() => _pieces = found);
     }
+    // Prefer the weights the engine reported with the outfit; only call the
+    // compatibility endpoint when the outfit arrived without a breakdown.
+    if (outfit.factors != null && outfit.factors!.isNotEmpty) {
+      if (mounted) setState(() => _factors = outfit.factors);
+      return;
+    }
     if (outfit.breakdown != null && outfit.breakdown!.isNotEmpty) {
-      if (mounted) setState(() => _breakdown = outfit.breakdown);
+      if (mounted) {
+        setState(() => _factors = [
+          for (final row in outfit.breakdown!)
+            MatchFactor(label: row.label, value: row.value),
+        ]);
+      }
       return;
     }
     if (ids.length >= 2) {
@@ -59,12 +70,10 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
       final rows = (compat?['breakdown'] as List?) ?? [];
       if (rows.isNotEmpty) {
         setState(() {
-          _breakdown = [
+          _factors = [
             for (final b in rows)
-              (
-                label: '${b['label'] ?? ''}',
-                value: (b['value'] ?? 0).toInt(),
-              ),
+              if (b is Map)
+                MatchFactor.fromJson(Map<String, dynamic>.from(b)),
           ];
         });
       }
@@ -74,10 +83,22 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
   @override
   Widget build(BuildContext context) {
     final outfit = widget.outfit;
-    final breakdown = _breakdown ??
-        outfit?.breakdown ??
-        (outfit == null ? MockData.matchBreakdown : null) ??
-        MockData.matchBreakdown;
+    final breakdown = _factors ??
+        outfit?.factors ??
+        (outfit == null
+            ? [
+                for (final row in MockData.matchBreakdown)
+                  MatchFactor(label: row.label, value: row.value),
+              ]
+            : null) ??
+        [
+          for (final row in MockData.matchBreakdown)
+            MatchFactor(label: row.label, value: row.value),
+        ];
+    // Factors the engine had no evidence for are dropped and renormalised
+    // away; showing them as ordinary scores would overstate the confidence.
+    final applied = breakdown.where((f) => f.applied).toList();
+    final skipped = breakdown.where((f) => !f.applied).toList();
     final pieces = _pieces ?? MockData.perfectMatchPieces;
     final match = outfit?.match ?? 92;
     final why = outfit?.explanation ??
@@ -118,7 +139,18 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
                 const SizedBox(height: Insets.lg),
                 _ScoreCard(match: match),
                 const SizedBox(height: Insets.xl),
-                Text('AI Breakdown Analysis', style: AppText.h4),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text('AI Breakdown Analysis', style: AppText.h4),
+                    ),
+                    if (applied.length < breakdown.length)
+                      Text(
+                        '${applied.length}/${breakdown.length} scored',
+                        style: AppText.caption,
+                      ),
+                  ],
+                ),
                 const SizedBox(height: Insets.md),
                 SwCard(
                   padding: const EdgeInsets.symmetric(
@@ -126,11 +158,37 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
                     vertical: Insets.lg,
                   ),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final row in breakdown) ...[
-                        _ScoreBar(label: row.label, value: row.value),
-                        if (row != breakdown.last)
+                      for (var i = 0; i < applied.length; i++) ...[
+                        _ScoreBar(
+                          label: applied[i].label,
+                          value: applied[i].value,
+                          weight: applied[i].weight,
+                        ),
+                        if (i != applied.length - 1)
                           const SizedBox(height: Insets.lg),
+                      ],
+                      if (skipped.isNotEmpty) ...[
+                        const SizedBox(height: Insets.lg),
+                        Text(
+                          'Not scored yet — these need more signal from you:',
+                          style: AppText.caption,
+                        ),
+                        const SizedBox(height: Insets.sm),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            for (final f in skipped)
+                              Text(
+                                f.label,
+                                style: AppText.caption.copyWith(
+                                  color: AppColors.textTertiary,
+                                ),
+                              ),
+                          ],
+                        ),
                       ],
                     ],
                   ),
@@ -296,10 +354,19 @@ class _RingPainter extends CustomPainter {
 }
 
 class _ScoreBar extends StatelessWidget {
-  const _ScoreBar({required this.label, required this.value});
+  const _ScoreBar({
+    required this.label,
+    required this.value,
+    this.weight = 0,
+  });
 
   final String label;
   final int value;
+
+  /// Share of the total score this factor carried, 0..1. Shown when the
+  /// engine reported weights so the user can see what actually moved the
+  /// number rather than treating all factors as equal.
+  final double weight;
 
   @override
   Widget build(BuildContext context) {
@@ -309,6 +376,14 @@ class _ScoreBar extends StatelessWidget {
         Row(
           children: [
             Expanded(child: Text(label, style: AppText.body)),
+            if (weight > 0)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Text(
+                  '${(weight * 100).round()}% wt',
+                  style: AppText.caption.copyWith(fontSize: 10),
+                ),
+              ),
             Text('$value%', style: AppText.bodyStrong.copyWith(fontSize: 13)),
           ],
         ),

@@ -479,6 +479,31 @@ class SwAvatar extends StatelessWidget {
   }
 }
 
+/// Data-driven photo: bundled asset path or uploaded http(s) URL.
+/// Use for any image that comes from the backend or wardrobe data.
+class SwPhoto extends StatelessWidget {
+  const SwPhoto({super.key, required this.path, this.fit = BoxFit.cover});
+
+  final String path;
+  final BoxFit fit;
+
+  static bool isRemote(String path) =>
+      path.startsWith('http://') || path.startsWith('https://');
+
+  @override
+  Widget build(BuildContext context) {
+    if (isRemote(path)) {
+      return Image.network(
+        path,
+        fit: fit,
+        errorBuilder: (context, error, stack) =>
+            const ColoredBox(color: AppColors.tint),
+      );
+    }
+    return Image.asset(path, fit: fit);
+  }
+}
+
 /// Product photo with the app's standard rounded corners and cover fit.
 class SwProductImage extends StatelessWidget {
   const SwProductImage({
@@ -498,27 +523,41 @@ class SwProductImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final fallback = SizedBox(
+      height: height,
+      width: width,
+      child: const Center(
+        child: SwIconView(
+          SwIcon.shirt,
+          size: 22,
+          color: AppColors.textTertiary,
+        ),
+      ),
+    );
+    final Widget img;
+    if (image.startsWith('http://') || image.startsWith('https://')) {
+      // Real uploaded photo served by the backend (POST /wardrobe/upload).
+      img = Image.network(
+        image,
+        height: height,
+        width: width,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stack) => fallback,
+      );
+    } else {
+      img = Image.asset(
+        image,
+        height: height,
+        width: width,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stack) => fallback,
+      );
+    }
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: ColoredBox(
         color: background ?? AppColors.background,
-        child: Image.asset(
-          image,
-          height: height,
-          width: width,
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stack) => SizedBox(
-            height: height,
-            width: width,
-            child: const Center(
-              child: SwIconView(
-                SwIcon.shirt,
-                size: 22,
-                color: AppColors.textTertiary,
-              ),
-            ),
-          ),
-        ),
+        child: img,
       ),
     );
   }

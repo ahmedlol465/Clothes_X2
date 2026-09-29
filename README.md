@@ -112,6 +112,36 @@ flutter pub get
 flutter run        # physical device? add --dart-define=API_BASE_URL=http://<your-lan-ip>:3001
 ```
 
+### AI Stylist (all optional)
+
+The stylist needs **no key**: it answers from a rule engine with 11-factor
+scoring, conversation memory, remixes and style learning, and it reads live
+weather from Open-Meteo keylessly. `GET /ai/capabilities` shows what is on.
+
+```bash
+# backend/.env — copy from backend/.env.example
+GEMINI_API_KEY=…    # free, no card: https://aistudio.google.com/apikey
+                    # or GROQ_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY
+```
+
+Add the key to unlock streamed replies, vision ("match a photo of an outfit
+to your wardrobe") and semantic retrieval. For real vector retrieval:
+
+```bash
+cd backend && npm run embeddings:install   # MiniLM, downloads once
+```
+
+See `backend/README.md` for the full capability table.
+
+### Test Add Clothes from your phone (same Wi-Fi)
+1. Find your PC's LAN IP (`ipconfig` → IPv4, e.g. `192.168.1.5`).
+2. Keep the backend running (`npm start` in `backend/`).
+3. Run: `flutter run --dart-define=API_BASE_URL=http://192.168.1.5:3001`
+4. Open **Add** → Take Photo / Gallery / Upload Multiple → Save.
+   Photos upload to `backend/storage/` (gitignored) and are analyzed on
+   their real pixels: Gemini vision when `GEMINI_API_KEY` is set in
+   `backend/.env`, filename heuristics otherwise.
+
 The app opens on the splash screen, then onboarding → sign in. **Explore the
 demo** on the login screen skips straight into the tabbed app.
 
@@ -125,17 +155,31 @@ packing, shopping gaps and insights.
 
 ```
 backend/
-  server.js          REST API — §8.1 auth, §8.2 users, §8.3 wardrobe,
-                     §8.4 AI, §8.5 outfits, §8.6 planner, §8.7 shopping,
-                     §8.8 admin, plus GET /weather/current, /health, /docs
-  src/ai-engine.js   AI pipeline §9 — compatibility scoring, outfit ranking,
-                     explanation generator, wardrobe-aware chat, gap analysis,
-                     packing optimisation, clothing analysis heuristics
+  server.js          REST API — §8.1 auth, §8.2 users, §8.3 wardrobe
+                     (+ POST /wardrobe/upload; files in backend/storage/,
+                     served at GET /storage/*), §8.4 AI, §8.5 outfits,
+                     §8.6 planner, §8.7 shopping, §8.8 admin, plus
+                     GET /weather/current, /health, /docs
+  src/taxonomy.js    colour harmony, formality scale, occasion targets,
+                     fabric warmth, season fit, garment slots
+  src/scoring.js     the 11 match factors with signal-aware weights, the
+                     completeness gate, and the explanation generator
+  src/style-memory.js  learns taste from ratings and chat, exposes it as
+                     factor weights and a Style DNA summary
+  src/retrieval.js   semantic retrieval (optional local MiniLM embeddings)
+                     with a lexical fallback
+  src/weather.js     keyless live weather (Open-Meteo) + seasonal estimate
+  src/vision.js      "advanced clothes": photo of a look → matched to the
+                     wardrobe, with an explicit list of what is missing
+  src/llm.js         LLM providers — structured chat, SSE streaming, vision
+  src/ai-engine.js   AI pipeline §9 — beam search over the wardrobe, remixes,
+                     occasion detection, offline chat, gaps, packing
   src/store.js       file-backed store (backend/data/db.json, seeded from mock data)
 ai-service/
   main.py            FastAPI mirror of POST /ai/* (§6.3). Optional:
                      AI_SERVICE_URL=http://localhost:8000 npm start
-lib/core/api/        Flutter side: ApiConfig, ApiClient (dart:io, no new deps),
+lib/core/api/        Flutter side: ApiConfig, ApiClient (package:http +
+                     multipart upload, works on mobile + web),
                      SmartWardrobeApi (typed §8 wrapper)
 lib/data/app_state.dart  central ChangeNotifier store with offline fallback
 ```
