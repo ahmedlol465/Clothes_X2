@@ -4,6 +4,12 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos of your clothes to add them to your wardrobe.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose clothing photos from your library to add them to your wardrobe.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save styled outfit photos to your library.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

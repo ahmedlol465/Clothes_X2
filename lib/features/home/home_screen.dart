@@ -262,7 +262,7 @@ class _SelectionCard extends StatelessWidget {
         children: [
           AspectRatio(
             aspectRatio: 1.94,
-            child: Image.asset(outfit.image, fit: BoxFit.cover),
+            child: SwPhoto(path: outfit.image),
           ),
           Padding(
             padding: const EdgeInsets.all(Insets.lg),

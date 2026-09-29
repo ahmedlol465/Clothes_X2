@@ -189,7 +189,7 @@ class OutfitCard extends StatelessWidget {
             Expanded(
               child: SizedBox(
                 width: double.infinity,
-                child: Image.asset(outfit.image, fit: BoxFit.cover),
+                child: SwPhoto(path: outfit.image),
               ),
             ),
             Padding(

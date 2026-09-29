@@ -29,6 +29,7 @@ abstract final class Radii {
   static const double xl = 20;
   static const double pill = 999;
 
+  static const BorderRadius smRadius = BorderRadius.all(Radius.circular(sm));
   static const BorderRadius cardRadius = BorderRadius.all(Radius.circular(lg));
   static const BorderRadius tileRadius = BorderRadius.all(Radius.circular(md));
   static const BorderRadius sheetRadius = BorderRadius.all(Radius.circular(xl));

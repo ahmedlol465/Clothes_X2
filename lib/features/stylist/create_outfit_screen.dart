@@ -144,7 +144,7 @@ class _SlotRow extends StatelessWidget {
                       color: AppColors.textSecondary,
                     ),
                   )
-                : Image.asset(image, fit: BoxFit.cover),
+                : SwPhoto(path: image),
           ),
           const SizedBox(width: Insets.lg),
           Expanded(

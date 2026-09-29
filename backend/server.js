@@ -9,12 +9,24 @@
  * Docs: GET /docs  (endpoint index) · GET /health
  */
 'use strict';
+// Load backend/.env first (gitignored) so GEMINI_API_KEY / WEATHER_KEY etc.
+// are available to server.js and src/llm.js.
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const store = require('./src/store');
 const ai = require('./src/ai-engine');
 const llm = require('./src/llm');
+const scoring = require('./src/scoring');
+const memoryStore = require('./src/style-memory');
+const retrieval = require('./src/retrieval');
+const weatherService = require('./src/weather');
+const vision = require('./src/vision');
+const tax = require('./src/taxonomy');
 
 const PORT = process.env.EXPRESS_PORT || process.env.PORT || 3001;
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || ''; // e.g. http://localhost:8000
@@ -64,6 +76,64 @@ function trackAi(endpoint, ms, extra = {}) {
   persist();
 }
 const now = () => new Date().toISOString();
+
+// ------------------------------------------------- real photo uploads (§8.3)
+// Device photos land in backend/storage/ (gitignored) and are served back at
+// GET /storage/<file> so the app can display the exact photo that was taken.
+const STORAGE_DIR = path.join(__dirname, 'storage');
+fs.mkdirSync(STORAGE_DIR, { recursive: true });
+app.use('/storage', express.static(STORAGE_DIR, { maxAge: '7d' }));
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, STORAGE_DIR),
+    filename: (_req, file, cb) => {
+      const ext = (path.extname(file.originalname || '') || '.jpg').toLowerCase();
+      cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\//.test(file.mimetype || '')) return cb(null, true);
+    cb(new Error('Only image files are allowed.'));
+  },
+});
+
+/** Absolute URL for a stored file, based on the incoming request host. */
+function storageUrl(req, filename) {
+  return `${req.protocol}://${req.get('host')}/storage/${filename}`;
+}
+
+/**
+ * POST /wardrobe/upload — multipart `photos[]` (up to 10 images, 10MB each).
+ * Returns [{ url, filename, mime, size }] for the Add Clothes flow.
+ */
+app.post('/wardrobe/upload', optionalAuth, (req, res) => {
+  upload.array('photos', 10)(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'Attach at least one image as photos[].' });
+    }
+    res.status(201).json({
+      files: req.files.map((f) => ({
+        url: storageUrl(req, f.filename),
+        filename: f.originalname || f.filename,
+        storedAs: f.filename,
+        mime: f.mimetype,
+        size: f.size,
+      })),
+    });
+  });
+});
+
+/** Resolve a previously-uploaded /storage/<file> URL to raw bytes. */
+function readStoredImage(imageUrl) {
+  const m = String(imageUrl || '').match(/\/storage\/([^/?#]+)$/);
+  if (!m) return null;
+  const file = path.join(STORAGE_DIR, path.basename(m[1]));
+  if (!file.startsWith(STORAGE_DIR) || !fs.existsSync(file)) return null;
+  return fs.readFileSync(file);
+}
 
 // ================================================================== 8.1 Auth
 app.post('/auth/register', (req, res) => {
@@ -211,11 +281,18 @@ app.post('/ai/analyze-clothing', optionalAuth, async (req, res) => {
   const remote = await proxyAI('/analyze-clothing', req.body).catch(() => null);
   const base = remote || ai.analyzeClothing(req.body || {});
   // Gemini vision when a photo is supplied + a free key is configured.
-  const dataUrl =
-    req.body?.dataUrl || req.body?.imageUrl ||
+  // Accepts (in order): dataUrl, raw base64, or a /storage/<file> URL from
+  // POST /wardrobe/upload (read straight off disk — no re-upload needed).
+  let dataUrl =
+    req.body?.dataUrl ||
     (req.body?.imageBase64
       ? `data:${req.body.mime || 'image/jpeg'};base64,${req.body.imageBase64}`
       : null);
+  if (!dataUrl && req.body?.imageUrl) {
+    const bytes = readStoredImage(req.body.imageUrl);
+    if (bytes) dataUrl = `data:image/jpeg;base64,${bytes.toString('base64')}`;
+    else dataUrl = req.body.imageUrl; // absolute http(s) URL — provider fetches it
+  }
   let source = 'heuristic';
   let tokens;
   if (dataUrl && llm.status().configured) {
@@ -239,28 +316,45 @@ app.post('/ai/analyze-clothing', optionalAuth, async (req, res) => {
 app.post('/ai/generate-outfit', optionalAuth, async (req, res) => {
   const t0 = Date.now();
   const body = req.body || {};
-  const remote = await proxyAI('/generate-outfit', { ...body, wardrobe: db.wardrobe }).catch(() => null);
-  const outfits = remote?.outfits || ai.generateOutfits(db.wardrobe.filter((i) => !i.archived), {
-    occasion: body.occasion || 'casual', weather: body.weather || { tempC: 24, condition: 'partly cloudy' },
-    styleProfile: (req.user && req.user.styleProfile) || {}, count: body.count || 3,
-    anchorItemId: body.anchorItemId, excludeIds: body.excludeIds || [],
+  const wardrobe = db.wardrobe.filter((i) => !i.archived);
+  const weather = body.weather || (await resolveWeather());
+  const outfits = ai.generateOutfits(wardrobe, {
+    occasion: body.occasion || 'casual',
+    weather,
+    styleProfile: req.user?.styleProfile || {},
+    memory: memoryStore.read(db, req.user?.id),
+    count: body.count || 3,
+    anchorItemId: body.anchorItemId,
+    excludeIds: body.excludeIds || [],
+    focus: body.focus || '',
   });
   trackAi('generate-outfit', Date.now() - t0);
-  res.json({ outfits });
+  res.json({ outfits, weather });
 });
 
 app.post('/ai/calculate-compatibility', optionalAuth, async (req, res) => {
   const t0 = Date.now();
-  const { itemIds = [], occasion = 'casual', weather = { tempC: 24 } } = req.body || {};
+  const { itemIds = [], occasion = 'casual', weather } = req.body || {};
+  const resolved = weather || (await resolveWeather());
   const items = itemIds.map((id) => db.wardrobe.find((i) => i.id === id)).filter(Boolean);
   if (items.length < 2) return res.status(400).json({ error: 'Provide at least 2 itemIds.' });
-  const result = ai.calculateCompatibility(items, { occasion, weather, styleProfile: req.user?.styleProfile });
+  const result = scoring.scoreOutfit(items, {
+    occasion, weather: resolved,
+    styleProfile: req.user?.styleProfile,
+    memory: memoryStore.read(db, req.user?.id),
+  });
   trackAi('calculate-compatibility', Date.now() - t0);
-  res.json(result);
+  res.json({ ...result, weather: resolved });
 });
 
 app.post('/ai/style-profile', optionalAuth, (req, res) => {
-  res.json({ styleProfile: ai.styleProfileFromWardrobe(db.wardrobe.filter((i) => !i.archived), db.feedback) });
+  const wardrobe = db.wardrobe.filter((i) => !i.archived);
+  const memory = memoryStore.read(db, req.user?.id);
+  res.json({
+    styleProfile: ai.styleProfileFromWardrobe(wardrobe, db.feedback),
+    styleDna: memoryStore.styleDna(memory, wardrobe),
+    digest: memoryStore.digest(memory),
+  });
 });
 
 app.post('/ai/wardrobe-gap', optionalAuth, (req, res) => {
@@ -271,64 +365,513 @@ app.post('/ai/packing-list', optionalAuth, (req, res) => {
   res.json(ai.packingList(db.wardrobe.filter((i) => !i.archived), req.body || {}));
 });
 
+// ------------------------------------------------------------- stylist core
+/**
+ * Shared context assembly for every stylist entry point.
+ *
+ * `ranked` is the retrieval shortlist: retrieval scores the whole wardrobe
+ * locally (embeddings when available, lexical scoring otherwise) and returns a
+ * category-balanced top slice. The LLM only ever sees these, which is what
+ * replaces the old `wardrobe.slice(0, 40)`.
+ */
+async function stylistContext(user, message = '', opts = {}) {
+  const wardrobe = db.wardrobe.filter((i) => !i.archived);
+  const memory = memoryStore.read(db, user?.id);
+  const weather = opts.weather || (await resolveWeather());
+  const occasion = opts.occasion || ai.detectOccasion(message) || 'casual';
+
+  const ranked = await retrieval.rank(message, wardrobe, {
+    weather,
+    occasion,
+    limit: opts.limit || 30,
+  });
+  return {
+    wardrobe,
+    shortlist: ranked.map((r) => r.item),
+    memory,
+    weather,
+    occasion,
+    styleProfile: user?.styleProfile || {},
+    events: db.events || [],
+  };
+}
+
+/**
+ * Recover the items a streamed reply talked about.
+ *
+ * The streaming path has no structured channel — the model answers in prose —
+ * so the pieces it recommended are recovered by matching the ids *or* the
+ * garment names it used back to the wardrobe. That keeps the streamed turn as
+ * grounded as the non-streamed one, instead of quietly attaching an unrelated
+ * generated look to advice about something else.
+ */
+function idsMentionedIn(text, wardrobe) {
+  // Normalise once, but keep it a bare string — a padded copy made every match
+  // depend on the word being followed by a space, so "your Leather Loafers,"
+  // never matched "leather loafers".
+  const haystack = tax.normalize(text).replace(/\s+/g, ' ');
+  if (haystack.trim().length < 3) return [];
+
+  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const byId = wardrobe.filter((w) => w.id && new RegExp(`\\b${escape(w.id)}\\b`).test(haystack));
+  // Longest names first so "Oxford Shirt" wins over "Shirt".
+  const byName = wardrobe
+    .filter((w) => w.name && w.name.length >= 4)
+    .map((w) => ({ w, key: tax.normalize(w.name).trim() }))
+    .filter(({ key }) => key && new RegExp(`\\b${escape(key)}\\b`).test(haystack))
+    .sort((a, b) => b.w.name.length - a.w.name.length);
+  return [...new Set([...byId, ...byName].map(({ w }) => w.id))];
+}
+
+/** Phrases worth mining for a durable preference. */
+const LEARN_TRIGGER =
+  /\b(hate|love|loves|never|always|avoid|prefer|don'?t like|dont like|no more|too (formal|casual|bright|plain|dressy))\b/i;
+
+/**
+ * Run the learning loop over a stylist turn.
+ *
+ * The LLM's `memoryNotes` is a lossy paraphrase of what the user said, so it
+ * is an *extra* pass — never a replacement. Learning only from the summary
+ * turned "I never wear sneakers" into the far weaker "avoids sneakers", which
+ * is an opinion rather than an exclusion.
+ */
+function learnTurn(memory, message, memoryNotes) {
+  const sources = [message, memoryNotes].filter((s) => typeof s === 'string' && s.trim());
+  if (!sources.some((s) => LEARN_TRIGGER.test(s))) return false;
+  for (const s of sources) memoryStore.learnChat(memory, s);
+  return true;
+}
+
+/** Turn the LLM's chosen ids into a real, scored outfit. */
+function buildOutfitFromIds(ids, ctx, opts = {}) {
+  // Dedupe on the garment, not the id: the wardrobe can hold two "White Shirt"
+  // rows, and a reply that names it once must not produce a matching pair.
+  const picked = [];
+  const seen = new Set();
+  for (const id of [...new Set(ids || [])]) {
+    const item = ctx.wardrobe.find((w) => w.id === id);
+    if (!item) continue;
+    const key = tax.garmentKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    picked.push(item);
+  }
+  const items = picked;
+  if (items.length < 2) return null;
+
+  const result = scoring.scoreOutfit(items, {
+    occasion: opts.occasion || ctx.occasion,
+    weather: ctx.weather,
+    styleProfile: ctx.styleProfile,
+    memory: ctx.memory,
+  });
+  return {
+    id: `llm-${Date.now()}`,
+    name: ai.outfitName(items, opts.occasion || ctx.occasion),
+    occasion: opts.occasion || ctx.occasion,
+    match: result.match,
+    breakdown: result.breakdown,
+    completeness: result.completeness,
+    explanation: scoring.explain(items, {
+      occasion: opts.occasion || ctx.occasion,
+      weather: ctx.weather,
+    }, result),
+    itemIds: items.map((p) => p.id),
+    pieces: items.map((p) => p.name),
+    items,
+    image: items[0]?.image,
+  };
+}
+
+/** Server-side conversation recall when the client sends no history. */
+function recallTurns(userId, conversationId, limit = 10) {
+  const log = db.conversations || [];
+  return log
+    .filter((t) => t.userId === userId && (!conversationId || t.conversationId === conversationId))
+    .slice(-limit)
+    .flatMap((t) => ([
+      { fromUser: true, text: t.message },
+      { fromUser: false, text: t.reply },
+    ]));
+}
+
+/**
+ * POST /ai/chat — the stylist turn.
+ *
+ * Order of operations:
+ *   retrieve → LLM (with history + memory digest) → validate ids → score →
+ *   learn from the message → persist the turn.
+ *
+ * Falls back to the rule engine at any failure, so this endpoint always
+ * answers with real content.
+ */
 app.post('/ai/chat', optionalAuth, async (req, res) => {
   const t0 = Date.now();
-  const { message = '', history = [] } = req.body || {};
+  const { message = '', history = [], conversationId } = req.body || {};
   if (!String(message).trim()) return res.status(400).json({ error: 'message is required.' });
-  const weather = await resolveWeather();
-  const wardrobe = db.wardrobe.filter((i) => !i.archived);
-  const remote = await proxyAI('/chat', { message, wardrobe, weather }).catch(() => null);
-  let reply, outfit = null, source = 'rules';
-  if (remote) {
-    reply = remote.text || remote.reply;
-    outfit = remote.outfit || null;
-    source = 'fastapi';
-  } else if (llm.status().configured) {
-    // Gemini (or other free provider): grounded on real catalog ids.
+
+  const user = req.user;
+  const ctx = await stylistContext(user, message);
+  // `let`: reassigned to the provider name once the LLM turn succeeds. As a
+  // `const` the assignment threw, and the catch below swallowed it — so the
+  // reply read like an LLM answer while `source` stayed "rules" and the
+  // model's chosen item ids were never assembled into an outfit.
+  let source = 'rules';
+  let reply = '';
+  let intent = 'chat';
+  let followUp = null;
+  let constraints = { colors: [], styles: [], avoid: [] };
+  let occasion = ctx.occasion;
+  let tokens;
+  let memoryNotes = null;
+
+  if (llm.status().configured) {
     try {
       const gen = await llm.stylistChat({
-        message, wardrobe, weather, styleProfile: req.user?.styleProfile || {},
+        message,
+        // History: whatever the client sent, else what we remembered.
+        history: history.length ? history : recallTurns(user?.id, conversationId),
+        wardrobe: ctx.shortlist,
+        weather: ctx.weather,
+        styleProfile: ctx.styleProfile,
+        memoryDigest: memoryStore.digest(ctx.memory),
+        events: ctx.events,
+        imageUrl: req.body?.dataUrl || req.body?.imageUrl || null,
       });
-      const ids = [...new Set(gen.itemIds || [])]
-        .map((id) => wardrobe.find((w) => w.id === id))
-        .filter(Boolean)
-        .slice(0, 4);
-      if (ids.length >= 2) {
-        const compat = ai.calculateCompatibility(ids, {
-          occasion: message, weather, styleProfile: req.user?.styleProfile,
-        });
-        outfit = {
-          id: `llm-${Date.now()}`,
-          name: ai.outfitName(ids, message),
-          occasion: 'AI pick',
-          match: compat.match,
-          breakdown: compat.breakdown,
-          explanation: ai.explainOutfit(ids, { occasion: message, weather }, compat),
-          itemIds: ids.map((p) => p.id),
-          pieces: ids.map((p) => p.name),
-          items: ids,
-          image: ids[0].image,
-        };
-      }
       reply = gen.text;
+      intent = gen.intent;
+      followUp = gen.followUp;
+      constraints = gen.constraints;
+      memoryNotes = gen.memoryNotes;
+      occasion = gen.occasion || occasion;
+      tokens = gen.tokens;
       source = llm.status().provider;
-      trackAi('chat', Date.now() - t0, { source, tokens: gen.tokens });
+      ctx.outfit = buildOutfitFromIds(gen.itemIds, ctx, { occasion });
     } catch (e) {
       console.error('[ai] chat failed, rules fallback:', e.message);
     }
   }
+
+  // Rule engine: answers on its own when there is no LLM, and rescues a
+  // failed or empty LLM turn.
   if (!reply) {
     const fallback = ai.chatReply(message, {
-      wardrobe, weather, styleProfile: req.user?.styleProfile || {},
+      wardrobe: ctx.wardrobe,
+      weather: ctx.weather,
+      styleProfile: ctx.styleProfile,
+      memory: ctx.memory,
     });
     reply = fallback.text;
-    outfit = fallback.outfit;
+    intent = fallback.intent || 'chat';
+    occasion = fallback.occasion || occasion;
+    ctx.outfit = fallback.outfit || null;
+    if (!constraints.colors.length) constraints = fallback.constraints || constraints;
   }
-  db.conversations.push({ at: now(), message, reply });
-  if (source === 'rules' || source === 'fastapi') {
-    trackAi('chat', Date.now() - t0, { source });
+
+  const outfit = ctx.outfit || null;
+
+  // Learning loop: mine the user's own words for durable preferences.
+  if (learnTurn(ctx.memory, message, memoryNotes)) memoryStore.write(db, ctx.memory);
+
+  db.conversations.push({
+    id: store.uid('t'),
+    userId: user?.id || null,
+    conversationId: conversationId || null,
+    at: now(), message, reply,
+    itemIds: outfit?.itemIds || [],
+  });
+  if (db.conversations.length > 400) db.conversations = db.conversations.slice(-400);
+  persist();
+
+  trackAi('chat', Date.now() - t0, { source, tokens });
+  res.json({
+    reply,
+    outfit,
+    followUp,
+    intent,
+    occasion,
+    constraints,
+    weather: ctx.weather,
+    memory: { confidence: memoryStore.confidence(ctx.memory), digest: memoryStore.digest(ctx.memory) },
+    conversationId: conversationId || null,
+    source,
+  });
+});
+
+/**
+ * POST /ai/chat/stream — same turn, but the reply is streamed as SSE so the
+ * UI types it out. Emits `delta` events, then a final `done` event carrying
+ * the assembled text. Falls back to a single `done` with the rule-engine
+ * reply when the provider has no stream support or errors mid-flight.
+ */
+app.post('/ai/chat/stream', optionalAuth, async (req, res) => {
+  const { message = '', history = [], conversationId } = req.body || {};
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const send = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  if (!String(message).trim()) {
+    send('error', { error: 'message is required.' });
+    return res.end();
   }
-  res.json({ reply, outfit, weather, source });
+
+  const t0 = Date.now();
+  const user = req.user;
+  let ctx;
+  try {
+    ctx = await stylistContext(user, message);
+  } catch (e) {
+    send('error', { error: e.message });
+    return res.end();
+  }
+
+  const aborter = new AbortController();
+  res.on('close', () => aborter.abort());
+
+  let text = '';
+  let source = 'rules';
+  let tokens;
+
+  if (llm.status().configured) {
+    try {
+      source = llm.status().provider;
+      for await (const chunk of llm.streamChat({
+        message,
+        history: history.length ? history : recallTurns(user?.id, conversationId),
+        wardrobe: ctx.shortlist,
+        weather: ctx.weather,
+        styleProfile: ctx.styleProfile,
+        memoryDigest: memoryStore.digest(ctx.memory),
+      })) {
+        if (aborter.signal.aborted) break;
+        if (chunk.delta) {
+          text += chunk.delta;
+          send('delta', { delta: chunk.delta });
+        }
+        if (chunk.done) tokens = chunk.tokens;
+      }
+    } catch (e) {
+      console.error('[ai] stream failed:', e.message);
+      send('error', { error: e.message, recoverable: true });
+      source = 'rules';
+    }
+  }
+
+  // Anything not delivered by the stream (no key, provider error, empty
+  // stream) is filled in by the rule engine.
+  if (!text.trim()) {
+    const fallback = ai.chatReply(message, {
+      wardrobe: ctx.wardrobe, weather: ctx.weather,
+      styleProfile: ctx.styleProfile, memory: ctx.memory,
+    });
+    text = fallback.text;
+    source = 'rules';
+    ctx.outfit = fallback.outfit || null;
+    send('delta', { delta: text, synthetic: true });
+  } else {
+    // No structured id list on this path. Prefer the pieces the model actually
+    // named; only fall back to generating a look when it named fewer than two.
+    const named = buildOutfitFromIds(idsMentionedIn(text, ctx.wardrobe), ctx);
+    ctx.outfit = named || ai.generateOutfits(ctx.wardrobe, {
+      occasion: ctx.occasion, weather: ctx.weather,
+      styleProfile: ctx.styleProfile, memory: ctx.memory, count: 1,
+    })[0] || null;
+  }
+
+  const outfit = ctx.outfit || null;
+  // The streaming turn is the one the app actually uses, so it learns too.
+  if (learnTurn(ctx.memory, message, null)) memoryStore.write(db, ctx.memory);
+  db.conversations.push({
+    id: store.uid('t'), userId: user?.id || null,
+    conversationId: conversationId || null, at: now(), message, reply: text,
+    itemIds: outfit?.itemIds || [],
+  });
+  if (db.conversations.length > 400) db.conversations = db.conversations.slice(-400);
+  persist();
+  trackAi('chat/stream', Date.now() - t0, { source, tokens });
+
+  send('done', {
+    reply: text,
+    outfit,
+    weather: ctx.weather,
+    memory: { confidence: memoryStore.confidence(ctx.memory), digest: memoryStore.digest(ctx.memory) },
+    source,
+  });
+  res.end();
+});
+
+/**
+ * POST /ai/match-outfit — the "advanced clothes" feature.
+ *
+ * Send a photo of an outfit someone else is wearing. The vision model reads it
+ * into a structured spec, then every slot is matched against the user's own
+ * wardrobe to produce a wearable plan plus an explicit list of what they are
+ * missing.
+ *
+ * Accepts JSON (`dataUrl` / `imageUrl` / `filename`) or a multipart `photo`.
+ */
+app.post('/ai/match-outfit', optionalAuth, (req, res) => {
+  const t0 = Date.now();
+  const wardrobe = db.wardrobe.filter((i) => !i.archived);
+  if (!wardrobe.length) {
+    return res.status(400).json({ error: 'Add a few items to your wardrobe first.' });
+  }
+
+  // Multipart path: `upload.single('photo')` before anything else.
+  const multipart = (req.is('multipart/form-data')
+    ? new Promise((resolve) => upload.single('photo')(req, res, resolve))
+    : Promise.resolve());
+  multipart.then(async () => {
+    let dataUrl = req.body?.dataUrl || req.body?.imageUrl || null;
+    if (!dataUrl && req.file) {
+      const bytes = fs.readFileSync(req.file.path);
+      dataUrl = `data:${req.file.mimetype || 'image/jpeg'};base64,${bytes.toString('base64')}`;
+    }
+
+    let source = 'rules';
+    let tokens;
+    let spec;
+    try {
+      if (dataUrl && llm.status().configured) {
+        const visionOut = await llm.describeOutfit({
+          dataUrl,
+          hint: req.body?.note || '',
+        });
+        spec = vision.normaliseSpec(visionOut.spec);
+        source = `${llm.status().provider}-vision`;
+        tokens = visionOut.tokens;
+      } else {
+        // No key: still produce a plan from the filename rather than an error.
+        spec = vision.specFromFilename(req.body?.filename || '', req.body?.note || '');
+        source = 'filename';
+      }
+    } catch (e) {
+      console.error('[ai] outfit vision failed:', e.message);
+      spec = vision.specFromFilename(req.body?.filename || '', req.body?.note || '');
+      source = 'filename';
+      trackAi('match-outfit', Date.now() - t0, { source, error: e.message });
+      return res.status(200).json({ ...vision.matchSpec(spec, wardrobe), source: 'filename', degraded: true });
+    }
+
+    const result = vision.matchSpec(spec, wardrobe, {
+      weather: req.body?.weather || currentWeather(),
+    });
+
+    // Score the resulting look so the user sees one consistent number.
+    if (result.items.length >= 2) {
+      const memory = memoryStore.read(db, req.user?.id);
+      const scored = scoring.scoreOutfit(result.items, {
+        occasion: result.reference.occasion || 'casual',
+        weather: req.body?.weather || currentWeather(),
+        styleProfile: req.user?.styleProfile,
+        memory,
+      });
+      result.outfit = {
+        id: `match-${Date.now()}`,
+        name: result.reference.title,
+        match: scored.match,
+        breakdown: scored.breakdown,
+        explanation: scoring.explain(result.items, {
+          occasion: result.reference.occasion || 'casual',
+          weather: req.body?.weather || currentWeather(),
+        }, scored),
+        itemIds: result.itemIds,
+        pieces: result.items.map((i) => i.name),
+        items: result.items,
+        image: result.items[0]?.image,
+      };
+    }
+
+    trackAi('match-outfit', Date.now() - t0, { source, tokens });
+    res.json({ ...result, source });
+  }).catch((e) => res.status(400).json({ error: e.message }));
+});
+
+/**
+ * POST /ai/remix — re-dress an existing outfit for another context.
+ * `variant` is one of casual | cold | summer | date | formal.
+ */
+app.post('/ai/remix', optionalAuth, async (req, res) => {
+  const t0 = Date.now();
+  const { itemIds = [], variant = 'casual', weather } = req.body || {};
+  const wardrobe = db.wardrobe.filter((i) => !i.archived);
+  if (!ai.REMIX_TARGETS[variant]) {
+    return res.status(400).json({
+      error: `Unknown variant "${variant}".`,
+      variants: Object.keys(ai.REMIX_TARGETS),
+    });
+  }
+  if (!itemIds.length) return res.status(400).json({ error: 'itemIds is required.' });
+
+  const items = itemIds.map((id) => wardrobe.find((i) => i.id === id)).filter(Boolean);
+  if (!items.length) return res.status(404).json({ error: 'None of those items are in your wardrobe.' });
+
+  const result = ai.remixOutfit(wardrobe, {
+    itemIds: items.map((i) => i.id),
+    variant,
+    weather: weather || (await resolveWeather()),
+    styleProfile: req.user?.styleProfile,
+    memory: memoryStore.read(db, req.user?.id),
+  });
+  trackAi('remix', Date.now() - t0, { source: 'rules', variant });
+  res.json(result);
+});
+
+/** GET /ai/style-dna — what the stylist has learned about this user. */
+app.get('/ai/style-dna', optionalAuth, (req, res) => {
+  const wardrobe = db.wardrobe.filter((i) => !i.archived);
+  const memory = memoryStore.read(db, req.user?.id);
+  res.json({
+    styleDna: memoryStore.styleDna(memory, wardrobe),
+    digest: memoryStore.digest(memory),
+  });
+});
+
+/** GET /ai/conversations — recent stylist turns, newest last. */
+app.get('/ai/conversations', optionalAuth, (req, res) => {
+  const userId = req.user?.id;
+  const limit = Math.min(100, Number(req.query.limit) || 40);
+  const turns = (db.conversations || [])
+    .filter((t) => !userId || !t.userId || t.userId === userId)
+    .slice(-limit);
+  res.json({ turns, total: db.conversations?.length || 0 });
+});
+
+/** DELETE /ai/conversations — forget the conversation, keep learned taste. */
+app.delete('/ai/conversations', optionalAuth, (req, res) => {
+  const userId = req.user?.id;
+  db.conversations = (db.conversations || []).filter((t) => t.userId && t.userId !== userId);
+  persist();
+  res.json({ ok: true });
+});
+
+/** GET /ai/capabilities — what the stylist can currently do, and why not. */
+app.get('/ai/capabilities', optionalAuth, async (req, res) => {
+  const llmStatus = llm.status();
+  const emb = await retrieval.status();
+  res.json({
+    llm: llmStatus,
+    embeddings: emb,
+    weather: { keyless: true, provider: 'open-meteo' },
+    memory: memoryStore.digest(memoryStore.read(db, req.user?.id)),
+    features: {
+      conversationMemory: true,
+      streaming: llmStatus.configured,
+      visionAnalysis: llmStatus.configured && llmStatus.vision,
+      visionOutfitMatching: llmStatus.configured && llmStatus.vision,
+      semanticRetrieval: emb.embeddings,
+      learnedRanking: true,
+      remix: true,
+      keylessWeather: true,
+    },
+  });
 });
 
 // ================================================================ 8.5 Outfits
@@ -390,12 +933,40 @@ app.post('/outfits/:id/favorite', optionalAuth, (req, res) => {
 
 app.post('/outfits/:id/feedback', optionalAuth, (req, res) => {
   const { rating = 5, comment = '' } = req.body || {};
-  db.feedback.push({ outfitId: req.params.id, rating, comment, at: now() });
-  // Learning loop (§9): nudge StyleMemory confidence from explicit ratings.
-  const mem = db.styleMemory.find((m) => m.preference === 'neutral_colors');
-  if (mem) mem.confidence = Math.min(0.99, mem.confidence + (rating >= 4 ? 0.01 : -0.01));
+  const outfit = db.outfits.find((o) => o.id === req.params.id);
+  db.feedback.push({
+    outfitId: req.params.id, rating, comment, at: now(),
+    userId: req.user?.id || null,
+  });
+
+  // Learning loop (§9). The old version nudged one hardcoded
+  // `neutral_colors` row by ±0.01 that nothing ever read back. Now the
+  // rating is attributed to the actual garments in the outfit, and those
+  // preference scores feed straight into future ranking via factorWeights().
+  const items = (outfit?.itemIds || [])
+    .map((id) => db.wardrobe.find((i) => i.id === id))
+    .filter(Boolean);
+  const memory = memoryStore.record(db, req.user?.id || 'anonymous', {
+    rating: Number(rating),
+    items,
+    message: comment || null,
+  });
   persist();
-  res.json({ ok: true });
+
+  res.json({
+    ok: true,
+    learned: {
+      confidence: memoryStore.confidence(memory),
+      ratings: memory.totals.ratings,
+      signals: memory.totals.chats,
+      // Show the user what actually moved, so the loop is not a black box.
+      palette: Object.entries(memory.colors)
+        .sort((a, b) => Math.abs(b[1] - 0.5) - Math.abs(a[1] - 0.5))
+        .slice(0, 5)
+        .map(([label, value]) => ({ label, value: Number(value.toFixed(3)) })),
+      notes: memory.facts.slice(0, 3).map((f) => f.text),
+    },
+  });
 });
 
 app.get('/outfits', optionalAuth, (req, res) => {
@@ -496,32 +1067,43 @@ app.get('/admin/ai-performance', (_req, res) => {
   res.json({ totalCalls: calls, avgLatencyMs: avgMs, byEndpoint: groupBy(db.aiUsage, 'endpoint'), tokens, llm: llm.status() });
 });
 app.get('/admin/reports', (_req, res) => res.json({ feedback: db.feedback.slice(-50) }));
-app.get('/admin/system-health', (_req, res) => res.json({
+app.get('/admin/system-health', async (_req, res) => res.json({
   status: 'ok', uptimeSec: Math.round(process.uptime()),
   aiService: AI_SERVICE_URL || 'embedded',
   llm: llm.status(),
-  weather: process.env.WEATHER_KEY ? 'live (openweathermap)' : 'stub',
+  embeddings: await retrieval.status(),
+  weather: {
+    provider: 'open-meteo',
+    keyless: true,
+    keyConfigured: !!process.env.WEATHER_KEY,
+    cached: process.env.WEATHER_CITY || 'Cairo',
+  },
+  modules: {
+    scoring: '11-factor + completeness gate',
+    learning: 'style-memory (per-attribute, confidence weighted)',
+    retrieval: 'two-stage, category balanced',
+  },
   dbFile: 'backend/data/db.json',
 }));
 
 // ------------------------------------------------------- weather + misc
-function currentWeather() {
-  // Stub for OpenWeatherMap integration (§6.5): deterministic demo weather
-  // so outfit scoring is stable. Set WEATHER_KEY for live data.
-  return { tempC: 28, condition: 'sunny', city: 'Cairo', summary: 'Sunny • 28°C' };
+/**
+ * Live weather via Open-Meteo — free, and no API key required, so a fresh
+ * checkout gets real conditions instead of the old hardcoded "28°C sunny"
+ * stub. Falls back to OpenWeatherMap when WEATHER_KEY is set, then to a
+ * seasonal estimate. Never throws.
+ */
+function currentWeather(city) {
+  return weatherService.estimate(city);
 }
 
-/** Live OpenWeatherMap when WEATHER_KEY is set, else the stub above. */
 async function resolveWeather(city) {
   try {
-    const live = await llm.liveWeather(city);
-    if (live) return live;
+    return await weatherService.resolve(city);
   } catch (e) {
-    console.error('[weather] live failed, stub fallback:', e.message);
+    console.error('[weather] resolve failed, stub fallback:', e.message);
+    return currentWeather(city);
   }
-  const stub = currentWeather();
-  if (city) stub.city = city;
-  return stub;
 }
 
 app.get('/weather/current', async (req, res) => {
@@ -534,10 +1116,13 @@ app.get('/docs', (_req, res) => res.json({
   endpoints: [
     'POST /auth/register', 'POST /auth/login', 'POST /auth/refresh', 'POST /auth/logout',
     'GET /users/me', 'PATCH /users/me', 'GET /users/me/style-profile', 'PATCH /users/me/style-profile',
-    'GET /wardrobe/items', 'POST /wardrobe/items', 'GET /wardrobe/items/:id', 'PATCH /wardrobe/items/:id',
+    'GET /wardrobe/items', 'POST /wardrobe/items', 'POST /wardrobe/upload', 'GET /wardrobe/items/:id', 'PATCH /wardrobe/items/:id',
     'DELETE /wardrobe/items/:id', 'POST /wardrobe/items/batch-upload', 'GET /wardrobe/collections',
     'POST /ai/analyze-clothing', 'POST /ai/generate-outfit', 'POST /ai/calculate-compatibility',
-    'POST /ai/style-profile', 'POST /ai/wardrobe-gap', 'POST /ai/packing-list', 'POST /ai/chat',
+    'POST /ai/style-profile', 'POST /ai/wardrobe-gap', 'POST /ai/packing-list',
+    'POST /ai/chat', 'POST /ai/chat/stream (SSE)', 'POST /ai/match-outfit',
+    'POST /ai/remix', 'GET /ai/style-dna', 'GET /ai/conversations',
+    'DELETE /ai/conversations', 'GET /ai/capabilities',
     'GET /outfits/recommended', 'POST /outfits', 'GET /outfits/:id', 'PATCH /outfits/:id',
     'DELETE /outfits/:id', 'POST /outfits/:id/favorite', 'POST /outfits/:id/feedback',
     'GET /events', 'POST /events', 'PATCH /events/:id', 'DELETE /events/:id',
@@ -559,6 +1144,14 @@ const server = app.listen(PORT, () =>
     `SmartWardrobe backend listening on http://localhost:${PORT}  (docs: /docs)`,
   ),
 );
+
+// Preload the local embedding model in the background so the first stylist
+// request is not the slow one. Purely optional — if it fails, retrieval falls
+// back to lexical scoring and the server is unaffected.
+retrieval.warmup().then((ok) => {
+  if (ok) console.log('[ai] local embeddings ready');
+  else console.log('[ai] embeddings unavailable — using lexical retrieval');
+});
 server.on('error', (err) => {
   if (err && err.code === 'EADDRINUSE') {
     console.error(
