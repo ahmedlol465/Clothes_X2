@@ -31,6 +31,61 @@ class ClothingItem {
 
   /// Compact "Tops • White" style summary used under the product name.
   String get meta => '$category • $color';
+
+  /// JSON mapping for the backend wardrobe API (§8.3).
+  factory ClothingItem.fromJson(Map<String, dynamic> json) => ClothingItem(
+        id: '${json['id'] ?? ''}',
+        name: '${json['name'] ?? 'Untitled'}',
+        image: '${json['image'] ?? 'assets/images/item_tee_white.jpg'}',
+        category: '${json['category'] ?? 'Tops'}',
+        color: '${json['color'] ?? 'White'}',
+        style: '${json['style'] ?? 'Casual'}',
+        material: '${json['material'] ?? 'Cotton'}',
+        season: '${json['season'] ?? 'All Season'}',
+        formality: '${json['formality'] ?? 'Casual'}',
+        timesWorn: (json['timesWorn'] as num?)?.toInt() ?? 0,
+        lastWornLabel: json['lastWornLabel'] as String?,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'image': image,
+        'category': category,
+        'color': color,
+        'style': style,
+        'material': material,
+        'season': season,
+        'formality': formality,
+        'timesWorn': timesWorn,
+        if (lastWornLabel != null) 'lastWornLabel': lastWornLabel,
+      };
+
+  ClothingItem copyWith({
+    String? name,
+    String? image,
+    String? category,
+    String? color,
+    String? style,
+    String? material,
+    String? season,
+    String? formality,
+    int? timesWorn,
+    String? lastWornLabel,
+  }) =>
+      ClothingItem(
+        id: id,
+        name: name ?? this.name,
+        image: image ?? this.image,
+        category: category ?? this.category,
+        color: color ?? this.color,
+        style: style ?? this.style,
+        material: material ?? this.material,
+        season: season ?? this.season,
+        formality: formality ?? this.formality,
+        timesWorn: timesWorn ?? this.timesWorn,
+        lastWornLabel: lastWornLabel ?? this.lastWornLabel,
+      );
 }
 
 /// A saved or AI generated outfit.
@@ -44,6 +99,10 @@ class Outfit {
     required this.match,
     required this.pieces,
     this.summary,
+    this.itemIds,
+    this.breakdown,
+    this.explanation,
+    this.favorite = false,
   });
 
   final String id;
@@ -55,6 +114,37 @@ class Outfit {
   /// Names of the garments combined into this outfit.
   final List<String> pieces;
   final String? summary;
+
+  /// Backend outfit fields (§8.5). Null when the outfit is a local mock.
+  final List<String>? itemIds;
+  final List<({String label, int value})>? breakdown;
+  final String? explanation;
+  final bool favorite;
+
+  /// JSON mapping for the backend outfits API (§8.5).
+  factory Outfit.fromJson(Map<String, dynamic> json) => Outfit(
+        id: '${json['id'] ?? ''}',
+        name: '${json['name'] ?? 'Untitled look'}',
+        image: '${json['image'] ?? 'assets/images/outfit_flatlay_beige.jpg'}',
+        occasion: '${json['occasion'] ?? 'Casual'}',
+        match: (json['match'] as num?)?.toInt() ?? 85,
+        pieces: [
+          for (final p in (json['pieces'] as List? ?? const [])) '$p',
+        ],
+        summary: json['summary'] as String?,
+        itemIds: [
+          for (final p in (json['itemIds'] as List? ?? const [])) '$p',
+        ],
+        breakdown: [
+          for (final b in (json['breakdown'] as List? ?? const []))
+            (
+              label: '${b['label'] ?? ''}',
+              value: (b['value'] ?? 0).toInt(),
+            ),
+        ],
+        explanation: json['explanation'] as String?,
+        favorite: json['favorite'] == true,
+      );
 }
 
 /// A single row in the AI stylist conversation.

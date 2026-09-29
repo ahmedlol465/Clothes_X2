@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/icons/sw_icon.dart';
@@ -6,12 +8,15 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
-import '../../data/mock_data.dart';
+import '../../data/app_state.dart';
 import '../../data/models.dart';
 import 'add_clothing_screen.dart';
 import 'item_detail_screen.dart';
 
 /// Frame 8 - searchable, filterable grid of every catalogued garment.
+///
+/// Data comes from the backend (`GET /wardrobe/items`) via [AppState] and
+/// falls back to the bundled catalogue when the backend is unreachable.
 class WardrobeScreen extends StatefulWidget {
   const WardrobeScreen({super.key});
 
@@ -21,100 +26,125 @@ class WardrobeScreen extends StatefulWidget {
 
 class _WardrobeScreenState extends State<WardrobeScreen> {
   final _search = TextEditingController();
-  String _filter = MockData.wardrobeFilters.first;
+  final _state = AppState.instance;
+  String _filter = 'All';
+  Timer? _debounce;
 
   @override
   void initState() {
     super.initState();
     _search.addListener(_onSearch);
+    _state.loadWardrobe();
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _search
       ..removeListener(_onSearch)
       ..dispose();
     super.dispose();
   }
 
-  void _onSearch() => setState(() {});
+  void _onSearch() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 350), _reload);
+  }
 
-  List<ClothingItem> get _visible {
-    final query = _search.text.trim().toLowerCase();
-    return MockData.wardrobe.where((item) {
-      final matchesFilter = _filter == 'All' || item.category == _filter;
-      final matchesQuery =
-          query.isEmpty ||
-          item.name.toLowerCase().contains(query) ||
-          item.color.toLowerCase().contains(query) ||
-          item.style.toLowerCase().contains(query);
-      return matchesFilter && matchesQuery;
-    }).toList();
+  void _reload() {
+    _state.loadWardrobe(search: _search.text.trim(), category: _filter);
+  }
+
+  Future<void> _openAdd() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const AddClothingScreen()));
+    if (mounted) _reload();
   }
 
   @override
   Widget build(BuildContext context) {
-    final items = _visible;
-
     return SwScreen(
-      bottomBar: _AddClothesBar(
-        onTap: () => Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (_) => const AddClothingScreen())),
-      ),
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              Insets.gutter,
-              Insets.sm,
-              Insets.gutter,
-              0,
-            ),
-            child: Row(
-              children: [
-                Expanded(child: Text('My Wardrobe', style: AppText.h1)),
-                SwIconButton(
-                  icon: SwIconButtonKind.filter,
-                  onTap: () => _toast(context, 'Advanced filters coming soon.'),
+      bottomBar: _AddClothesBar(onTap: _openAdd),
+      child: ListenableBuilder(
+        listenable: _state,
+        builder: (context, _) {
+          final items = _state.wardrobe;
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  Insets.gutter,
+                  Insets.sm,
+                  Insets.gutter,
+                  0,
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: Insets.lg),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: _SearchField(controller: _search),
-          ),
-          const SizedBox(height: Insets.md),
-          _FilterBar(
-            selected: _filter,
-            onSelect: (v) => setState(() => _filter = v),
-          ),
-          const SizedBox(height: Insets.lg),
-          Expanded(
-            child: items.isEmpty
-                ? _EmptyWardrobe(query: _search.text)
-                : GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(
-                      Insets.gutter,
-                      0,
-                      Insets.gutter,
-                      96,
+                child: Row(
+                  children: [
+                    Expanded(child: Text('My Wardrobe', style: AppText.h1)),
+                    SwIconButton(
+                      icon: SwIconButtonKind.filter,
+                      onTap: () =>
+                          _toast(context, 'Advanced filters coming soon.'),
                     ),
-                    physics: const BouncingScrollPhysics(),
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          mainAxisSpacing: Insets.lg,
-                          crossAxisSpacing: Insets.md,
-                          childAspectRatio: 0.72,
+                  ],
+                ),
+              ),
+              const SizedBox(height: Insets.lg),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: _SearchField(controller: _search),
+              ),
+              const SizedBox(height: Insets.md),
+              _FilterBar(
+                filters: _state.wardrobeFilters,
+                selected: _filter,
+                onSelect: (v) {
+                  setState(() => _filter = v);
+                  _reload();
+                },
+              ),
+              const SizedBox(height: Insets.lg),
+              Expanded(
+                child: _state.wardrobeLoading && items.isEmpty
+                    ? const Center(
+                        child: CircularProgressIndicator(
+                          valueColor: AlwaysStoppedAnimation(
+                            AppColors.primary,
+                          ),
                         ),
-                    itemCount: items.length,
-                    itemBuilder: (context, i) => _GridCell(item: items[i]),
-                  ),
-          ),
-        ],
+                      )
+                    : items.isEmpty
+                        ? _EmptyWardrobe(query: _search.text)
+                        : RefreshIndicator(
+                            color: AppColors.primary,
+                            onRefresh: () async => _reload(),
+                            child: GridView.builder(
+                              padding: const EdgeInsets.fromLTRB(
+                                Insets.gutter,
+                                0,
+                                Insets.gutter,
+                                96,
+                              ),
+                              physics: const BouncingScrollPhysics(),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                mainAxisSpacing: Insets.lg,
+                                crossAxisSpacing: Insets.md,
+                                childAspectRatio: 0.72,
+                              ),
+                              itemCount: items.length,
+                              itemBuilder: (context, i) => _GridCell(
+                                item: items[i],
+                                onOpen: _reload,
+                              ),
+                            ),
+                          ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -153,8 +183,13 @@ class _SearchField extends StatelessWidget {
 }
 
 class _FilterBar extends StatelessWidget {
-  const _FilterBar({required this.selected, required this.onSelect});
+  const _FilterBar({
+    required this.filters,
+    required this.selected,
+    required this.onSelect,
+  });
 
+  final List<String> filters;
   final String selected;
   final ValueChanged<String> onSelect;
 
@@ -166,10 +201,10 @@ class _FilterBar extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
         physics: const BouncingScrollPhysics(),
-        itemCount: MockData.wardrobeFilters.length,
+        itemCount: filters.length,
         separatorBuilder: (_, _) => const SizedBox(width: Insets.sm),
         itemBuilder: (context, i) {
-          final label = MockData.wardrobeFilters[i];
+          final label = filters[i];
           return SwChip(
             label: label,
             selected: label == selected,
@@ -182,16 +217,18 @@ class _FilterBar extends StatelessWidget {
 }
 
 class _GridCell extends StatelessWidget {
-  const _GridCell({required this.item});
+  const _GridCell({required this.item, required this.onOpen});
 
   final ClothingItem item;
+  final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => Navigator.of(
-        context,
-      ).push(MaterialPageRoute(builder: (_) => ItemDetailScreen(item: item))),
+      onTap: () => Navigator.of(context)
+          .push(MaterialPageRoute(
+              builder: (_) => ItemDetailScreen(item: item)))
+          .then((_) => onOpen()),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

@@ -6,17 +6,104 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
+import '../../data/app_state.dart';
 import '../../data/mock_data.dart';
 import '../../data/models.dart';
 
 /// Frame 11 - full detail view for a single garment.
-class ItemDetailScreen extends StatelessWidget {
+///
+/// Edit / Wear / Delete are wired to the backend wardrobe API (§8.3).
+class ItemDetailScreen extends StatefulWidget {
   const ItemDetailScreen({super.key, required this.item});
 
   final ClothingItem item;
 
   @override
+  State<ItemDetailScreen> createState() => _ItemDetailScreenState();
+}
+
+class _ItemDetailScreenState extends State<ItemDetailScreen> {
+  late ClothingItem _item = widget.item;
+  bool _busy = false;
+
+  Future<void> _wear() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final ok = await AppState.instance.logWear(_item);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _item = _item.copyWith(
+        timesWorn: _item.timesWorn + 1,
+        lastWornLabel: 'Worn today',
+      );
+    });
+    _toast(
+      context,
+      ok ? 'Logged — enjoy the ${_item.name}.' : 'Backend offline — logged locally.',
+    );
+  }
+
+  Future<void> _edit() async {
+    final patch = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      builder: (sheetContext) => _EditSheet(item: _item),
+    );
+    if (patch == null || !mounted) return;
+    final ok = await AppState.instance.updateItem(_item.id, patch);
+    if (!mounted) return;
+    if (ok) {
+      setState(() {
+        _item = _item.copyWith(
+          name: patch['name'],
+          category: patch['category'],
+          color: patch['color'],
+          style: patch['style'],
+          material: patch['material'],
+          season: patch['season'],
+          formality: patch['formality'],
+        );
+      });
+    }
+    _toast(
+      context,
+      ok ? 'Saved changes.' : 'Backend offline — try again shortly.',
+    );
+  }
+
+  Future<void> _delete() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove item?'),
+        content: Text('${_item.name} will be archived.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    final ok = await AppState.instance.deleteItem(_item.id);
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    _toast(
+      context,
+      ok ? 'Item removed.' : 'Backend offline — try again shortly.',
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final item = _item;
     final rows = <(SwIcon, String, String)>[
       (SwIcon.circleX, 'Category', item.category),
       (SwIcon.palette, 'Color', item.color),
@@ -31,7 +118,11 @@ class ItemDetailScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _Hero(image: item.image, onBack: () => Navigator.of(context).pop()),
+          _Hero(
+            image: item.image,
+            onBack: () => Navigator.of(context).pop(),
+            onMore: _delete,
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(
               Insets.gutter,
@@ -70,13 +161,13 @@ class ItemDetailScreen extends StatelessWidget {
                     Expanded(
                       child: SwOutlineButton(
                         label: 'Edit',
-                        onTap: () => _toast(context, 'Editing ${item.name}'),
+                        onTap: _edit,
                       ),
                     ),
                     const SizedBox(width: Insets.md),
                     Expanded(
                       child: FilledButton.icon(
-                        onPressed: () => _toast(context, 'Outfit saved.'),
+                        onPressed: _busy ? null : _wear,
                         icon: const SwIconView(
                           SwIcon.check,
                           size: 15,
@@ -105,12 +196,80 @@ class ItemDetailScreen extends StatelessWidget {
   }
 }
 
+/// Bottom sheet with editable attribute fields.
+class _EditSheet extends StatefulWidget {
+  const _EditSheet({required this.item});
+
+  final ClothingItem item;
+
+  @override
+  State<_EditSheet> createState() => _EditSheetState();
+}
+
+class _EditSheetState extends State<_EditSheet> {
+  late final _controllers = <String, TextEditingController>{
+    'name': TextEditingController(text: widget.item.name),
+    'category': TextEditingController(text: widget.item.category),
+    'color': TextEditingController(text: widget.item.color),
+    'style': TextEditingController(text: widget.item.style),
+    'material': TextEditingController(text: widget.item.material),
+    'season': TextEditingController(text: widget.item.season),
+    'formality': TextEditingController(text: widget.item.formality),
+  };
+
+  @override
+  void dispose() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: Insets.xl,
+        right: Insets.xl,
+        top: Insets.xl,
+        bottom: MediaQuery.of(context).viewInsets.bottom + Insets.xl,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Edit item', style: AppText.h4),
+            const SizedBox(height: Insets.lg),
+            for (final entry in _controllers.entries) ...[
+              SwField(label: entry.key, controller: entry.value),
+              const SizedBox(height: Insets.md),
+            ],
+            const SizedBox(height: Insets.md),
+            SwButton(
+              label: 'Save changes',
+              onTap: () => Navigator.of(context).pop(
+                {for (final e in _controllers.entries) e.key: e.value.text},
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Edge to edge product photo with floating back and overflow actions.
 class _Hero extends StatelessWidget {
-  const _Hero({required this.image, required this.onBack});
+  const _Hero({
+    required this.image,
+    required this.onBack,
+    required this.onMore,
+  });
 
   final String image;
   final VoidCallback onBack;
+  final VoidCallback onMore;
 
   @override
   Widget build(BuildContext context) {
@@ -134,7 +293,7 @@ class _Hero extends StatelessWidget {
             right: Insets.lg,
             child: SwIconButton(
               icon: SwIconButtonKind.more,
-              onTap: () => _toast(context, 'More options'),
+              onTap: onMore,
               background: Colors.white.withValues(alpha: 0.9),
             ),
           ),

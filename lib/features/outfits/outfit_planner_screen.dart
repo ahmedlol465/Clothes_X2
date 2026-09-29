@@ -5,11 +5,13 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
+import '../../data/app_state.dart';
 import '../../data/models.dart';
 import 'perfect_match_screen.dart';
-import '../../data/mock_data.dart';
 
 /// Frame 18 - week strip plus the recommended look for each day.
+///
+/// The week loads from the backend (`GET /planner/weekly`).
 class OutfitPlannerScreen extends StatefulWidget {
   const OutfitPlannerScreen({super.key});
 
@@ -18,81 +20,113 @@ class OutfitPlannerScreen extends StatefulWidget {
 }
 
 class _OutfitPlannerScreenState extends State<OutfitPlannerScreen> {
-  late int _selected = MockData.planWeek.indexWhere((d) => d.isToday);
+  final _state = AppState.instance;
+  int _selected = 2;
+
+  @override
+  void initState() {
+    super.initState();
+    _state.loadWeeklyPlan();
+  }
+
+  List<PlanDay> get _week => [
+        for (final d in _state.planWeek)
+          PlanDay(
+            weekday: '${d['weekday'] ?? ''}',
+            date: '${d['date'] ?? ''}',
+            occasion: '${d['occasion'] ?? ''}',
+            outfitName: '${d['outfitName'] ?? ''}',
+            image: '${d['image'] ?? 'assets/images/outfit_flatlay_beige.jpg'}',
+            isToday: d['isToday'] as bool? ?? false,
+          ),
+      ];
 
   @override
   Widget build(BuildContext context) {
-    return SwScreen(
-      scroll: true,
-      padding: const EdgeInsets.only(bottom: Insets.xxl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              Insets.gutter,
-              Insets.sm,
-              Insets.gutter,
-              0,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Outfit Planner', style: AppText.h1),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Schedule your style for the week',
-                        style: AppText.caption,
-                      ),
-                    ],
-                  ),
+    return ListenableBuilder(
+      listenable: _state,
+      builder: (context, _) {
+        final week = _week;
+        final selected = _selected.clamp(0, week.length - 1);
+        return SwScreen(
+          scroll: true,
+          padding: const EdgeInsets.only(bottom: Insets.xxl),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  Insets.gutter,
+                  Insets.sm,
+                  Insets.gutter,
+                  0,
                 ),
-                SwIconButton(icon: SwIconButtonKind.filter),
-              ],
-            ),
-          ),
-          const SizedBox(height: Insets.lg),
-          _WeekStrip(
-            selected: _selected,
-            onSelect: (i) => setState(() => _selected = i),
-          ),
-          const SizedBox(height: Insets.lg),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: Text('Weekly Recommendations', style: AppText.h4),
-          ),
-          const SizedBox(height: Insets.md),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: Column(
-              children: [
-                for (final day in MockData.planWeek) ...[
-                  _DayCard(
-                    day: day,
-                    onUse: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const PerfectMatchScreen(),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Outfit Planner', style: AppText.h1),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Schedule your style for the week',
+                            style: AppText.caption,
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  const SizedBox(height: Insets.md),
-                ],
-              ],
-            ),
+                    SwIconButton(icon: SwIconButtonKind.filter),
+                  ],
+                ),
+              ),
+              const SizedBox(height: Insets.lg),
+              _WeekStrip(
+                week: week,
+                selected: selected,
+                onSelect: (i) => setState(() => _selected = i),
+              ),
+              const SizedBox(height: Insets.lg),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: Text('Weekly Recommendations', style: AppText.h4),
+              ),
+              const SizedBox(height: Insets.md),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: Column(
+                  children: [
+                    for (final day in week) ...[
+                      _DayCard(
+                        day: day,
+                        onUse: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const PerfectMatchScreen(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: Insets.md),
+                    ],
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
 
 /// Mon - Sun selector; the active day is filled with the brand purple.
 class _WeekStrip extends StatelessWidget {
-  const _WeekStrip({required this.selected, required this.onSelect});
+  const _WeekStrip({
+    required this.week,
+    required this.selected,
+    required this.onSelect,
+  });
 
+  final List<PlanDay> week;
   final int selected;
   final ValueChanged<int> onSelect;
 
@@ -104,10 +138,10 @@ class _WeekStrip extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
         physics: const BouncingScrollPhysics(),
-        itemCount: MockData.planWeek.length,
+        itemCount: week.length,
         separatorBuilder: (_, _) => const SizedBox(width: Insets.sm),
         itemBuilder: (context, i) {
-          final day = MockData.planWeek[i];
+          final day = week[i];
           final active = i == selected;
 
           return GestureDetector(

@@ -33,6 +33,12 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Secret env files — never commit keys.
+/backend/.env
+/backend/data/
+/ai-service/.env
+*.env
+
 # Symbolication related
 app.*.symbols
 

@@ -6,10 +6,13 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
-import '../../data/mock_data.dart';
+import '../../data/app_state.dart';
 import '../../data/models.dart';
 
 /// Frame 22 - gap filling product recommendations.
+///
+/// Picks load from the backend (`GET /shop/recommended`, gap analysis §8.4)
+/// and wishlist taps persist (`POST /shop/wishlist`).
 class SmartShoppingScreen extends StatefulWidget {
   const SmartShoppingScreen({super.key});
 
@@ -18,70 +21,96 @@ class SmartShoppingScreen extends StatefulWidget {
 }
 
 class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
+  final _state = AppState.instance;
   final Set<int> _wishlisted = {};
 
   @override
+  void initState() {
+    super.initState();
+    _state.loadShop();
+  }
+
+  Future<void> _toggle(int index) async {
+    setState(() {
+      if (!_wishlisted.remove(index)) _wishlisted.add(index);
+    });
+    if (_wishlisted.contains(index)) {
+      final pick = _state.shopPicks[index];
+      try {
+        await _state.api.addToWishlist({
+          'name': pick.name,
+          'price': pick.price,
+          'image': pick.image,
+        });
+      } catch (_) {
+        // Offline: keep the local wishlist state.
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return SwScreen(
-      scroll: true,
-      padding: const EdgeInsets.only(bottom: Insets.xxl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              Insets.gutter,
-              Insets.sm,
-              Insets.gutter,
-              0,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Smart Shopping', style: AppText.h1),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Based on your current wardrobe gaps',
-                        style: AppText.caption,
-                      ),
-                    ],
+    return ListenableBuilder(
+      listenable: _state,
+      builder: (context, _) => SwScreen(
+        scroll: true,
+        padding: const EdgeInsets.only(bottom: Insets.xxl),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                Insets.gutter,
+                Insets.sm,
+                Insets.gutter,
+                0,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Smart Shopping', style: AppText.h1),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Based on your current wardrobe gaps',
+                          style: AppText.caption,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                const SwIconButton(icon: SwIconButtonKind.bag),
-              ],
+                  const SwIconButton(icon: SwIconButtonKind.bag),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: Insets.lg),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: Column(
-              children: [
-                for (var i = 0; i < MockData.shoppingPicks.length; i++) ...[
-                  _PickCard(
-                    pick: MockData.shoppingPicks[i],
-                    wishlisted: _wishlisted.contains(i),
-                    onToggle: () => setState(() {
-                      if (!_wishlisted.remove(i)) _wishlisted.add(i);
-                    }),
-                    onView: () => ScaffoldMessenger.of(context)
-                      ..hideCurrentSnackBar()
-                      ..showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Opening ${MockData.shoppingPicks[i].name}',
+            const SizedBox(height: Insets.lg),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+              child: Column(
+                children: [
+                  for (var i = 0; i < _state.shopPicks.length; i++) ...[
+                    _PickCard(
+                      pick: _state.shopPicks[i],
+                      wishlisted: _wishlisted.contains(i),
+                      onToggle: () => _toggle(i),
+                      onView: () => ScaffoldMessenger.of(context)
+                        ..hideCurrentSnackBar()
+                        ..showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Opening ${_state.shopPicks[i].name}',
+                            ),
                           ),
                         ),
-                      ),
-                  ),
-                  const SizedBox(height: Insets.lg),
+                    ),
+                    const SizedBox(height: Insets.lg),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

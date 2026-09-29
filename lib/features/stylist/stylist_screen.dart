@@ -6,6 +6,7 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
+import '../../data/app_state.dart';
 import '../../data/mock_data.dart';
 import '../../data/models.dart';
 import '../discover/discover_screen.dart';
@@ -43,7 +44,7 @@ class _StylistScreenState extends State<StylistScreen> {
     });
   }
 
-  void _send([String? preset]) {
+  void _send([String? preset]) async {
     final text = (preset ?? _input.text).trim();
     if (text.isEmpty || _thinking) return;
 
@@ -54,23 +55,17 @@ class _StylistScreenState extends State<StylistScreen> {
     _input.clear();
     _scrollToEnd();
 
-    Future<void>.delayed(const Duration(milliseconds: 900), () {
-      if (!mounted) return;
-      setState(() {
-        _thinking = false;
-        _messages.add(
-          ChatMessage(fromUser: false, text: _replyFor(text.toLowerCase())),
-        );
-      });
-      _scrollToEnd();
+    // Wardrobe-aware reply from the backend (§8.4 POST /ai/chat),
+    // with the bundled replies as the offline fallback.
+    final reply = await AppState.instance.askStylist(text);
+    if (!mounted) return;
+    setState(() {
+      _thinking = false;
+      _messages.add(
+        ChatMessage(fromUser: false, text: reply.text, outfit: reply.outfit),
+      );
     });
-  }
-
-  static String _replyFor(String query) {
-    for (final entry in MockData.stylistReplies.entries) {
-      if (query.contains(entry.key)) return entry.value;
-    }
-    return MockData.stylistFallback;
+    _scrollToEnd();
   }
 
   @override
@@ -283,9 +278,9 @@ class _OutfitSuggestion extends StatelessWidget {
     return SwCard(
       padding: EdgeInsets.zero,
       clip: true,
-      onTap: () => Navigator.of(
-        context,
-      ).push(MaterialPageRoute(builder: (_) => const PerfectMatchScreen())),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => PerfectMatchScreen(outfit: outfit)),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

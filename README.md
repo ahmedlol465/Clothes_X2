@@ -102,12 +102,43 @@ resolution and renamed to semantic names (`assets/images/`). Fonts live in
 ## Run
 
 ```bash
+# 1. Backend API (new — implements spec §8, persists to backend/data/db.json)
+cd backend
+npm install
+npm start          # → http://localhost:3001  (endpoint index at GET /docs)
+
+# 2. Flutter app (in a second terminal, from the repo root)
 flutter pub get
-flutter run
+flutter run        # physical device? add --dart-define=API_BASE_URL=http://<your-lan-ip>:3001
 ```
 
 The app opens on the splash screen, then onboarding → sign in. **Explore the
 demo** on the login screen skips straight into the tabbed app.
+
+Login with the seeded account `karim@fashiontech.com` / `wardrobe2024`.
+Every screen reads from the backend and falls back to the bundled catalogue
+when it is unreachable, so the app works with or without `npm start` —
+but start it to get real wardrobe CRUD, AI chat, outfit scores, planner,
+packing, shopping gaps and insights.
+
+## Backend
+
+```
+backend/
+  server.js          REST API — §8.1 auth, §8.2 users, §8.3 wardrobe,
+                     §8.4 AI, §8.5 outfits, §8.6 planner, §8.7 shopping,
+                     §8.8 admin, plus GET /weather/current, /health, /docs
+  src/ai-engine.js   AI pipeline §9 — compatibility scoring, outfit ranking,
+                     explanation generator, wardrobe-aware chat, gap analysis,
+                     packing optimisation, clothing analysis heuristics
+  src/store.js       file-backed store (backend/data/db.json, seeded from mock data)
+ai-service/
+  main.py            FastAPI mirror of POST /ai/* (§6.3). Optional:
+                     AI_SERVICE_URL=http://localhost:8000 npm start
+lib/core/api/        Flutter side: ApiConfig, ApiClient (dart:io, no new deps),
+                     SmartWardrobeApi (typed §8 wrapper)
+lib/data/app_state.dart  central ChangeNotifier store with offline fallback
+```
 
 ## Tests
 

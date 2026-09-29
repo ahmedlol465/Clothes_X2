@@ -5,15 +5,17 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
+import '../../data/app_state.dart';
 import '../../data/models.dart';
 import '../outfits/outfit_history_screen.dart';
 import '../outfits/outfit_planner_screen.dart';
 import '../outfits/perfect_match_screen.dart';
 import '../stylist/create_outfit_screen.dart';
 import '../travel/travel_planner_screen.dart';
-import '../../data/mock_data.dart';
 
 /// Frame 16 - saved outfits with Saved / History / Favorites tabs.
+///
+/// Grids load from the backend (`GET /outfits`) via [AppState].
 class OutfitsScreen extends StatefulWidget {
   const OutfitsScreen({super.key});
 
@@ -24,11 +26,24 @@ class OutfitsScreen extends StatefulWidget {
 class _OutfitsScreenState extends State<OutfitsScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs = TabController(length: 3, vsync: this);
+  final _state = AppState.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _state.loadOutfits();
+  }
 
   @override
   void dispose() {
     _tabs.dispose();
     super.dispose();
+  }
+
+  void _open(BuildContext context, Outfit outfit) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => PerfectMatchScreen(outfit: outfit)),
+    );
   }
 
   @override
@@ -93,26 +108,29 @@ class _OutfitsScreenState extends State<OutfitsScreen>
             ],
           ),
           Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              physics: const BouncingScrollPhysics(),
-              children: [
-                _SavedGrid(
-                  onOpen: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const PerfectMatchScreen(),
+            child: ListenableBuilder(
+              listenable: _state,
+              builder: (context, _) {
+                final saved = _state.savedOutfits;
+                final favorites =
+                    saved.where((o) => o.favorite).toList();
+                return TabBarView(
+                  controller: _tabs,
+                  physics: const BouncingScrollPhysics(),
+                  children: [
+                    _SavedGrid(
+                      outfits: saved,
+                      onOpen: (o) => _open(context, o),
                     ),
-                  ),
-                ),
-                OutfitHistoryScreen(embedded: true),
-                _FavoritesList(
-                  onOpen: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const PerfectMatchScreen(),
+                    OutfitHistoryScreen(embedded: true),
+                    _FavoritesList(
+                      outfits:
+                          favorites.isNotEmpty ? favorites : saved.take(3).toList(),
+                      onOpen: (o) => _open(context, o),
                     ),
-                  ),
-                ),
-              ],
+                  ],
+                );
+              },
             ),
           ),
         ],
@@ -123,9 +141,10 @@ class _OutfitsScreenState extends State<OutfitsScreen>
 
 /// Two column grid of saved outfits.
 class _SavedGrid extends StatelessWidget {
-  const _SavedGrid({required this.onOpen});
+  const _SavedGrid({required this.outfits, required this.onOpen});
 
-  final VoidCallback onOpen;
+  final List<Outfit> outfits;
+  final ValueChanged<Outfit> onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -143,9 +162,9 @@ class _SavedGrid extends StatelessWidget {
         crossAxisSpacing: Insets.md,
         childAspectRatio: 0.74,
       ),
-      itemCount: MockData.savedOutfits.length,
+      itemCount: outfits.length,
       itemBuilder: (context, i) =>
-          OutfitCard(outfit: MockData.savedOutfits[i], onTap: onOpen),
+          OutfitCard(outfit: outfits[i], onTap: () => onOpen(outfits[i])),
     );
   }
 }
@@ -209,9 +228,10 @@ class OutfitCard extends StatelessWidget {
 }
 
 class _FavoritesList extends StatelessWidget {
-  const _FavoritesList({required this.onOpen});
+  const _FavoritesList({required this.outfits, required this.onOpen});
 
-  final VoidCallback onOpen;
+  final List<Outfit> outfits;
+  final ValueChanged<Outfit> onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -223,12 +243,12 @@ class _FavoritesList extends StatelessWidget {
         Insets.xxl,
       ),
       physics: const BouncingScrollPhysics(),
-      itemCount: 3,
+      itemCount: outfits.length,
       separatorBuilder: (_, _) => const SizedBox(height: Insets.md),
       itemBuilder: (context, i) {
-        final outfit = MockData.savedOutfits[i];
+        final outfit = outfits[i];
         return SwCard(
-          onTap: onOpen,
+          onTap: () => onOpen(outfit),
           padding: const EdgeInsets.all(Insets.md),
           child: Row(
             children: [

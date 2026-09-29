@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
@@ -7,8 +9,9 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
+import '../../data/app_state.dart';
 
-/// Frame 5 - email and password sign in.
+/// Frame 5 - email and password sign in (backend `POST /auth/login`).
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -21,6 +24,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _email = TextEditingController(text: 'karim@fashiontech.com');
   final _password = TextEditingController(text: 'wardrobe2024');
   bool _obscure = true;
+  bool _busy = false;
 
   @override
   void dispose() {
@@ -29,9 +33,28 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _submit() {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    Navigator.of(context).pushNamedAndRemoveUntil(Routes.shell, (_) => false);
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false) || _busy) return;
+    setState(() => _busy = true);
+    bool ok = false;
+    try {
+      ok = await AppState.instance
+          .login(_email.text.trim(), _password.text)
+          .timeout(const Duration(seconds: 15));
+    } catch (_) {
+      ok = false;
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (ok) {
+      Navigator.of(context).pushNamedAndRemoveUntil(Routes.shell, (_) => false);
+    } else {
+      _toast(
+        context,
+        'Login failed: ${AppState.instance.lastError ?? 'unknown error'}\n'
+        'Is the backend running? (backend → npm start)',
+      );
+    }
   }
 
   @override
@@ -98,7 +121,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
             const SizedBox(height: Insets.xxl),
-            SwButton(label: 'Login', onTap: _submit),
+            SwButton(label: _busy ? 'Signing in…' : 'Login', onTap: _submit),
             const SizedBox(height: Insets.xl),
             const _OrDivider(),
             const SizedBox(height: Insets.xl),
@@ -177,6 +200,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _confirm = TextEditingController(text: 'wardrobe2024');
   bool _obscure = true;
   bool _obscureConfirm = true;
+  bool _busy = false;
 
   @override
   void dispose() {
@@ -187,9 +211,24 @@ class _SignUpScreenState extends State<SignUpScreen> {
     super.dispose();
   }
 
-  void _submit() {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    Navigator.of(context).pushNamedAndRemoveUntil(Routes.shell, (_) => false);
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false) || _busy) return;
+    setState(() => _busy = true);
+    final ok = await AppState.instance.register(
+      _name.text.trim(),
+      _email.text.trim(),
+      _password.text,
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (ok) {
+      Navigator.of(context).pushNamedAndRemoveUntil(Routes.shell, (_) => false);
+    } else {
+      _toast(
+        context,
+        'Backend offline — check that `npm start` is running in backend/.',
+      );
+    }
   }
 
   @override
@@ -266,7 +305,10 @@ class _SignUpScreenState extends State<SignUpScreen> {
               ),
             ),
             const SizedBox(height: Insets.xxl),
-            SwButton(label: 'Create Account', onTap: _submit),
+            SwButton(
+              label: _busy ? 'Creating…' : 'Create Account',
+              onTap: _submit,
+            ),
             const SizedBox(height: Insets.xxxl),
             _InlineLink(
               before: 'Already have an account?',

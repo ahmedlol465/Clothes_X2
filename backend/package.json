@@ -1,0 +1,14 @@
+{
+  "name": "smartwardrobe-backend",
+  "version": "1.0.0",
+  "description": "SmartWardrobe main backend (NestJS-style modular REST API, Express runtime). Implements API Overview §8 + AI pipeline §9.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}

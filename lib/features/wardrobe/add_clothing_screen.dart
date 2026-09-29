@@ -6,20 +6,71 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
+import '../../data/app_state.dart';
 import 'analyzing_screen.dart';
 
 /// Frame 9 - three capture options above the AI generated attribute tags.
-class AddClothingScreen extends StatelessWidget {
+///
+/// Saving runs real AI analysis (`POST /ai/analyze-clothing`) and persists
+/// the garment (`POST /wardrobe/items`); the tag grid is editable and its
+/// values seed the garment name.
+class AddClothingScreen extends StatefulWidget {
   const AddClothingScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    void goToAnalyzing() {
-      Navigator.of(
-        context,
-      ).push(MaterialPageRoute(builder: (_) => const AnalyzingScreen()));
-    }
+  State<AddClothingScreen> createState() => _AddClothingScreenState();
+}
 
+class _AddClothingScreenState extends State<AddClothingScreen> {
+  final _tags = <String, String>{
+    'CATEGORY': 'Shirt',
+    'COLOR': 'White',
+    'STYLE': 'Casual',
+    'PATTERN': 'Plain',
+    'MATERIAL': 'Cotton',
+    'SEASON': 'Spring/Summer',
+    'FORMALITY': 'Casual',
+  };
+  bool _saving = false;
+
+  void _goToAnalyzing() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AnalyzingScreen(
+          name: '${_tags['COLOR']} ${_tags['CATEGORY']}',
+          filename:
+              '${(_tags['COLOR'] ?? 'item').toLowerCase()}_${(_tags['CATEGORY'] ?? 'garment').toLowerCase()}.jpg',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    final item = await AppState.instance.analyzeAndAdd(
+      name: '${_tags['COLOR']} ${_tags['CATEGORY']}',
+      filename:
+          '${(_tags['COLOR'] ?? 'item').toLowerCase()}_${(_tags['CATEGORY'] ?? 'garment').toLowerCase()}.jpg',
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    Navigator.of(context).pop();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            item != null
+                ? 'Saved ${item.name} to your wardrobe.'
+                : 'Backend offline — garment kept locally only.',
+          ),
+        ),
+      );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return SwScreen(
       scroll: true,
       padding: const EdgeInsets.only(bottom: Insets.xxl),
@@ -35,21 +86,21 @@ class AddClothingScreen extends StatelessWidget {
                   icon: SwIcon.camera,
                   title: 'Take Photo',
                   subtitle: 'Instantly capture and auto-tag a piece',
-                  onTap: goToAnalyzing,
+                  onTap: _goToAnalyzing,
                 ),
                 const SizedBox(height: Insets.md),
                 _SourceTile(
                   icon: SwIcon.image,
                   title: 'Choose from Gallery',
                   subtitle: 'Select existing clothing images',
-                  onTap: goToAnalyzing,
+                  onTap: _goToAnalyzing,
                 ),
                 const SizedBox(height: Insets.md),
                 _SourceTile(
                   icon: SwIcon.upload,
                   title: 'Upload Multiple',
                   subtitle: 'Bulk import your wardrobe catalog',
-                  onTap: goToAnalyzing,
+                  onTap: _goToAnalyzing,
                 ),
                 const SizedBox(height: Insets.xl),
                 const Divider(height: 1),
@@ -83,20 +134,14 @@ class AddClothingScreen extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: Insets.lg),
-                const _TagGrid(),
+                _TagGrid(
+                  tags: _tags,
+                  onChanged: (k, v) => setState(() => _tags[k] = v),
+                ),
                 const SizedBox(height: Insets.xxl),
                 SwButton(
-                  label: 'Save to Wardrobe',
-                  onTap: () {
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(context)
-                      ..hideCurrentSnackBar()
-                      ..showSnackBar(
-                        const SnackBar(
-                          content: Text('Saved to your wardrobe.'),
-                        ),
-                      );
-                  },
+                  label: _saving ? 'Saving…' : 'Save to Wardrobe',
+                  onTap: _save,
                 ),
               ],
             ),
@@ -158,17 +203,10 @@ class _SourceTile extends StatelessWidget {
 
 /// The editable AI attribute grid: two columns of label / value / pencil.
 class _TagGrid extends StatelessWidget {
-  const _TagGrid();
+  const _TagGrid({required this.tags, required this.onChanged});
 
-  static const _tags = <(String, String)>[
-    ('CATEGORY', 'Shirt'),
-    ('COLOR', 'White'),
-    ('STYLE', 'Casual'),
-    ('PATTERN', 'Plain'),
-    ('MATERIAL', 'Cotton'),
-    ('SEASON', 'Spring/Summer'),
-    ('FORMALITY', 'Casual'),
-  ];
+  final Map<String, String> tags;
+  final void Function(String key, String value) onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -181,10 +219,14 @@ class _TagGrid extends StatelessWidget {
           spacing: gap,
           runSpacing: gap,
           children: [
-            for (final (label, value) in _tags)
+            for (final entry in tags.entries)
               SizedBox(
                 width: width,
-                child: _TagCell(label: label, value: value),
+                child: _TagCell(
+                  label: entry.key,
+                  value: entry.value,
+                  onSaved: (v) => onChanged(entry.key, v),
+                ),
               ),
           ],
         );
@@ -194,16 +236,21 @@ class _TagGrid extends StatelessWidget {
 }
 
 class _TagCell extends StatelessWidget {
-  const _TagCell({required this.label, required this.value});
+  const _TagCell({
+    required this.label,
+    required this.value,
+    required this.onSaved,
+  });
 
   final String label;
   final String value;
+  final ValueChanged<String> onSaved;
 
   @override
   Widget build(BuildContext context) {
     return SwCard(
       padding: const EdgeInsets.all(Insets.md),
-      onTap: () => _editTag(context, label, value),
+      onTap: () => _editTag(context),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -232,7 +279,7 @@ class _TagCell extends StatelessWidget {
     );
   }
 
-  void _editTag(BuildContext context, String label, String value) {
+  void _editTag(BuildContext context) {
     final controller = TextEditingController(text: value);
     showModalBottomSheet<void>(
       context: context,
@@ -255,7 +302,10 @@ class _TagCell extends StatelessWidget {
             const SizedBox(height: Insets.xl),
             SwButton(
               label: 'Save',
-              onTap: () => Navigator.of(sheetContext).pop(),
+              onTap: () {
+                onSaved(controller.text.trim());
+                Navigator.of(sheetContext).pop();
+              },
             ),
           ],
         ),

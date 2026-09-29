@@ -6,6 +6,7 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
+import '../../data/app_state.dart';
 import '../../data/assets.dart';
 import '../../data/mock_data.dart';
 import '../../data/models.dart';
@@ -16,10 +17,28 @@ import '../wardrobe/add_clothing_screen.dart';
 import '../wardrobe/item_detail_screen.dart';
 
 /// Frame 7 - the dashboard shown after sign in.
-class HomeScreen extends StatelessWidget {
+///
+/// The hero outfit and weather load from the backend
+/// (`GET /outfits/recommended`, `GET /weather/current`) and fall back
+/// to the bundled content offline.
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.onOpenTab});
 
   final ValueChanged<ShellTab> onOpenTab;
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final _state = AppState.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _state.loadToday();
+    _state.loadWardrobe();
+  }
 
   void _push(BuildContext context, Widget screen) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
@@ -27,99 +46,106 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SwScreen(
-      scroll: true,
-      padding: const EdgeInsets.only(bottom: Insets.xxl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _Greeting(),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: _WeatherPill(),
-          ),
-          const SizedBox(height: Insets.xl),
+    return ListenableBuilder(
+      listenable: _state,
+      builder: (context, _) => SwScreen(
+        scroll: true,
+        padding: const EdgeInsets.only(bottom: Insets.xxl),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _Greeting(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+              child: _WeatherPill(weather: _state.weather),
+            ),
+            const SizedBox(height: Insets.xl),
 
-          // Today's AI selection -------------------------------------------
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text("Today's AI Selection", style: AppText.h4),
+            // Today's AI selection -------------------------------------------
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text("Today's AI Selection", style: AppText.h4),
+                  ),
+                  SwMatchBadge(match: _state.todayOutfit.match),
+                ],
+              ),
+            ),
+            const SizedBox(height: Insets.md),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+              child: _SelectionCard(
+                outfit: _state.todayOutfit,
+                onView: () => _push(
+                  context,
+                  PerfectMatchScreen(outfit: _state.todayOutfit),
                 ),
-                SwMatchBadge(match: MockData.todaySelection.match),
-              ],
+              ),
             ),
-          ),
-          const SizedBox(height: Insets.md),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: _SelectionCard(
-              onView: () => _push(context, const PerfectMatchScreen()),
-            ),
-          ),
-          const SizedBox(height: Insets.sectionGap),
+            const SizedBox(height: Insets.sectionGap),
 
-          // Quick actions ---------------------------------------------------
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Quick Actions', style: AppText.h4),
-                const SizedBox(height: Insets.md),
-                GridView.count(
-                  crossAxisCount: 2,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  mainAxisSpacing: Insets.md,
-                  crossAxisSpacing: Insets.md,
-                  childAspectRatio: 2.55,
-                  children: [
-                    _QuickAction(
-                      icon: SwIcon.plus,
-                      label: 'Add Clothes',
-                      onTap: () => _push(context, const AddClothingScreen()),
-                    ),
-                    _QuickAction(
-                      icon: SwIcon.sparkle,
-                      label: 'AI Stylist',
-                      onTap: () => onOpenTab(ShellTab.stylist),
-                    ),
-                    _QuickAction(
-                      icon: SwIcon.calendar,
-                      label: 'Plan Outfit',
-                      onTap: () => _push(context, const OutfitPlannerScreen()),
-                    ),
-                    _QuickAction(
-                      icon: SwIcon.shirt,
-                      label: 'My Wardrobe',
-                      onTap: () => onOpenTab(ShellTab.wardrobe),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: Insets.md),
-                _UpcomingEvent(
-                  onTap: () => _push(context, const OutfitPlannerScreen()),
-                ),
-              ],
+            // Quick actions ---------------------------------------------------
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Quick Actions', style: AppText.h4),
+                  const SizedBox(height: Insets.md),
+                  GridView.count(
+                    crossAxisCount: 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: Insets.md,
+                    crossAxisSpacing: Insets.md,
+                    childAspectRatio: 2.55,
+                    children: [
+                      _QuickAction(
+                        icon: SwIcon.plus,
+                        label: 'Add Clothes',
+                        onTap: () => _push(context, const AddClothingScreen()),
+                      ),
+                      _QuickAction(
+                        icon: SwIcon.sparkle,
+                        label: 'AI Stylist',
+                        onTap: () => widget.onOpenTab(ShellTab.stylist),
+                      ),
+                      _QuickAction(
+                        icon: SwIcon.calendar,
+                        label: 'Plan Outfit',
+                        onTap: () => _push(context, const OutfitPlannerScreen()),
+                      ),
+                      _QuickAction(
+                        icon: SwIcon.shirt,
+                        label: 'My Wardrobe',
+                        onTap: () => widget.onOpenTab(ShellTab.wardrobe),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: Insets.md),
+                  _UpcomingEvent(
+                    onTap: () => _push(context, const OutfitPlannerScreen()),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: Insets.sectionGap),
+            const SizedBox(height: Insets.sectionGap),
 
-          // Recently added -------------------------------------------------
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: SwSectionHeader(
-              title: 'Recently Added',
-              actionLabel: 'See all',
-              onAction: () => onOpenTab(ShellTab.wardrobe),
+            // Recently added -------------------------------------------------
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+              child: SwSectionHeader(
+                title: 'Recently Added',
+                actionLabel: 'See all',
+                onAction: () => widget.onOpenTab(ShellTab.wardrobe),
+              ),
             ),
-          ),
-          const SizedBox(height: Insets.xs),
-          const RecentlyAddedRail(),
-        ],
+            const SizedBox(height: Insets.xs),
+            RecentlyAddedRail(items: _state.wardrobe),
+          ],
+        ),
       ),
     );
   }
@@ -172,12 +198,15 @@ class _Greeting extends StatelessWidget {
   }
 }
 
-/// Warm forecast strip under the greeting.
+/// Warm forecast strip under the greeting (live via GET /weather/current).
 class _WeatherPill extends StatelessWidget {
-  const _WeatherPill();
+  const _WeatherPill({this.weather});
+
+  final Map<String, dynamic>? weather;
 
   @override
   Widget build(BuildContext context) {
+    final summary = weather?['summary']?.toString() ?? 'Sunny • 28°C';
     return Container(
       padding: const EdgeInsets.all(Insets.lg),
       decoration: BoxDecoration(
@@ -198,7 +227,7 @@ class _WeatherPill extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Sunny • 28°C', style: AppText.cardTitle),
+                Text(summary, style: AppText.cardTitle),
                 const SizedBox(height: 2),
                 Text(
                   'Perfect for lightweight layering',
@@ -215,13 +244,14 @@ class _WeatherPill extends StatelessWidget {
 
 /// Large hero card for the outfit the AI picked today.
 class _SelectionCard extends StatelessWidget {
-  const _SelectionCard({required this.onView});
+  const _SelectionCard({required this.outfit, required this.onView});
 
+  final Outfit outfit;
   final VoidCallback onView;
 
   @override
   Widget build(BuildContext context) {
-    final outfit = MockData.todaySelection;
+    final outfit = this.outfit;
 
     return SwCard(
       padding: EdgeInsets.zero,
@@ -245,7 +275,10 @@ class _SelectionCard extends StatelessWidget {
                     children: [
                       Text(outfit.name, style: AppText.cardTitle),
                       const SizedBox(height: 3),
-                      Text(outfit.summary!, style: AppText.caption),
+                      Text(
+                        outfit.summary ?? outfit.pieces.join(' + '),
+                        style: AppText.caption,
+                      ),
                     ],
                   ),
                 ),
@@ -349,20 +382,23 @@ class _UpcomingEvent extends StatelessWidget {
 
 /// Horizontal rail of newly catalogued garments.
 class RecentlyAddedRail extends StatelessWidget {
-  const RecentlyAddedRail({super.key});
+  const RecentlyAddedRail({super.key, required this.items});
+
+  final List<ClothingItem> items;
 
   @override
   Widget build(BuildContext context) {
+    final rail = items.take(4).toList();
     return SizedBox(
       height: 190,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
         physics: const BouncingScrollPhysics(),
-        itemCount: MockData.recentlyAdded.length,
+        itemCount: rail.length,
         separatorBuilder: (_, _) => const SizedBox(width: Insets.md),
         itemBuilder: (context, i) {
-          final ClothingItem item = MockData.recentlyAdded[i];
+          final ClothingItem item = rail[i];
           return GestureDetector(
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => ItemDetailScreen(item: item)),

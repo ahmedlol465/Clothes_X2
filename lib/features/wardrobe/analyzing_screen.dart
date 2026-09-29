@@ -7,12 +7,25 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
-import '../../data/mock_data.dart';
+import '../../data/app_state.dart';
+import '../../data/models.dart';
 import 'item_detail_screen.dart';
 
 /// Frame 10 - full screen progress state while the model tags the garment.
+///
+/// Runs real AI analysis + persistence, then opens the saved garment.
 class AnalyzingScreen extends StatefulWidget {
-  const AnalyzingScreen({super.key, this.result});
+  const AnalyzingScreen({
+    super.key,
+    this.name = 'New Garment',
+    this.filename = 'upload.jpg',
+    this.image = 'assets/images/item_tee_white.jpg',
+    this.result,
+  });
+
+  final String name;
+  final String filename;
+  final String image;
 
   /// Optional garment to open once analysis finishes.
   final dynamic result;
@@ -28,26 +41,43 @@ class _AnalyzingScreenState extends State<AnalyzingScreen>
     duration: const Duration(milliseconds: 1400),
   )..repeat();
 
-  Timer? _timer;
+  bool _done = false;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer(const Duration(milliseconds: 2600), _finish);
+    _finish();
   }
 
-  void _finish() {
-    if (!mounted) return;
+  Future<void> _finish() async {
+    // Keep the progress UX visible for a beat while the backend works.
+    final item = await AppState.instance.analyzeAndAdd(
+      name: widget.name,
+      filename: widget.filename,
+      image: widget.image,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 1800));
+    if (!mounted || _done) return;
+    _done = true;
+    final repo = AppState.instance.wardrobe;
+    final fallback = widget.result is ClothingItem
+        ? widget.result as ClothingItem
+        : repo.isNotEmpty
+            ? repo.first
+            : null;
+    if (fallback == null && item == null) {
+      Navigator.of(context).pop();
+      return;
+    }
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => ItemDetailScreen(item: MockData.wardrobe.first),
+        builder: (_) => ItemDetailScreen(item: item ?? fallback!),
       ),
     );
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
     _controller.dispose();
     super.dispose();
   }
