@@ -41,15 +41,67 @@ class SmartWardrobeApi {
   }
 
   // ----------------------------------------------------------- 8.2 Users
+  /// Raw `/users/me` wrapper: `{ user: {...} }`.
   Future<Map<String, dynamic>> me() async =>
       Map<String, dynamic>.from(await _client.get('/users/me'));
 
-  Future<Map<String, dynamic>> updateMe(Map<String, dynamic> patch) async =>
-      Map<String, dynamic>.from(await _client.patch('/users/me', patch));
+  /// The authenticated user, unwrapped from the `{ user }` envelope.
+  ///
+  /// Throws [ApiException] with status 401 when the token is missing or was
+  /// invalidated by a logout, which is how the app detects a dead session.
+  Future<Map<String, dynamic>> currentUser() async {
+    final res = await me();
+    final user = res['user'];
+    if (user is! Map) {
+      throw ApiException('Malformed user payload.', status: 500);
+    }
+    return Map<String, dynamic>.from(user);
+  }
 
-  Future<Map<String, dynamic>> styleProfile() async => Map<String, dynamic>.from(
-    await _client.get('/users/me/style-profile'),
-  );
+  /// Account fields a client may change (name). The avatar is no longer
+  /// settable here: it must go through [uploadAvatar] so the bytes actually
+  /// live on the server. Email is read-only.
+  Future<Map<String, dynamic>> updateMe(Map<String, dynamic> patch) async {
+    final res = await _client.patch('/users/me', patch);
+    return Map<String, dynamic>.from((res as Map)['user'] as Map);
+  }
+
+  /// Uploads a profile picture and returns the updated user, including the
+  /// freshly stored `avatarUrl`.
+  ///
+  /// The backend derives the account from the bearer token, so there is no
+  /// user id to pass and none that could be spoofed.
+  Future<Map<String, dynamic>> uploadAvatar({
+    required String filename,
+    required List<int> bytes,
+    required String mimeType,
+  }) async {
+    final res = await _client.uploadPhotos(
+      '/users/me/avatar',
+      [(filename: filename, bytes: bytes, mimeType: mimeType)],
+      field: 'photo',
+    );
+    if (res is! Map || res['user'] is! Map) {
+      throw ApiException('Malformed upload response.', status: 500);
+    }
+    return Map<String, dynamic>.from(res['user'] as Map);
+  }
+
+  /// The style blueprint shown on the Profile page.
+  Future<Map<String, dynamic>> styleProfile() async {
+    final res = await _client.get('/users/me/style-profile');
+    return Map<String, dynamic>.from((res as Map)['styleProfile'] as Map);
+  }
+
+  /// Persists the style blueprint and returns the saved values echoed by the
+  /// backend, so the UI renders what was actually stored rather than what was
+  /// optimistically typed.
+  Future<Map<String, dynamic>> updateStyleProfile(
+    Map<String, dynamic> styleProfile,
+  ) async {
+    final res = await _client.patch('/users/me/style-profile', styleProfile);
+    return Map<String, dynamic>.from((res as Map)['styleProfile'] as Map);
+  }
 
   // -------------------------------------------------------- 8.3 Wardrobe
   Future<Map<String, dynamic>> wardrobeItems({

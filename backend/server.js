@@ -62,6 +62,141 @@ function publicUser(u) {
   const { passwordHash, ...rest } = u;
   return rest;
 }
+
+// ------------------------------------------------------- style profile (§8.2)
+// The style profile is a free-form object on the user record, so every read
+// normalises it and every write is whitelisted. Without this the old handlers
+// used `Object.assign(user, body)`, which let any client rewrite `id` or
+// `passwordHash`, and silently accepted junk that later broke the UI.
+
+/** Colour vocabulary offered by the Profile editor (§16 favouriteColors). */
+const STYLE_COLORS = [
+  'Black', 'White', 'Beige', 'Navy', 'Blue', 'Denim', 'Grey', 'Charcoal',
+  'Brown', 'Tan', 'Cream', 'Green', 'Olive', 'Red', 'Burgundy', 'Pink',
+  'Purple', 'Yellow', 'Orange', 'Multicolor',
+];
+
+/** Style vocabulary offered by the Profile editor (§16 preferredStyles). */
+const STYLE_STYLES = [
+  'Casual', 'Smart Casual', 'Minimalist', 'Classic', 'Vintage', 'Modern',
+  'Formal', 'Elegant', 'Streetwear', 'Sporty', 'Bohemian', 'Preppy',
+  'Raw Indigo', 'Minimal',
+];
+
+/** Fit vocabulary (§16 body/fit information). */
+const STYLE_FITS = ['slim', 'regular', 'relaxed', 'oversized'];
+
+/** Top / bottom / shoe size vocabularies (§16 size). */
+const STYLE_SIZES = {
+  top: ['XS', 'S', 'M', 'L', 'XL', 'XXL'],
+  bottom: ['28', '30', '32', '34', '36', '38', '40'],
+  shoe: ['38', '39', '40', '41', '42', '43', '44', '45'],
+};
+
+const str = (v, max) => (v == null ? null : String(v).trim().slice(0, max) || null);
+const num = (v, min, max) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(max, Math.max(min, Math.round(n * 10) / 10));
+};
+const list = (v, allowed, max) => {
+  if (!Array.isArray(v)) return null;
+  const seen = [];
+  for (const raw of v) {
+    const value = str(raw, 40);
+    if (value && allowed.includes(value) && !seen.includes(value)) seen.push(value);
+    if (seen.length >= max) break;
+  }
+  return seen;
+};
+
+/**
+ * Default style profile for a user that has never edited theirs, so the
+ * Profile screen always renders a complete, valid shape.
+ */
+function defaultStyleProfile() {
+  return {
+    favoriteColors: [],
+    preferredStyles: [],
+    avoidedColors: [],
+    heightCm: null,
+    weightKg: null,
+    fitPreference: 'regular',
+    sizes: { top: null, bottom: null, shoe: null },
+  };
+}
+
+/** Read a stored style profile as a complete, valid object. */
+function readStyleProfile(user) {
+  const stored = user?.styleProfile || {};
+  const sizes = stored.sizes || {};
+  return {
+    favoriteColors: list(stored.favoriteColors, STYLE_COLORS, 12) || [],
+    preferredStyles: list(stored.preferredStyles, STYLE_STYLES, 12) || [],
+    avoidedColors: list(stored.avoidedColors, STYLE_COLORS, 12) || [],
+    heightCm: num(stored.heightCm, 80, 250),
+    weightKg: num(stored.weightKg, 25, 300),
+    fitPreference: STYLE_FITS.includes(stored.fitPreference)
+      ? stored.fitPreference
+      : 'regular',
+    sizes: {
+      top: STYLE_SIZES.top.includes(sizes.top) ? sizes.top : null,
+      bottom: STYLE_SIZES.bottom.includes(sizes.bottom) ? sizes.bottom : null,
+      shoe: STYLE_SIZES.shoe.includes(sizes.shoe ?? sizes.shoes)
+        ? (sizes.shoe ?? sizes.shoes)
+        : null,
+    },
+  };
+}
+
+/**
+ * Apply a client patch to a style profile. Only whitelisted keys are read and
+ * only whitelisted vocabulary values are stored, so a crafted body cannot
+ * inject arbitrary keys or oversized values into the user record.
+ */
+function writeStyleProfile(user, body = {}) {
+  const next = readStyleProfile(user);
+  const b = body || {};
+
+  if (b.favoriteColors !== undefined) {
+    next.favoriteColors = list(b.favoriteColors, STYLE_COLORS, 12) || [];
+  }
+  if (b.preferredStyles !== undefined) {
+    next.preferredStyles = list(b.preferredStyles, STYLE_STYLES, 12) || [];
+  }
+  if (b.avoidedColors !== undefined) {
+    next.avoidedColors = list(b.avoidedColors, STYLE_COLORS, 12) || [];
+  }
+  if (b.heightCm !== undefined) {
+    next.heightCm = b.heightCm === null || b.heightCm === '' ? null : num(b.heightCm, 80, 250);
+  }
+  if (b.weightKg !== undefined) {
+    next.weightKg = b.weightKg === null || b.weightKg === '' ? null : num(b.weightKg, 25, 300);
+  }
+  if (b.fitPreference !== undefined) {
+    next.fitPreference = STYLE_FITS.includes(b.fitPreference) ? b.fitPreference : 'regular';
+  }
+  if (b.sizes !== undefined && b.sizes && typeof b.sizes === 'object') {
+    for (const slot of Object.keys(STYLE_SIZES)) {
+      // `shoes` is accepted as a legacy alias for `shoe`.
+      const raw = b.sizes[slot] ?? (slot === 'shoe' ? b.sizes.shoes : undefined);
+      if (raw === undefined) continue;
+      const value = str(raw, 8);
+      next.sizes[slot] = value && STYLE_SIZES[slot].includes(value) ? value : null;
+    }
+  }
+
+  user.styleProfile = next;
+  return next;
+}
+
+/** The profile payload rendered by the Profile screen (§16). */
+function profilePayload(user) {
+  return {
+    ...publicUser(user),
+    styleProfile: readStyleProfile(user),
+  };
+}
 async function proxyAI(path, body) {
   // If a FastAPI AI service is configured, delegate; else use embedded engine.
   if (!AI_SERVICE_URL) return null;
@@ -144,14 +279,14 @@ app.post('/auth/register', (req, res) => {
   }
   const user = {
     id: store.uid('u'), name: name || email.split('@')[0], email: String(email).toLowerCase(),
-    passwordHash: store.sha256(password), createdAt: now(),
-    styleProfile: { preferredStyles: ['Casual'], favoriteColors: ['Black', 'White'], sizes: {} },
+    passwordHash: store.sha256(password), createdAt: now(), avatarUrl: null,
+    styleProfile: readStyleProfile(null),
   };
   const token = crypto.randomBytes(24).toString('hex');
   db.users.push(user);
   db.sessions.push({ token, userId: user.id, createdAt: now() });
   persist();
-  res.status(201).json({ user: publicUser(user), accessToken: token, refreshToken: token });
+  res.status(201).json({ user: profilePayload(user), accessToken: token, refreshToken: token });
 });
 
 app.post('/auth/login', (req, res) => {
@@ -163,7 +298,7 @@ app.post('/auth/login', (req, res) => {
   const token = crypto.randomBytes(24).toString('hex');
   db.sessions.push({ token, userId: user.id, createdAt: now() });
   persist();
-  res.json({ user: publicUser(user), accessToken: token, refreshToken: token });
+  res.json({ user: profilePayload(user), accessToken: token, refreshToken: token });
 });
 
 app.post('/auth/refresh', (req, res) => {
@@ -184,17 +319,108 @@ app.post('/auth/logout', auth, (req, res) => {
 });
 
 // ================================================================= 8.2 Users
-app.get('/users/me', auth, (req, res) => res.json({ user: publicUser(req.user) }));
+// Every route here is behind the strict `auth` guard, and the user is always
+// resolved from the bearer token. There is no `:id` parameter anywhere, so a
+// client cannot address another account by editing a request.
+
+/** GET /users/me — the authenticated user, including their style profile. */
+app.get('/users/me', auth, (req, res) => res.json({ user: profilePayload(req.user) }));
+
+/**
+ * PATCH /users/me — the only account fields a client may change.
+ *
+ * `id`, `email` and `passwordHash` are intentionally absent: the subject is
+ * taken from the token, and email changes need a verification flow that does
+ * not exist yet. `Object.assign(user, body)` would have allowed all three.
+ */
 app.patch('/users/me', auth, (req, res) => {
-  Object.assign(req.user, req.body || {});
+  const b = req.body || {};
+  if (b.name !== undefined) {
+    const name = str(b.name, 80);
+    if (!name) return res.status(400).json({ error: 'name cannot be empty.' });
+    req.user.name = name;
+  }
+  if (b.avatarUrl !== undefined) {
+    const avatar = str(b.avatarUrl, 500);
+    // Avatars may only point at our own storage. Arbitrary http(s) URLs were
+    // previously accepted, which let a client render a remote tracking pixel
+    // inside someone else's profile card.
+    req.user.avatarUrl = avatar && isOwnStorageUrl(avatar) ? avatar : null;
+  }
   persist();
-  res.json({ user: publicUser(req.user) });
+  res.json({ user: profilePayload(req.user) });
 });
-app.get('/users/me/style-profile', auth, (req, res) => res.json({ styleProfile: req.user.styleProfile || {} }));
+
+/** True when a URL is served by this backend's own /storage mount. */
+function isOwnStorageUrl(u) {
+  const m = String(u || '').match(/\/storage\/([^/?#]+)$/);
+  return Boolean(m) && path.basename(m[1]) === m[1];
+}
+
+/** Absolute filesystem path for one of our /storage files, or null. */
+function storagePathOf(storageUrl) {
+  const m = String(storageUrl || '').match(/\/storage\/([^/?#]+)$/);
+  if (!m) return null;
+  const name = path.basename(m[1]);
+  if (name !== m[1]) return null; // reject traversal like /storage/../../x
+  const file = path.join(STORAGE_DIR, name);
+  if (!file.startsWith(STORAGE_DIR + path.sep)) return null;
+  return fs.existsSync(file) ? file : null;
+}
+
+/**
+ * POST /users/me/avatar — multipart `photo`, single image.
+ *
+ * Reuses the same multer disk storage and /storage mount that back
+ * POST /wardrobe/upload, so there is exactly one place images are persisted.
+ * The subject always comes from the bearer token: a client cannot name another
+ * user, and any `userId` field in the body is ignored.
+ *
+ * The previous avatar is only unlinked once the replacement is on disk, so a
+ * failed upload can never leave the profile with a dangling reference.
+ */
+app.post('/users/me/avatar', auth, (req, res) => {
+  upload.single('photo')(req, res, (err) => {
+    if (err) {
+      const tooBig = err.code === 'LIMIT_FILE_SIZE';
+      return res.status(400).json({
+        error: tooBig ? 'Image must be 10MB or smaller.' : err.message,
+      });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'Attach an image as photo.' });
+    }
+
+    const previous = req.user.avatarUrl;
+    req.user.avatarUrl = storageUrl(req, req.file.filename);
+    persist();
+
+    // Best effort cleanup, only after the new file is safely written and the
+    // new reference is committed. Never delete the file we just stored.
+    if (previous && previous !== req.user.avatarUrl) {
+      const old = storagePathOf(previous);
+      if (old && old !== path.join(STORAGE_DIR, req.file.filename)) {
+        try {
+          fs.unlinkSync(old);
+        } catch {
+          /* a stale file is harmless; never fail the request over it */
+        }
+      }
+    }
+
+    res.json({ user: profilePayload(req.user) });
+  });
+});
+
+/** GET /users/me/style-profile — the style blueprint shown on the Profile page. */
+app.get('/users/me/style-profile', auth, (req, res) =>
+  res.json({ styleProfile: readStyleProfile(req.user) }));
+
+/** PATCH /users/me/style-profile — persist an edited style profile. */
 app.patch('/users/me/style-profile', auth, (req, res) => {
-  req.user.styleProfile = { ...(req.user.styleProfile || {}), ...(req.body || {}) };
+  const styleProfile = writeStyleProfile(req.user, req.body || {});
   persist();
-  res.json({ styleProfile: req.user.styleProfile });
+  res.json({ styleProfile, user: profilePayload(req.user) });
 });
 
 // ============================================================== 8.3 Wardrobe
@@ -1115,7 +1341,8 @@ app.get('/docs', (_req, res) => res.json({
   service: 'SmartWardrobe API (§8)',
   endpoints: [
     'POST /auth/register', 'POST /auth/login', 'POST /auth/refresh', 'POST /auth/logout',
-    'GET /users/me', 'PATCH /users/me', 'GET /users/me/style-profile', 'PATCH /users/me/style-profile',
+    'GET /users/me', 'PATCH /users/me', 'POST /users/me/avatar',
+    'GET /users/me/style-profile', 'PATCH /users/me/style-profile',
     'GET /wardrobe/items', 'POST /wardrobe/items', 'POST /wardrobe/upload', 'GET /wardrobe/items/:id', 'PATCH /wardrobe/items/:id',
     'DELETE /wardrobe/items/:id', 'POST /wardrobe/items/batch-upload', 'GET /wardrobe/collections',
     'POST /ai/analyze-clothing', 'POST /ai/generate-outfit', 'POST /ai/calculate-compatibility',
