@@ -4,6 +4,8 @@ import '../../core/icons/sw_icon.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
+import '../../app.dart';
+import '../../data/app_state.dart';
 import '../home/home_screen.dart';
 import '../outfits/outfits_screen.dart';
 import '../profile/profile_screen.dart';
@@ -17,6 +19,10 @@ enum ShellTab { home, wardrobe, stylist, outfits, profile }
 ///
 /// Each tab owns an independent [Navigator] so pushed detail screens keep their
 /// own history while the user moves between destinations.
+///
+/// The whole shell is gated on a live session: a signed-out user (for example
+/// after the token was rejected server-side) is bounced to Login, and the
+/// shell route is removed from the stack behind them.
 class MainShell extends StatefulWidget {
   const MainShell({super.key, this.initialTab = ShellTab.home});
 
@@ -32,6 +38,19 @@ class _MainShellState extends State<MainShell> {
   late final Map<ShellTab, GlobalKey<NavigatorState>> _keys = {
     for (final tab in ShellTab.values) tab: GlobalKey<NavigatorState>(),
   };
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _requireAuth());
+  }
+
+  /// Sends unauthenticated visitors back to Login without leaving the shell
+  /// behind them in the back stack.
+  void _requireAuth() {
+    if (!mounted || AppState.instance.isAuthenticated) return;
+    Navigator.of(context).pushNamedAndRemoveUntil(Routes.login, (_) => false);
+  }
 
   void _select(ShellTab tab) {
     if (tab == _tab) {

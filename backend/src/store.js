@@ -38,7 +38,16 @@ function seed() {
       {
         id: 'u_demo', name: 'Karim Hassan', email: 'karim@fashiontech.com',
         passwordHash: sha256('wardrobe2024'), createdAt: new Date().toISOString(),
-        styleProfile: { preferredStyles: ['Casual', 'Smart Casual', 'Minimalist'], favoriteColors: ['Black', 'White', 'Blue'], sizes: { top: 'M', bottom: '32', shoes: '42' } },
+        avatarUrl: null,
+        styleProfile: {
+          preferredStyles: ['Casual', 'Smart Casual', 'Minimalist'],
+          favoriteColors: ['Black', 'White', 'Blue'],
+          avoidedColors: [],
+          heightCm: 178,
+          weightKg: null,
+          fitPreference: 'regular',
+          sizes: { top: 'M', bottom: '32', shoe: '42' },
+        },
       },
     ],
     sessions: [],

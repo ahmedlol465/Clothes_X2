@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/api/api_client.dart';
 import '../core/api/smartwardrobe_api.dart';
@@ -28,9 +31,6 @@ class AppState extends ChangeNotifier {
   List<Outfit> savedOutfits = [...MockData.savedOutfits];
   Outfit todayOutfit = MockData.todaySelection;
   Map<String, dynamic>? weather;
-
-  Map<String, dynamic>? _user;
-  Map<String, dynamic>? get user => _user;
 
   // ------------------------------------------------------- planner (§8.6)
   List<Map<String, dynamic>> planWeek = [
@@ -133,10 +133,93 @@ class AppState extends ChangeNotifier {
   }
 
   // ------------------------------------------------------------ auth (§8.1)
+  //
+  // The bearer token lives on [ApiClient] in memory, and is mirrored into
+  // SharedPreferences so a cold start can restore the session. Only the token
+  // is cached — every profile field is read from the backend on demand, so a
+  // stale cache can never be mistaken for real data.
+
+  static const String _tokenKey = 'sw.authToken';
+
+  SharedPreferences? _prefs;
+
+  /// True once the stored session has been checked (or confirmed absent) on
+  /// startup. The splash screen waits for this before routing.
+  bool authChecked = false;
+
+  /// True while a session restore is in flight.
+  bool authRestoring = false;
+
+  /// The signed-in user, or null when signed out. Mirrors the backend
+  /// `/users/me` payload; never a locally invented object.
+  UserProfile? _profile;
+  UserProfile? get profile => _profile;
+
+  bool get isAuthenticated => _profile != null;
+
+  /// Profile fetch state, used by the Profile screen for its loading and error
+  /// states. [profileError] is only ever set from a real API failure.
+  bool profileLoading = false;
+  String? profileError;
+
+  /// True once a `loadProfile` attempt has settled, successfully or not.
+  ///
+  /// Distinguishes "the request failed" from "nothing has been requested yet",
+  /// so the very first frame renders the skeleton instead of an error card.
+  bool profileSettled = false;
+
+  /// True while a profile picture is being uploaded, so the avatar can show a
+  /// spinner and the UI cannot claim a save that has not been confirmed.
+  bool avatarUploading = false;
+
+  /// Restores a stored token on startup and validates it against
+  /// `GET /users/me`. A rejected token is discarded so the app falls back to
+  /// the login screen rather than showing a broken profile.
+  Future<bool> restoreSession() async {
+    _prefs ??= await SharedPreferences.getInstance();
+    authRestoring = true;
+    notifyListeners();
+    try {
+      final token = _prefs?.getString(_tokenKey);
+      if (token == null || token.isEmpty) {
+        _profile = null;
+        _client.clearToken();
+        return false;
+      }
+      _client.setToken(token);
+      final user = await api.currentUser();
+      _profile = UserProfile.fromJson(user);
+      _markOnline();
+      return true;
+    } on ApiException catch (e) {
+      // 401/403 means the server dropped the session (logged out elsewhere,
+      // or the session was invalidated). Anything else is a network problem:
+      // keep the token so the next launch can retry.
+      if (e.status == 401 || e.status == 403) {
+        _profile = null;
+        _client.clearToken();
+        await _prefs?.remove(_tokenKey);
+      }
+      _markOffline(e);
+      return false;
+    } finally {
+      authRestoring = false;
+      authChecked = true;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _persistToken(String token) async {
+    _prefs ??= await SharedPreferences.getInstance();
+    await _prefs?.setString(_tokenKey, token);
+  }
+
   Future<bool> login(String email, String password) async {
     try {
       final res = await api.login(email, password);
-      _user = res['user'] as Map<String, dynamic>?;
+      final user = res['user'];
+      if (user is Map) _profile = UserProfile.fromJson(user.cast<String, dynamic>());
+      await _persistToken('${res['accessToken'] ?? ''}');
       _markOnline();
       notifyListeners();
       return true;
@@ -149,7 +232,9 @@ class AppState extends ChangeNotifier {
   Future<bool> register(String name, String email, String password) async {
     try {
       final res = await api.register(name, email, password);
-      _user = res['user'] as Map<String, dynamic>?;
+      final user = res['user'];
+      if (user is Map) _profile = UserProfile.fromJson(user.cast<String, dynamic>());
+      await _persistToken('${res['accessToken'] ?? ''}');
       _markOnline();
       notifyListeners();
       return true;
@@ -159,6 +244,183 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Clears the session locally and server-side, then drops every user-scoped
+  /// cache so nothing from the previous account can leak into the next one.
+  Future<void> logout() async {
+    try {
+      await api.logout();
+    } catch (_) {
+      // Even if the revoke call fails the local session must still be dropped,
+      // otherwise the user is stuck in an authenticated shell.
+    }
+    _client.clearToken();
+    await _prefs?.remove(_tokenKey);
+    _profile = null;
+    profileError = null;
+    profileLoading = false;
+    profileSettled = false;
+    avatarUploading = false;
+    _resetUserScopedState();
+    notifyListeners();
+  }
+
+  /// Everything cached per user. Cleared on logout so the next account never
+  /// sees the previous account's wardrobe, outfits or learned style.
+  void _resetUserScopedState() {
+    wardrobe = [...MockData.wardrobe];
+    savedOutfits = [...MockData.savedOutfits];
+    todayOutfit = MockData.todaySelection;
+    weather = null;
+    shopPicks = [...MockData.shoppingPicks];
+    styleDnaSummary = null;
+    styleDnaConfidence = 0;
+    _conversationId = null;
+    _chatHistory.clear();
+    resetConversation();
+  }
+
+  // ------------------------------------------------------- profile (§8.2)
+
+  /// Fetches the authenticated profile from the backend. Never falls back to
+  /// mock data: on failure the error is surfaced so the UI can show a retry.
+  Future<bool> loadProfile() async {
+    if (_profile == null && !_client.hasToken) {
+      profileError = 'You are not signed in.';
+      profileSettled = true;
+      notifyListeners();
+      return false;
+    }
+    profileLoading = true;
+    profileError = null;
+    notifyListeners();
+    try {
+      final user = await api.currentUser();
+      _profile = UserProfile.fromJson(user);
+      _markOnline();
+      profileLoading = false;
+      profileSettled = true;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      profileLoading = false;
+      profileSettled = true;
+      profileError = e.status == 401 || e.status == 403
+          ? 'Your session has expired. Please sign in again.'
+          : e.message;
+      if (e.status == 401 || e.status == 403) {
+        _profile = null;
+        _client.clearToken();
+        unawaited(_prefs?.remove(_tokenKey));
+      }
+      notifyListeners();
+      return false;
+    } catch (e) {
+      profileLoading = false;
+      profileSettled = true;
+      profileError = e.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Saves the style profile to the backend and adopts the values it echoes
+  /// back, so the UI can only ever display what the database actually stored.
+  /// Returns the saved profile, or null when the save failed — callers must
+  /// treat null as "nothing was saved".
+  Future<UserProfile?> saveStyleProfile(UserProfile draft) async {
+    try {
+      final saved = await api.updateStyleProfile(draft.toStyleProfileJson());
+      // Re-read the whole user so name/email/createdAt stay authoritative and
+      // the saved style fields come from the server, not from the draft.
+      final user = await api.currentUser();
+      _profile = UserProfile.fromJson({
+        ...user,
+        'styleProfile': {
+          ...(user['styleProfile'] as Map? ?? const {}),
+          ...saved,
+        },
+      });
+      _markOnline();
+      notifyListeners();
+      return _profile;
+    } on ApiException catch (e) {
+      if (e.status == 401 || e.status == 403) {
+        _profile = null;
+        _client.clearToken();
+        unawaited(_prefs?.remove(_tokenKey));
+      }
+      _markOffline(e);
+      return null;
+    }
+  }
+
+  /// Updates the account name through `PATCH /users/me`. Email is not
+  /// editable here — changing it needs a verification flow that does not
+  /// exist yet.
+  Future<UserProfile?> updateName(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return null;
+    try {
+      final user = await api.updateMe({'name': trimmed});
+      _profile = _profile == null
+          ? UserProfile.fromJson(user)
+          : _profile!.copyWith(
+              name: '${user['name'] ?? trimmed}',
+              avatarUrl: '${user['avatarUrl'] ?? ''}'.isEmpty
+                  ? null
+                  : '${user['avatarUrl']}',
+            );
+      _markOnline();
+      notifyListeners();
+      return _profile;
+    } on ApiException catch (e) {
+      _markOffline(e);
+      return null;
+    }
+  }
+
+  /// Uploads a new profile picture and adopts the URL the backend stored.
+  ///
+  /// Returns the refreshed profile on success, or null on failure — the caller
+  /// must not treat a null result as a saved image. The local profile is only
+  /// replaced with the server's response, so what the UI shows is what was
+  /// actually persisted, and a 401 mid-upload clears the session rather than
+  /// leaving a local-only image behind.
+  Future<UserProfile?> uploadAvatar({
+    required String filename,
+    required List<int> bytes,
+    required String mimeType,
+  }) async {
+    avatarUploading = true;
+    notifyListeners();
+    try {
+      final user = await api.uploadAvatar(
+        filename: filename,
+        bytes: bytes,
+        mimeType: mimeType,
+      );
+      _profile = UserProfile.fromJson(user);
+      _markOnline();
+      avatarUploading = false;
+      notifyListeners();
+      return _profile;
+    } on ApiException catch (e) {
+      avatarUploading = false;
+      if (e.status == 401 || e.status == 403) {
+        _profile = null;
+        _client.clearToken();
+        unawaited(_prefs?.remove(_tokenKey));
+      }
+      _markOffline(e);
+      notifyListeners();
+      return null;
+    } catch (e) {
+      avatarUploading = false;
+      _markOffline(e);
+      notifyListeners();
+      return null;
+    }
+  }
   // ------------------------------------------------------- wardrobe (§8.3)
   Future<void> loadWardrobe({String search = '', String category = 'All'}) async {
     wardrobeLoading = true;
