@@ -16,7 +16,7 @@ const store = require('./src/store');
 const ai = require('./src/ai-engine');
 const llm = require('./src/llm');
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.EXPRESS_PORT || process.env.PORT || 3001;
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || ''; // e.g. http://localhost:8000
 
 let db = store.load();
