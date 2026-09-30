@@ -6,6 +6,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Take photos of your clothes to add them to your wardrobe.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Show weather for where you are, so outfit picks match real conditions.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Choose clothing photos from your library to add them to your wardrobe.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

@@ -207,6 +207,9 @@ class _WeatherPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final summary = weather?['summary']?.toString() ?? 'Sunny • 28°C';
+    final city = weather?['city']?.toString();
+    final title =
+        city == null || city.isEmpty || summary.contains(city) ? summary : '$summary • $city';
     return Container(
       padding: const EdgeInsets.all(Insets.lg),
       decoration: BoxDecoration(
@@ -227,10 +230,10 @@ class _WeatherPill extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(summary, style: AppText.cardTitle),
+                Text(title, style: AppText.cardTitle),
                 const SizedBox(height: 2),
                 Text(
-                  'Perfect for lightweight layering',
+                  _advice(weather),
                   style: AppText.caption,
                 ),
               ],
@@ -240,6 +243,19 @@ class _WeatherPill extends StatelessWidget {
       ),
     );
   }
+}
+
+/// One-line outfit advice derived from live conditions — never hardcoded.
+String _advice(Map<String, dynamic>? weather) {
+  final tags = (weather?['tags'] ?? weather?['condition'] ?? '').toString();
+  final temp = (weather?['tempC'] as num?)?.toDouble();
+  if (RegExp(r'rain|drizzle|shower|storm|thunder|snow', caseSensitive: false)
+      .hasMatch(tags)) {
+    return 'Grab a waterproof layer';
+  }
+  if (temp != null && temp >= 30) return 'Perfect for lightweight layering';
+  if (temp != null && temp <= 18) return 'Time to layer up';
+  return 'Perfect for lightweight layering';
 }
 
 /// Large hero card for the outfit the AI picked today.

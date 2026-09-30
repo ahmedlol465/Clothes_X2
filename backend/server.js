@@ -1323,17 +1323,25 @@ function currentWeather(city) {
   return weatherService.estimate(city);
 }
 
-async function resolveWeather(city) {
+async function resolveWeather(target) {
   try {
-    return await weatherService.resolve(city);
+    return await weatherService.resolve(target);
   } catch (e) {
     console.error('[weather] resolve failed, stub fallback:', e.message);
+    const city = typeof target === 'string' ? target : target?.city;
     return currentWeather(city);
   }
 }
 
 app.get('/weather/current', async (req, res) => {
-  res.json({ weather: await resolveWeather(req.query.city) });
+  // Phone GPS (`?lat=…&lon=…`) skips geocoding and reports where the user
+  // actually stands; a plain `?city=…` keeps working as before.
+  const lat = Number(req.query.lat);
+  const lon = Number(req.query.lon ?? req.query.lng);
+  const target = Number.isFinite(lat) && Number.isFinite(lon)
+    ? { lat, lon, city: req.query.city }
+    : req.query.city;
+  res.json({ weather: await resolveWeather(target) });
 });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'smartwardrobe-backend' }));

@@ -40,8 +40,9 @@ function cap(s) {
   return String(s).replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-const cache = new Map(); // city -> { at, data }
+const cache = new Map(); // city-or-coords -> { at, data }
 const geoCache = new Map(); // city -> coords
+const reverseCache = new Map(); // rounded coords -> place name
 
 function ttl() {
   return TTL_MS;
@@ -108,6 +109,55 @@ function shape(raw) {
   return out;
 }
 
+/**
+ * Resolve a target to coordinates. Accepts a city name (geocoded) or
+ * `{ lat, lon, city? }` from phone GPS — coordinates skip geocoding entirely,
+ * so the forecast is for where the user actually stands.
+ */
+async function coordsFor(target) {
+  const coords = readCoords(target);
+  if (coords) {
+    const hint = typeof target === 'object' && target !== null ? target.city : undefined;
+    const city = hint || (await reverseGeocode(coords.latitude, coords.longitude)) || 'Current location';
+    return { latitude: coords.latitude, longitude: coords.longitude, city };
+  }
+  const city = typeof target === 'string' && target ? target : 'Cairo';
+  return getCoords(city);
+}
+
+function readCoords(target) {
+  if (typeof target !== 'object' || target === null) return null;
+  const latitude = Number(target.lat ?? target.latitude);
+  const longitude = Number(target.lon ?? target.lng ?? target.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+  return { latitude, longitude };
+}
+
+/**
+ * Coordinates → place name via the keyless BigDataCloud reverse geocoder.
+ * Best-effort: GPS weather works fine without a name, so any failure
+ * resolves to null and the caller falls back to a generic label.
+ */
+async function reverseGeocode(latitude, longitude) {
+  const key = `${latitude.toFixed(2)},${longitude.toFixed(2)}`;
+  if (reverseCache.has(key)) return reverseCache.get(key);
+  try {
+    const res = await fetch(
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`,
+      { signal: AbortSignal.timeout(8000) },
+    );
+    const data = await res.json().catch(() => ({}));
+    const name = res.ok
+      ? data?.city || data?.locality || data?.principalSubdivision || null
+      : null;
+    reverseCache.set(key, name);
+    return name;
+  } catch {
+    return null;
+  }
+}
+
 async function getCoords(city) {
   const key = normalize(city);
   if (geoCache.has(key)) return geoCache.get(key);
@@ -128,8 +178,8 @@ async function getCoords(city) {
   return coords;
 }
 
-async function openMeteo(city) {
-  const { latitude, longitude, city: name, country } = await getCoords(city);
+async function openMeteo(target) {
+  const { latitude, longitude, city: name, country } = await coordsFor(target);
   const params = new URLSearchParams({
     latitude: String(latitude),
     longitude: String(longitude),
@@ -184,24 +234,30 @@ function currentWeather(city = 'Cairo') {
  * Live weather with graceful degradation.
  * Order: cache → Open-Meteo (no key) → OpenWeatherMap (if a key exists) →
  * seasonal estimate. Never throws.
+ *
+ * `target` is a city name or `{ lat, lon, city? }`. Coordinates come from
+ * phone GPS and skip geocoding; the optional `city` is only a display hint.
  */
-async function resolve(city) {
-  const wanted = city || process.env.WEATHER_CITY || 'Cairo';
-  const key = normalize(wanted);
+async function resolve(target) {
+  const wanted = target && typeof target === 'object' ? target.city || process.env.WEATHER_CITY || 'Cairo' : (target || process.env.WEATHER_CITY || 'Cairo');
+  const coords = readCoords(target);
+  const key = coords
+    ? `${coords.latitude.toFixed(2)},${coords.longitude.toFixed(2)}`
+    : normalize(wanted);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < ttl()) return hit.data;
 
   let data = null;
   try {
-    data = await openMeteo(wanted);
+    data = await openMeteo(target);
   } catch (e) {
     // Open-Meteo is the primary path; fall back only if it is unreachable.
     try {
       const owmKey = process.env.WEATHER_KEY || process.env.OPENWEATHERMAP_API_KEY;
-      if (owmKey) data = await openWeatherMap(wanted, owmKey);
+      if (owmKey) data = await openWeatherMap(typeof wanted === 'string' ? wanted : 'Cairo', owmKey);
     } catch { /* fall through to the estimate */ }
     if (!data) {
-      data = estimate(wanted);
+      data = estimate(typeof wanted === 'string' ? wanted : 'Cairo');
       data.reason = e.message;
     }
   }

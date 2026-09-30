@@ -6,6 +6,7 @@ import { CurrentWeather, ForecastDay } from './weather.types';
 
 const GEO_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 const FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
+const REVERSE_URL = 'https://api.bigdatacloud.net/data/reverse-geocode-client';
 const FETCH_TIMEOUT_MS = 8000;
 
 /** WMO weather interpretation codes → human description. */
@@ -40,6 +41,13 @@ const WMO: Record<number, string> = {
   99: 'severe thunderstorm',
 };
 
+/** Where to report for: a city name, or phone GPS coordinates. */
+export interface WeatherTarget {
+  city?: string;
+  lat?: number;
+  lon?: number;
+}
+
 /**
  * Live weather with graceful degradation.
  *
@@ -54,6 +62,7 @@ export class WeatherService {
   private readonly logger = new Logger(WeatherService.name);
   private readonly cache = new Map<string, { at: number; data: CurrentWeather }>();
   private readonly geoCache = new Map<string, { latitude: number; longitude: number; city: string; country?: string }>();
+  private readonly reverseCache = new Map<string, string | null>();
 
   private readonly defaultCity: string;
   private readonly cacheTtlMs: number;
@@ -65,17 +74,22 @@ export class WeatherService {
     this.openWeatherKey = this.config.get<string>('weather.apiKey') || undefined;
   }
 
-  /** Current conditions for a city. Never throws. */
-  async current(city?: string): Promise<WeatherResponseDto> {
-    const wanted = city?.trim() || this.defaultCity;
-    const key = wanted.toLowerCase();
+  /** Current conditions for a city or GPS coordinates. Never throws. */
+  async current(cityOrTarget?: string | WeatherTarget): Promise<WeatherResponseDto> {
+    const target: WeatherTarget =
+      typeof cityOrTarget === 'string' ? { city: cityOrTarget } : cityOrTarget ?? {};
+    const coords = WeatherService.readCoords(target);
+    const wanted = target.city?.trim() || this.defaultCity;
+    const key = coords
+      ? `${coords.latitude.toFixed(2)},${coords.longitude.toFixed(2)}`
+      : wanted.toLowerCase();
     const hit = this.cache.get(key);
     if (hit && Date.now() - hit.at < this.cacheTtlMs) return hit.data;
 
     let data: CurrentWeather | null = null;
     let reason: string | undefined;
     try {
-      data = await this.openMeteo(wanted);
+      data = await this.openMeteo(target);
     } catch (error) {
       reason = error instanceof Error ? error.message : String(error);
       this.logger.warn(`open-meteo unavailable for "${wanted}": ${reason}`);
@@ -100,8 +114,8 @@ export class WeatherService {
 
   // ------------------------------------------------------------ providers --
 
-  private async openMeteo(city: string): Promise<CurrentWeather> {
-    const { latitude, longitude, city: name, country } = await this.geocode(city);
+  private async openMeteo(target: WeatherTarget): Promise<CurrentWeather> {
+    const { latitude, longitude, city: name, country } = await this.coordsFor(target);
     const params = new URLSearchParams({
       latitude: String(latitude),
       longitude: String(longitude),
@@ -140,6 +154,58 @@ export class WeatherService {
       forecast,
       source: 'open-meteo',
     });
+  }
+
+  /**
+   * Resolve a target to coordinates. GPS coordinates skip geocoding entirely,
+   * so the forecast is for where the user actually stands.
+   */
+  private async coordsFor(target: WeatherTarget) {
+    const coords = WeatherService.readCoords(target);
+    if (coords) {
+      const city =
+        target.city?.trim() ||
+        (await this.reverseGeocode(coords.latitude, coords.longitude)) ||
+        'Current location';
+      return { ...coords, city };
+    }
+    return this.geocode(target.city?.trim() || this.defaultCity);
+  }
+
+  private static readCoords(target: WeatherTarget) {
+    const latitude = Number(target.lat);
+    const longitude = Number(target.lon);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+    return { latitude, longitude };
+  }
+
+  /**
+   * Coordinates → place name via the keyless BigDataCloud reverse geocoder.
+   * Best-effort: GPS weather works fine without a name, so any failure
+   * resolves to null and the caller falls back to a generic label.
+   */
+  private async reverseGeocode(latitude: number, longitude: number): Promise<string | null> {
+    const key = `${latitude.toFixed(2)},${longitude.toFixed(2)}`;
+    if (this.reverseCache.has(key)) return this.reverseCache.get(key) ?? null;
+    try {
+      const params = new URLSearchParams({
+        latitude: String(latitude),
+        longitude: String(longitude),
+        localityLanguage: 'en',
+      });
+      const res = await globalThis.fetch(`${REVERSE_URL}?${params}`, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      const data = await res.json().catch(() => ({}));
+      const name = res.ok
+        ? data?.city || data?.locality || data?.principalSubdivision || null
+        : null;
+      this.reverseCache.set(key, name);
+      return name;
+    } catch {
+      return null;
+    }
   }
 
   private async geocode(city: string) {

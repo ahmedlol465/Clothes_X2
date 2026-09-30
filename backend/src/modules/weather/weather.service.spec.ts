@@ -145,6 +145,40 @@ describe('WeatherService', () => {
     });
   });
 
+  describe('gps coordinates', () => {
+    const REVERSE = { city: 'Giza', locality: 'Giza', countryName: 'Egypt' };
+
+    it('skips geocoding and forecasts at the given coordinates', async () => {
+      const fetch = stubFetch([REVERSE, FORECAST]);
+      mocks.push(fetch);
+      const data = await service().current({ lat: 30.01, lon: 31.21 });
+
+      expect(data.source).toBe('open-meteo');
+      expect(data.city).toBe('Giza');
+      // First call is reverse-geocode, second is the forecast at the coords.
+      expect(fetch.mock.calls[0][0]).toContain('reverse-geocode-client');
+      expect(fetch.mock.calls[1][0]).toContain('latitude=30.01');
+      expect(fetch.mock.calls[1][0]).toContain('longitude=31.21');
+    });
+
+    it('rejects impossible coordinates and falls back to the city', async () => {
+      const fetch = stubFetch([GEO, FORECAST]);
+      mocks.push(fetch);
+      const data = await service().current({ lat: 999, lon: 999, city: 'Cairo' });
+
+      expect(fetch.mock.calls[0][0]).toContain('geocoding-api');
+      expect(data.city).toBe('Cairo');
+    });
+
+    it('still works when reverse-geocoding fails', async () => {
+      const fetch = stubFetch(new Error('reverse down'));
+      mocks.push(fetch);
+      // Reverse fails AND the same outage kills the forecast → estimate.
+      const data = await service().current({ lat: 30.01, lon: 31.21 });
+      expect(data.source).toBe('estimate');
+    });
+  });
+
   describe('configuration', () => {
     it('falls back to the configured default city', async () => {
       const fetch = stubFetch([GEO, FORECAST]);

@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/api/api_client.dart';
 import '../core/api/smartwardrobe_api.dart';
+import '../core/location/device_location.dart';
 import 'mock_data.dart';
 import 'models.dart';
 
@@ -635,6 +636,8 @@ class AppState extends ChangeNotifier {
   }
 
   /// Today's pick + live weather for Home (§8.5 + GET /weather/current).
+  /// Weather prefers phone GPS so it reports where the user actually stands,
+  /// and falls back to the default city when location is unavailable.
   Future<void> loadToday({String occasion = 'casual'}) async {
     try {
       final outfits =
@@ -644,12 +647,26 @@ class AppState extends ChangeNotifier {
           Map<String, dynamic>.from(outfits.first as Map),
         );
       }
-      weather = await api.weather();
+      weather = await _loadLiveWeather();
       _markOnline();
       notifyListeners();
     } catch (e) {
       _markOffline(e);
     }
+  }
+
+  /// GPS-first weather: coordinates when available, default city otherwise.
+  /// Returns null only when the backend itself is unreachable.
+  Future<Map<String, dynamic>?> _loadLiveWeather() async {
+    try {
+      final coords = await currentCoords();
+      if (coords != null) {
+        return await api.weather(lat: coords.lat, lon: coords.lon);
+      }
+    } catch (_) {
+      // GPS failed — fall through to the default city below.
+    }
+    return api.weather();
   }
 
   Future<Map<String, dynamic>?> compatibility(

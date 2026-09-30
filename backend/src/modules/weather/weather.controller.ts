@@ -20,8 +20,25 @@ export class WeatherController {
       'usable for outfit scoring, just less precise.',
   })
   @ApiQuery({ name: 'city', required: false, example: 'Cairo' })
+  @ApiQuery({
+    name: 'lat',
+    required: false,
+    example: 30.04,
+    description: 'Phone GPS latitude. With lon, skips geocoding entirely.',
+  })
+  @ApiQuery({ name: 'lon', required: false, example: 31.24 })
   @ApiOkResponse({ type: WeatherResponseDto })
-  async current(@Query('city') city?: string): Promise<WeatherResponseDto> {
-    return this.weather.current(city);
+  async current(
+    @Query('city') city?: string,
+    @Query('lat') lat?: string,
+    @Query('lon') lon?: string,
+  ): Promise<WeatherResponseDto> {
+    const latitude = lat === undefined ? undefined : Number(lat);
+    const longitude = lon === undefined ? undefined : Number(lon);
+    return this.weather.current({
+      city,
+      lat: latitude,
+      lon: longitude,
+    });
   }
 }

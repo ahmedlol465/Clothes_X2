@@ -395,10 +395,30 @@ class SmartWardrobeApi {
   }
 
   // ------------------------------------------------------------ misc
-  Future<Map<String, dynamic>> weather({String city = 'Cairo'}) async =>
-      Map<String, dynamic>.from(
-        await _client.get('/weather/current', {'city': city}),
-      );
+  /// Live weather. Pass phone GPS [lat]/[lon] to report where the user
+  /// actually stands (the backend skips geocoding then); otherwise a [city]
+  /// name is geocoded server-side. Defaults to Cairo.
+  ///
+  /// Unwraps the Express `{weather: …}` envelope so callers always see the
+  /// weather object itself — reading `summary` off the raw envelope is what
+  /// used to pin the Home pill to its fallback text.
+  Future<Map<String, dynamic>> weather({
+    String city = 'Cairo',
+    double? lat,
+    double? lon,
+  }) async {
+    final query = <String, String>{'city': city};
+    if (lat != null && lon != null) {
+      query['lat'] = '$lat';
+      query['lon'] = '$lon';
+    }
+    final res = Map<String, dynamic>.from(
+      await _client.get('/weather/current', query),
+    );
+    final inner = res['weather'];
+    if (inner is Map) return Map<String, dynamic>.from(inner);
+    return res;
+  }
 
   Future<bool> ping() async {
     try {
