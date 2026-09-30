@@ -52,7 +52,9 @@ class ApiClient {
   ///
   /// Events emitted by `POST /ai/chat/stream`:
   ///   `delta` → `{delta, synthetic?}`  text fragments
-  ///   `error` → `{error, recoverable?}`
+  ///   `notice` → `{error, recoverable: true}` the LLM was unavailable and the
+  ///              rule engine answered instead; the reply still arrives
+  ///   `error` → `{error, recoverable?}` terminal, no reply is coming
   ///   `done`  → the assembled turn (reply, outfit, weather, memory, source)
   Stream<({String event, Map<String, dynamic> data})> streamPost(
     String path,

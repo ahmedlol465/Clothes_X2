@@ -785,8 +785,12 @@ class AppState extends ChangeNotifier {
             if (delta.isEmpty) break;
             text += delta;
             onDelta(text);
+          case 'notice':
+            // The LLM was busy or unavailable; the server falls back to the rule
+            // engine and still delivers a complete reply via `delta` + `done`.
+            break;
           case 'error':
-            // Recoverable: the server still emits `done` with a rule reply.
+            // Terminal: no reply is coming for this turn.
             break;
           case 'done':
             done = frame.data;

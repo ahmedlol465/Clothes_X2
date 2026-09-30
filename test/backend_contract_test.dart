@@ -220,6 +220,7 @@ void main() {
       }));
 
       var event = '';
+      var notices = 0;
       final res = await req.close();
       expect(res.statusCode, lessThan(400));
       await for (final line
@@ -232,10 +233,20 @@ void main() {
             deltas.add((payload as Map)['delta'] as String);
           } else if (event == 'done') {
             done = (payload as Map).cast<String, dynamic>();
+          } else if (event == 'notice') {
+            // The free tier is busy much of the time, so a `notice` - LLM
+            // unavailable, rule engine answered - is expected and still has to
+            // produce a complete, grounded turn. That is asserted below.
+            notices++;
           } else if (event == 'error') {
-            fail('stream reported an error: $line');
+            fail('stream reported a terminal error: $line');
           }
         }
+      }
+      // A notice is only legitimate if the stream still delivered the reply.
+      if (notices > 0) {
+        expect(deltas, isNotEmpty,
+            reason: 'a notice must still be followed by a full reply');
       }
     } finally {
       client.close();

@@ -929,7 +929,11 @@ app.post('/ai/chat/stream', optionalAuth, async (req, res) => {
       }
     } catch (e) {
       console.error('[ai] stream failed:', e.message);
-      send('error', { error: e.message, recoverable: true });
+      // Not terminal: the rule engine fills in a full reply below. Signalling
+      // this as `error` made a healthy, completed stream look like a failure to
+      // the client and to the contract test, so degraded-but-working gets its
+      // own event and `error` keeps meaning "no reply is coming".
+      send('notice', { error: e.message, recoverable: true, source: 'rules' });
       source = 'rules';
     }
   }
@@ -956,6 +960,12 @@ app.post('/ai/chat/stream', optionalAuth, async (req, res) => {
   }
 
   const outfit = ctx.outfit || null;
+  // A stream that produced no text at all is the one genuinely terminal case:
+  // there is no reply to deliver, so the client is told with a real `error`.
+  if (!text.trim()) {
+    send('error', { error: 'The stylist could not produce a reply.', recoverable: false });
+    return res.end();
+  }
   // The streaming turn is the one the app actually uses, so it learns too.
   if (learnTurn(ctx.memory, message, null)) memoryStore.write(db, ctx.memory);
   db.conversations.push({
