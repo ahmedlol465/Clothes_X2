@@ -65,3 +65,21 @@ backend/data/
 
 # Playwright MCP debug artifacts
 .playwright-mcp/
+
+# Python clothing-analysis service
+ai-service/.venv/
+ai-service/.model-cache/
+ai-service/.pip-cache/
+ai-service/.pytest_cache/
+ai-service/**/__pycache__/
+*.py[cod]
+*.egg-info/
+
+# pip logs captured while installing the service
+ai-service/*.err
+ai-service/*.log
+
+# Benchmark data: images and reports are large and regenerable. The annotation
+# schema is documented in ai-service/README.md and the template is tracked.
+ai-service/data/evaluation/reports/
+ai-service/data/raw/

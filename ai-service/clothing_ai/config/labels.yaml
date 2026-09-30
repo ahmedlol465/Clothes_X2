@@ -1,0 +1,204 @@
+# SmartWardrobe clothing AI — attribute vocabulary.
+#
+# Everything the pipeline can output is declared here. Changing the class list
+# never requires a code change: stages read this file through
+# `clothing_ai.config.vocabulary.AttributeVocabulary`.
+#
+# Prompt-length note: Marqo-FashionSigLIP uses a 64-token text context
+# (verified from open_clip_config.json), so `prompt` must stay a short noun
+# phrase. Long descriptive sentences get truncated and silently degrade the
+# zero-shot head. `tests/test_vocabulary.py` fails the build if a prompt is long.
+
+version: 1
+defaults:
+  # Detector vocabulary, verified from the model card of
+  # yainage90/fashion-object-detection (MIT). It only has 7 coarse classes, so
+  # the fine category split is delegated to the FashionSigLIP zero-shot head.
+  detector: fashion_detr
+  detector_min_score: 0.35
+  detector_nms_iou: 0.55
+  detector_max_items: 8
+  # Minimum box area as a fraction of the image; below this the "garment" is
+  # usually a logo, a button or a background artefact.
+  detector_min_area_ratio: 0.006
+  # A detection that fills more than this fraction of the frame is treated as
+  # "the subject" rather than one of several garments.
+  detector_max_area_ratio: 0.98
+
+attributes:
+  # ---------------------------------------------------------------- category --
+  # `group` ties each fine label to one of the detector's coarse classes so the
+  # fusion layer can restrict candidates. `group: other` is never gated in.
+  category:
+    name: category
+    source: fashion
+    enabled: true
+    gated_by_detector: true
+    # §10: nothing in this pipeline may claim more than 0.95 confidence. The
+    # detector gate is what makes category reliable, not the raw softmax, so
+    # the cap sits just under the ceiling rather than at it.
+    confidence_cap: 0.95
+    labels:
+      - { value: t-shirt,  group: top,     prompt: "a t-shirt" }
+      - { value: shirt,    group: top,     prompt: "a button-up shirt" }
+      - { value: blouse,   group: top,     prompt: "a blouse" }
+      - { value: tank-top, group: top,     prompt: "a tank top" }
+      - { value: sweater,  group: top,     prompt: "a knit sweater" }
+      - { value: hoodie,   group: top,     prompt: "a hoodie" }
+      - { value: jacket,   group: outer,   prompt: "a jacket" }
+      - { value: coat,     group: outer,   prompt: "a wool coat" }
+      - { value: blazer,   group: outer,   prompt: "a blazer suit jacket" }
+      - { value: vest,     group: outer,   prompt: "a sleeveless vest" }
+      - { value: dress,    group: dress,   prompt: "a dress" }
+      - { value: skirt,    group: bottom,  prompt: "a skirt" }
+      - { value: jeans,    group: bottom,  prompt: "a pair of jeans" }
+      - { value: pants,    group: bottom,  prompt: "a pair of trousers" }
+      - { value: shorts,   group: bottom,  prompt: "a pair of shorts" }
+      - { value: sneakers, group: shoes,   prompt: "sneakers" }
+      - { value: boots,    group: shoes,   prompt: "boots" }
+      - { value: heels,    group: shoes,   prompt: "high heel shoes" }
+      - { value: hat,      group: hat,     prompt: "a hat" }
+      - { value: bag,      group: bag,     prompt: "a handbag" }
+      - { value: scarf,    group: other,   prompt: "a scarf" }
+      - { value: other,    group: other,   prompt: "a piece of clothing" }
+
+  # ------------------------------------------------------------ subcategory --
+  # A second, optional pass run only when the coarse category is ambiguous.
+  subcategory:
+    name: subcategory
+    source: fashion
+    enabled: false
+    gated_by_detector: false
+    confidence_cap: 0.9
+    labels:
+      - { value: denim-jacket, group: outer, prompt: "a denim jacket" }
+      - { value: bomber-jacket, group: outer, prompt: "a bomber jacket" }
+      - { value: leather-jacket, group: outer, prompt: "a leather jacket" }
+      - { value: puffer-jacket, group: outer, prompt: "a puffer jacket" }
+      - { value: trench-coat, group: outer, prompt: "a trench coat" }
+      - { value: hoodie-pullover, group: top, prompt: "a pullover hoodie" }
+      - { value: zip-hoodie, group: top, prompt: "a zip up hoodie" }
+      - { value: polo-shirt, group: top, prompt: "a polo shirt" }
+      - { value: dress-shirt, group: top, prompt: "a formal dress shirt" }
+      - { value: graphic-tee, group: top, prompt: "a graphic print t-shirt" }
+      - { value: plain-tee, group: top, prompt: "a plain t-shirt" }
+      - { value: straight-jeans, group: bottom, prompt: "straight leg jeans" }
+      - { value: skinny-jeans, group: bottom, prompt: "skinny jeans" }
+      - { value: wide-leg-jeans, group: bottom, prompt: "wide leg jeans" }
+      - { value: cargo-pants, group: bottom, prompt: "cargo pants" }
+      - { value: joggers, group: bottom, prompt: "jogger sweatpants" }
+      - { value: running-shoes, group: shoes, prompt: "running shoes" }
+      - { value: high-tops, group: shoes, prompt: "high top sneakers" }
+      - { value: Chelsea-boots, group: shoes, prompt: "chelsea boots" }
+      - { value: ankle-boots, group: shoes, prompt: "ankle boots" }
+
+  # ---------------------------------------------------------------- material --
+  # Material is the weakest attribute from a 224px zero-shot head, so its
+  # confidence is capped in `confidence/scoring.py` and it is not allowed to
+  # drive the final verdict on its own.
+  material:
+    name: material
+    source: fashion
+    gated_by_detector: false
+    confidence_cap: 0.72
+    labels:
+      - { value: cotton,    prompt: "a shirt made of cotton" }
+      - { value: denim,     prompt: "blue denim jeans" }
+      - { value: wool,      prompt: "a sweater made of wool" }
+      - { value: leather,   prompt: "a leather jacket" }
+      - { value: linen,     prompt: "a shirt made of linen" }
+      - { value: silk,      prompt: "a shirt made of silk" }
+      - { value: polyester, prompt: "a polyester sports shirt" }
+      - { value: nylon,     prompt: "a nylon jacket" }
+      - { value: knit,      prompt: "a knitted jumper" }
+      - { value: suede,     prompt: "a suede jacket" }
+      - { value: lace,      prompt: "a lace top" }
+      - { value: other,     prompt: "a piece of clothing" }
+
+  # ----------------------------------------------------------------- pattern --
+  pattern:
+    name: pattern
+    source: fashion
+    gated_by_detector: false
+    confidence_cap: 0.88
+    labels:
+      - { value: solid,       prompt: "a plain solid coloured t-shirt" }
+      - { value: striped,     prompt: "a striped shirt" }
+      - { value: checked,     prompt: "a checked shirt" }
+      - { value: plaid,       prompt: "a tartan plaid shirt" }
+      - { value: floral,      prompt: "a floral print dress" }
+      - { value: geometric,   prompt: "a shirt with a geometric print" }
+      - { value: graphic,     prompt: "a t-shirt with a big printed graphic" }
+      - { value: camouflage,  prompt: "a camouflage jacket" }
+      - { value: polka-dot,   prompt: "a polka dot shirt" }
+      - { value: abstract,    prompt: "a shirt with an abstract print" }
+      - { value: paisley,     prompt: "a paisley print shirt" }
+      - { value: other,       prompt: "a piece of clothing" }
+
+  # -------------------------------------------------------------------- color --
+  # A *second, independent* colour opinion from the vision-language head.
+  #
+  # §10 requires that a disagreement between the classifier and KMeans is
+  # surfaced rather than silently resolved. The measured colour stays
+  # authoritative (it is a direct observation of masked pixels), but this head
+  # is what makes the disagreement detectable at all: without it there is
+  # nothing to compare against.
+  #
+  # This head is never used as the reported colour.
+  color:
+    name: color
+    source: fashion
+    enabled: true
+    gated_by_detector: false
+    confidence_cap: 0.75
+    labels:
+      - { value: black,       prompt: "a black garment" }
+      - { value: white,       prompt: "a white garment" }
+      - { value: gray,        prompt: "a grey garment" }
+      - { value: beige,       prompt: "a beige garment" }
+      - { value: cream,       prompt: "a cream coloured garment" }
+      - { value: brown,       prompt: "a brown garment" }
+      - { value: red,         prompt: "a red garment" }
+      - { value: pink,        prompt: "a pink garment" }
+      - { value: orange,      prompt: "an orange garment" }
+      - { value: yellow,      prompt: "a yellow garment" }
+      - { value: green,       prompt: "a green garment" }
+      - { value: olive,       prompt: "an olive green garment" }
+      - { value: blue,        prompt: "a blue garment" }
+      - { value: navy blue,   prompt: "a navy blue garment" }
+      - { value: sky blue,    prompt: "a light blue garment" }
+      - { value: denim blue,  prompt: "a denim garment" }
+      - { value: purple,      prompt: "a purple garment" }
+      - { value: lavender,    prompt: "a lavender garment" }
+
+  # ------------------------------------------------------------------- style --
+  # Overlaps the `Formality` vocabulary already used by the NestJS backend, so
+  # the values below map 1:1 onto `backend/src/common/vocabularies.ts`.
+  style:
+    name: style
+    source: fashion
+    gated_by_detector: false
+    confidence_cap: 0.8
+    labels:
+      - { value: casual,          prompt: "a casual everyday outfit" }
+      - { value: formal,           prompt: "a formal business suit" }
+      - { value: business-casual, prompt: "business casual office wear" }
+      - { value: sporty,          prompt: "sporty athletic sportswear" }
+      - { value: streetwear,      prompt: "streetwear fashion" }
+      - { value: vintage,         prompt: "a vintage retro garment" }
+      - { value: minimalist,      prompt: "a minimalist plain garment" }
+      - { value: elegant,         prompt: "an elegant refined outfit" }
+      - { value: outdoor,         prompt: "an outdoor hiking jacket" }
+      - { value: smart-casual,    prompt: "smart casual smart office wear" }
+
+# Mapping from the MIT detector's 7 classes onto the coarse `group` vocabulary.
+# Unknown detector labels are treated as `other`, which is never gated in.
+detector_group_map:
+  top: top
+  outer: outer
+  bottom: bottom
+  dress: dress
+  shoes: shoes
+  hat: hat
+  bag: bag
+  other: other

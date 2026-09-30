@@ -8,6 +8,7 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { HealthController } from './common/health.controller';
 import { configFactories } from './config/configuration';
 import { DatabaseModule } from './database/database.module';
+import { AiModule } from './modules/ai/ai.module';
 import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
@@ -21,6 +22,7 @@ import { AuthModule } from './modules/auth/auth.module';
     DatabaseModule,
     AppCacheModule,
     AuthModule,
+    AiModule,
   ],
   controllers: [HealthController],
   providers: [

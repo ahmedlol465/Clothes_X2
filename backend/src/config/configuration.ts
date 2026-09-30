@@ -100,6 +100,13 @@ export const aiConfig = registerAs('ai', () => ({
   mode: process.env.AI_MODE ?? 'rule-engine',
   minMatchScore: int(process.env.AI_MIN_MATCH_SCORE, 55),
   maxRecommendations: int(process.env.AI_MAX_RECOMMENDATIONS, 12),
+  /**
+   * Floor below which an analysed attribute must not overwrite a value the user
+   * typed. "Never let a model overwrite a human" is a wardrobe decision, so it
+   * lives here rather than in the Python service, which has no idea a human was
+   * involved.
+   */
+  minStoreConfidence: Number.parseFloat(process.env.AI_MIN_STORE_CONFIDENCE ?? '0.2') || 0.2,
 }));
 
 export const queueConfig = registerAs('queue', () => ({

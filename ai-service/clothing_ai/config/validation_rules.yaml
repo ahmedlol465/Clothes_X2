@@ -1,0 +1,114 @@
+# Deterministic consistency rules.
+#
+# The validator is data-driven: each rule is a declarative predicate evaluated
+# by `validation/validator.py`. Adding a rule must not mean editing Python.
+#
+# Predicates available (see validator.py::_evaluate):
+#   category_in / category_not_in   category value membership
+#   material_in / material_not_in   material value membership
+#   pattern_in / pattern_not_in     pattern value membership
+#   groups_disagree                the category and material belong to
+#                                  different compatibility groups
+#   color_source_disagree          the zero-shot colour and the KMeans colour
+#                                  name different families
+#   color_contrast_excessive       the primary and secondary colours cannot
+#                                  appear together on one garment
+#   pattern_color_conflict         a strong pattern is reported on a colour
+#                                  that the KMeans pass found flat
+#   detector_label_mismatch        the final category is impossible for the
+#                                  coarse label the detector produced
+#
+# `severity: error` makes the result inconsistent and applies `penalty`.
+# `severity: advisory` records the flag but does not erode confidence.
+
+version: 1
+
+rules:
+  # ---------------------------------------------------------------- coherence --
+  - code: silk_must_be_lightweight
+    description: Silk is not used for denim, leather or heavy outerwear.
+    severity: error
+    penalty: 0.22
+    when: { material_in: [silk] }
+    require: { category_not_in: [jeans, jacket, coat, boots, blazer] }
+    message: "material `silk` is implausible for category `{category}`"
+
+  - code: denim_implies_bottom_or_outer
+    description: Denim is either jeans, denim outerwear or a denim skirt.
+    severity: error
+    penalty: 0.18
+    when: { material_in: [denim] }
+    require: { category_in: [jeans, pants, shorts, skirt, jacket, coat] }
+    message: "material `denim` does not match category `{category}`"
+
+  - code: leather_requires_outerwear_or_shoes
+    description: Leather garments are outerwear, footwear or a biker jacket.
+    severity: error
+    penalty: 0.20
+    when: { material_in: [leather, suede] }
+    require: { category_in: [jacket, coat, blazer, boots, heels, vest, sneakers] }
+    message: "material `{material}` does not match category `{category}`"
+
+  - code: knit_requires_soft_category
+    description: Knitwear is tops and cardigans, not footwear.
+    severity: error
+    penalty: 0.18
+    when: { material_in: [knit] }
+    require: { category_in: [sweater, hoodie, shirt, blazer, vest, t-shirt] }
+    message: "material `knit` does not match category `{category}`"
+
+  - code: no_sportswear_material_on_formal_category
+    description: Polyester and nylon are performance fabrics, not suit tailoring.
+    severity: advisory
+    penalty: 0.06
+    when: { material_in: [polyester, nylon] }
+    require: { category_not_in: [blazer, coat] }
+    message: "performance material `{material}` on category `{category}`"
+
+  # ------------------------------------------------------------ colour checks --
+  - code: color_source_disagreement
+    description: The zero-shot colour and the KMeans colour name different families.
+    severity: error
+    penalty: 0.12
+    when: { color_source_disagree: true }
+    message: "zero-shot colour `{zeroshot_color}` disagrees with measured colour `{measured_color}`"
+
+  - code: color_contrast_impossible
+    description: Colours that cannot coexist on one garment.
+    severity: error
+    penalty: 0.15
+    when: { color_contrast_excessive: true }
+    message: "colours `{primary}` and `{secondary}` are implausible together"
+
+  - code: pattern_on_flat_colour
+    description: A reported pattern with a perfectly flat measured colour.
+    severity: advisory
+    penalty: 0.07
+    # The trigger itself checks that a non-solid pattern was reported and a
+    # colour was measured. There is deliberately no `require` clause here: a
+    # suppressor would have to name the exceptions, and the two cases that
+    # would be named (`solid`, and "no pattern at all") are absences of
+    # evidence, handled by the trigger rather than by suppressing the rule.
+    when: { pattern_color_conflict: true }
+    message: "pattern `{pattern}` on an almost single-colour measurement"
+
+  # ------------------------------------------------- detector / classifier ----
+  - code: category_outside_detected_group
+    description: The final category is not a child of the detected coarse group.
+    severity: error
+    penalty: 0.20
+    when: { detector_label_mismatch: true }
+    message: "category `{category}` contradicts the detected `{coarse_label}`"
+
+  - code: occluded_garment
+    description: SAM 2 could not isolate the garment.
+    severity: error
+    penalty: 0.25
+    when: { segmentation_filled: true }
+    message: "segmentation fell back to the bounding box; colour may include background"
+
+# Material families used by the `material_in`/`groups_disagree` predicates.
+material_groups:
+  heavy: [wool, leather, suede, denim, knit]
+  lightweight: [silk, lace, linen, cotton]
+  performance: [polyester, nylon]

@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartwardrobe-clothing-ai"
+version = "0.1.0"
+description = "Local, free, open-source clothing analysis pipeline for SmartWardrobe"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "UNLICENSED" }
+
+# Versions below were resolved against the live PyPI index on 2026-09-29.
+# See docs/MODEL_LICENSES.md for the licence audit of every model dependency.
+dependencies = [
+    # torchvision pins an exact torch, so the pair must move together.
+    "torch==2.14.0",
+    "torchvision==0.29.0",
+    "open_clip_torch==3.3.0",
+    "transformers==5.17.0",
+    "accelerate==1.15.0",
+    "huggingface-hub>=0.34",
+    "timm>=1.0.17",
+    "numpy==2.5.3",
+    "opencv-python==4.14.0.94",
+    "scikit-learn==1.9.1",
+    "pillow==12.3.0",
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.54.0",
+    "python-multipart==0.0.32",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "pyyaml>=6.0",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+# Background removal. Not on the default path: SAM 2 already yields a garment
+# mask, so rembg is only a fallback for single-item images with no detection.
+rembg = ["rembg==2.0.85", "onnxruntime==1.30.0"]
+dev = [
+    "pytest==9.1.1",
+    "pytest-cov>=5.0",
+    "httpx>=0.27",
+    "matplotlib>=3.9",
+]
+
+[project.scripts]
+clothing-ai-evaluate = "clothing_ai.evaluation.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["clothing_ai*"]
+
+[tool.setuptools.package-data]
+clothing_ai = ["config/labels.yaml", "config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+filterwarnings = ["ignore::DeprecationWarning"]
+# `slow` needs real weights, so it is opt-in: run it with `-m slow` or
+# `--include-slow`. Without the filter a default run would try to download
+# gigabytes and look like a hang.
+addopts = "-m 'not slow'"
+markers = [
+    "slow: exercises a real pretrained model; needs the HF cache populated",
+    "integration: crosses module boundaries",
+]
