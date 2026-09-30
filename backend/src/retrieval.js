@@ -11,9 +11,9 @@
  *
  *   Stage 2 (the LLM): pick from that shortlist.
  *
- * Scoring uses local sentence embeddings from `@xenova/transformers` when they
- * are installed AND the model loads. Both are optional: if the dependency is
- * missing, the model fails to download, or EMBEDDINGS=off, we fall back to a
+ * Scoring uses local sentence embeddings from `@huggingface/transformers` when
+ * they are installed AND the model loads. Both are optional: if the dependency
+ * is missing, the model fails to download, or EMBEDDINGS=off, we fall back to a
  * scored lexical matcher that needs nothing at all. Callers never have to care
  * which one is active — `status()` reports it.
  */
@@ -24,12 +24,26 @@ const tax = require('./taxonomy');
 const EMBED_MODEL = 'Xenova/all-MiniLM-L6-v2';
 const DIM = 384;
 
+/**
+ * Candidate runtime packages, best first.
+ *
+ * `@huggingface/transformers` is the maintained line. `@xenova/transformers` is
+ * its retired predecessor and is kept only as a fallback for installs that
+ * still have it, because it drags in a critical advisory in protobufjs — so it
+ * is not listed in optionalDependencies any more.
+ */
+const RUNTIMES = [
+  { name: '@huggingface/transformers', options: { dtype: 'q8' } },
+  { name: '@xenova/transformers', options: { quantized: true } },
+];
+
 /** Runtime state — lazily initialised, never required at module load. */
 const state = {
   attempted: false,
   ready: false,
   disabled: /^(off|0|false|no)$/i.test(String(process.env.EMBEDDINGS || '')),
   pipeline: null,
+  runtime: null,
   error: null,
   // itemId -> { hash, vector }
   vectors: new Map(),
@@ -67,23 +81,29 @@ async function init() {
     state.error = 'disabled via EMBEDDINGS=off';
     return false;
   }
-  try {
-    // Optional dependency — a missing package must never break the server.
-    const { pipeline, env } = require('@xenova/transformers');
-    if (env?.backends?.onnx?.wasm) {
-      env.backends.onnx.wasm.numThreads = 1;
+  const tried = [];
+  for (const runtime of RUNTIMES) {
+    try {
+      // Optional dependency — a missing package must never break the server.
+      const { pipeline, env } = require(runtime.name);
+      if (env?.backends?.onnx?.wasm) {
+        env.backends.onnx.wasm.numThreads = 1;
+      }
+      state.pipeline = await pipeline('feature-extraction', EMBED_MODEL, runtime.options);
+      state.ready = true;
+      state.runtime = runtime.name;
+      return true;
+    } catch (e) {
+      // A missing package is expected; anything else is worth surfacing, but
+      // only once every candidate has been tried.
+      tried.push(`${runtime.name}: ${e.code === 'MODULE_NOT_FOUND'
+        ? 'not installed'
+        : String(e.message || e).slice(0, 120)}`);
     }
-    state.pipeline = await pipeline('feature-extraction', EMBED_MODEL, {
-      quantized: true,
-    });
-    state.ready = true;
-  } catch (e) {
-    state.ready = false;
-    state.error = e.code === 'MODULE_NOT_FOUND'
-      ? '@xenova/transformers not installed'
-      : String(e.message || e).slice(0, 160);
   }
-  return state.ready;
+  state.ready = false;
+  state.error = tried.join(' | ').slice(0, 300);
+  return false;
 }
 
 /** Fire-and-forget warm-up so the first real request is not the slow one. */
@@ -344,6 +364,7 @@ async function status() {
   return {
     embeddings: state.ready,
     model: state.ready ? EMBED_MODEL : null,
+    runtime: state.runtime,
     dim: state.ready ? DIM : null,
     cachedVectors: state.vectors.size,
     disabled: state.disabled,

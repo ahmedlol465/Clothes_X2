@@ -53,6 +53,10 @@ enabled and how to turn the rest on.
 | Photo → outfit matching | LLM key **with vision** | plan derived from the filename |
 | Semantic retrieval | `npm run embeddings:install` | lexical scorer |
 
+`npm install` does **not** pull the embedding runtime in — it is an
+`optionalDependencies` entry. Skipping it keeps the install small; the server
+detects its absence and uses the lexical scorer instead.
+
 Free keys, no card required:
 
 ```bash
@@ -66,6 +70,14 @@ GEMINI_API_KEY=…        # https://aistudio.google.com/apikey  (default)
 # LLM_TIMEOUT_MS=25000
 # EMBEDDINGS=on         # `off` forces lexical retrieval
 ```
+
+Embeddings run locally on `Xenova/all-MiniLM-L6-v2` (384-dim, downloaded once
+on first use). `retrieval.js` tries `@huggingface/transformers` first and falls
+back to the retired `@xenova/transformers` if you already have it installed; it
+is deliberately not listed as a dependency because that package pulls a
+critical `protobufjs` advisory into the tree. If neither is installed, or
+`EMBEDDINGS=off`, retrieval silently degrades to the lexical scorer and
+`GET /ai/capabilities` reports `fallback: "lexical"` with the reason.
 
 ### Modules
 
