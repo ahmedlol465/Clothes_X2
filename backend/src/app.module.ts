@@ -10,6 +10,7 @@ import { configFactories } from './config/configuration';
 import { DatabaseModule } from './database/database.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { WeatherModule } from './modules/weather/weather.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { AuthModule } from './modules/auth/auth.module';
     AppCacheModule,
     AuthModule,
     AiModule,
+    WeatherModule,
   ],
   controllers: [HealthController],
   providers: [

@@ -66,6 +66,7 @@ async function bootstrap() {
       .addTag('Planner', 'Section 8.6')
       .addTag('Shopping', 'Section 8.7')
       .addTag('Admin', 'Section 8.8')
+      .addTag('Weather', 'Live conditions via keyless Open-Meteo')
       .build();
 
     const document = SwaggerModule.createDocument(app, documentConfig);

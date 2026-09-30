@@ -84,7 +84,9 @@ export const storageConfig = registerAs('storage', () => ({
 }));
 
 export const weatherConfig = registerAs('weather', () => ({
-  provider: process.env.WEATHER_PROVIDER ?? 'openweathermap',
+  // Keyless Open-Meteo first, so a fresh checkout gets real conditions.
+  // Set WEATHER_PROVIDER=openweathermap with a key to prefer that instead.
+  provider: process.env.WEATHER_PROVIDER ?? 'open-meteo',
   apiKey: process.env.OPENWEATHERMAP_API_KEY,
   units: process.env.WEATHER_UNITS ?? 'metric',
   defaultLocation: process.env.DEFAULT_LOCATION ?? 'Cairo',
