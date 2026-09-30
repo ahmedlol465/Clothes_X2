@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
@@ -8,9 +6,14 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
+import '../../data/app_state.dart';
 import '../../data/mock_data.dart';
 
 /// Frame 1 - the branded splash shown while the app boots.
+///
+/// Doubles as the session check: the stored bearer token is validated against
+/// `GET /users/me` while the wordmark is on screen, so a returning user lands
+/// in the app and a signed-out one lands on Login.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -19,21 +22,39 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
-  Timer? _timer;
+  /// The wordmark is held on screen for this long regardless of how fast the
+  /// session check responds, so a cached token does not produce a jarring
+  /// flash straight into the shell.
+  static const _minimumSplash = Duration(milliseconds: 2200);
+
+  /// Guards against routing twice when the timer and the session check finish
+  /// close together.
+  bool _routed = false;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer(const Duration(milliseconds: 2200), () {
-      if (!mounted) return;
-      Navigator.of(context).pushReplacementNamed(Routes.onboarding);
-    });
+    _boot();
   }
 
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
+  /// The splash ends only when the session check has settled *and* the minimum
+  /// display time has passed. Routing on a bare timer would strand a valid
+  /// user on onboarding whenever the network is slower than the animation.
+  Future<void> _boot() async {
+    await AppState.instance.restoreSession();
+    await Future<void>.delayed(_minimumSplash);
+    _route();
+  }
+
+  /// Authenticated users skip onboarding; everyone else sees it as before.
+  void _route() {
+    if (!mounted || _routed) return;
+    _routed = true;
+    if (AppState.instance.isAuthenticated) {
+      Navigator.of(context).pushReplacementNamed(Routes.shell);
+      return;
+    }
+    Navigator.of(context).pushReplacementNamed(Routes.onboarding);
   }
 
   @override

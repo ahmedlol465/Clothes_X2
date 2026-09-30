@@ -122,12 +122,14 @@ class ApiClient {
     }
   }
 
-  /// Multipart photo upload for the Add Clothes flow (§8.3).
-  /// [files] are (filename, bytes, mimeType) tuples. Returns decoded JSON.
+  /// Multipart image upload for the Add Clothes flow (§8.3) and the avatar
+  /// endpoint. [files] are (filename, bytes, mimeType) tuples. Returns decoded
+  /// JSON.
   Future<dynamic> uploadPhotos(
     String path,
     List<({String filename, List<int> bytes, String mimeType})> files, {
     Duration? timeout,
+    String field = 'photos',
   }) async {
     final uri = Uri.parse('${ApiConfig.baseUrl}$path');
     try {
@@ -144,7 +146,7 @@ class ApiClient {
         }
         request.files.add(
           http.MultipartFile.fromBytes(
-            'photos',
+            field,
             f.bytes,
             filename: f.filename,
             contentType: contentType,
