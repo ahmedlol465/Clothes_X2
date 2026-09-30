@@ -38,6 +38,50 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
+/**
+ * Request bodies come from a phone, a web client and curl, so a field the route
+ * expects to be an array can legitimately arrive as `null`. A destructuring
+ * default only fills in `undefined`, never `null`, so `{ itemIds = [] }` left
+ * `itemIds` as null and `itemIds.length` threw — which under Express 4 becomes
+ * an unhandled rejection and takes the whole process down. One malformed
+ * request could restart the backend for every user.
+ *
+ * These normalisers run before every route.
+ */
+function asArray(v) {
+  if (Array.isArray(v)) return v;
+  if (v == null) return [];
+  // A single value where a list was expected is a client slip, not an error.
+  return [v];
+}
+function asString(v, fallback = '') {
+  return typeof v === 'string' ? v : (v == null ? fallback : String(v));
+}
+app.use((req, _res, next) => {
+  if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+    const b = req.body;
+    for (const key of ['itemIds', 'items', 'history', 'garments', 'events', 'tags', 'colors', 'styles', 'avoid']) {
+      if (key in b) b[key] = asArray(b[key]);
+    }
+    if ('message' in b) b.message = asString(b.message);
+    if ('occasion' in b && b.occasion != null) b.occasion = asString(b.occasion);
+    if ('variant' in b && b.variant != null) b.variant = asString(b.variant);
+  }
+  next();
+});
+
+// -------------------------------------------------- resilience backstops
+// Express 4 does not catch a rejected promise from an async route handler, and
+// Node's default is to exit on an unhandled rejection. So a single thrown error
+// anywhere in a handler used to kill the whole backend. Log loudly and keep
+// serving instead: one bad request should never take the API down for everyone.
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err && err.stack ? err.stack : err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err && err.stack ? err.stack : err);
+});
+
 // ------------------------------------------------------------------ helpers
 function auth(req, res, next) {
   // Demo-grade bearer auth (swap for @nestjs/jwt + passport-jwt in prod).
@@ -1373,6 +1417,15 @@ function groupBy(rows, key) {
   for (const r of rows) out[r[key]] = (out[r[key]] || 0) + 1;
   return out;
 }
+
+// Terminal error handler. Registered after every route so it actually sees
+// their errors - Express only reaches a handler registered later in the stack.
+// Anything that still throws becomes a 500 rather than a dropped connection.
+app.use((err, req, res, _next) => {
+  console.error(`[error] ${req.method} ${req.originalUrl}:`, err && err.stack ? err.stack : err);
+  if (res.headersSent) return res.end();
+  res.status(500).json({ error: 'Internal server error.' });
+});
 
 const server = app.listen(PORT, () =>
   console.log(

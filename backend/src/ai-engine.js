@@ -106,16 +106,27 @@ function beamSearch(pool, ctx = {}) {
   const { weather = {}, occasion = '' } = ctx;
   const month = ctx.month ?? (new Date().getMonth() + 1);
   const scoreCtx = { occasion, weather, styleProfile: ctx.styleProfile, memory: ctx.memory, month };
+  const anchor = ctx.anchor || null;
 
   let beams = [{ pieces: [], score: 0 }];
+  const anchorSlot = anchor ? tax.slotOf(anchor) : null;
 
   for (const { slot, required } of tax.OUTFIT_SLOTS) {
-    // Outerwear is only relevant when it is cold or the occasion is dressy.
+    // Outerwear is only relevant when it is cold or the occasion is dressy -
+    // unless the user explicitly asked for an outer layer, in which case
+    // dropping it would answer a different question than the one asked.
     const needsOuter = slot === 'outerwear'
-      && (Number(weather.tempC ?? 24) <= 21 || (tax.occasionTarget(occasion) ?? 2) >= 4);
+      && (anchorSlot === 'outerwear'
+        || Number(weather.tempC ?? 24) <= 21
+        || (tax.occasionTarget(occasion) ?? 2) >= 4);
     if (slot === 'outerwear' && !needsOuter) continue;
 
-    let candidates = rankSlot(pool, slot, ctx);
+    // When the user names a garment, that garment is not a hint - it is a
+    // requirement. Ranking alone used to drop it, so the reply would claim it
+    // was "anchored" on a piece the outfit did not contain.
+    const candidates = anchor && tax.slotOf(anchor) === slot
+      ? [anchor]
+      : rankSlot(pool, slot, ctx);
     if (!candidates.length) {
       if (required) continue; // tolerate an incomplete wardrobe
       continue;
@@ -162,9 +173,12 @@ function generateOutfits(wardrobe = [], opts = {}) {
 
   // Anchor: build every outfit around one specific piece when asked.
   const anchor = opts.anchorItemId ? pool.find((i) => i.id === opts.anchorItemId) : null;
-  if (anchor) pool = [anchor, ...pool.filter((i) => i.id !== anchor.id)];
-
-  const beams = beamSearch(pool, { occasion, weather, styleProfile, memory, focus: opts.focus });
+  // Passed into the search, not just reordered in the pool - `rankSlot` scores
+  // and re-sorts, so putting the anchor first was cosmetic and it could still
+  // be left out of the result.
+  const beams = beamSearch(pool, {
+    occasion, weather, styleProfile, memory, focus: opts.focus, anchor,
+  });
   if (!beams.length) return [];
 
   const month = opts.month ?? (new Date().getMonth() + 1);
@@ -458,13 +472,77 @@ function detectOccasion(q = '') {
   return null;
 }
 
+/** Natural-language reading of an occasion key, for offline replies. */
+const OCCASION_PHRASE = {
+  casual: 'an easy everyday look',
+  'university casual': 'a campus look',
+  meeting: 'work',
+  'date night': 'an evening out',
+  'formal dinner': 'something smarter',
+  party: 'a party',
+  beach: 'the beach',
+  gym: 'the gym',
+  travel: 'travelling',
+};
+
+function occasionPhrase(key) {
+  return OCCASION_PHRASE[key] || key;
+}
+
+/**
+ * A grammatical weather sentence.
+ *
+ * `weather.summary` is built for a widget ("Partly Cloudy 27°C"), so dropping
+ * it into a sentence produced "It's Partly Cloudy 27°C. For casual: ...". The
+ * offline stylist is the fallback the user actually reads when the free tier is
+ * busy, so it has to sound written rather than assembled.
+ */
+function weatherLine(weather = {}) {
+  const t = Number(weather.tempC);
+  const feels = Number(weather.feelsLike);
+  const cond = String(weather.condition || '').trim();
+  const city = weather.city ? ` in ${weather.city}` : '';
+  if (!Number.isFinite(t)) return cond ? `It's ${cond}${city}.` : '';
+  const feelsPart = Number.isFinite(feels) && Math.abs(feels - t) >= 2
+    ? ` (feels like ${Math.round(feels)}°)`
+    : '';
+  const condPart = cond ? ` and ${cond}` : '';
+  return `It's ${Math.round(t)}°C${feelsPart}${condPart}${city}.`;
+}
+
+/**
+ * Find a garment the user named directly, e.g. "show me my loafers" for
+ * "Leather Loafers".
+ *
+ * Matching is on the head noun ("loafers" from "Leather Loafers") rather than
+ * the whole name, because users say "my loafers", not "my leather loafers".
+ * The colour words are excluded so this cannot outrank an explicit colour ask.
+ */
+function findNamedItem(q, wardrobe = []) {
+  const COLOR_WORDS = /^(blue|white|beige|black|navy|brown|grey|gray|green|red|olive|cream|denim|khaki|tan|charcoal|indigo|leather|cotton|wool|linen|silk|suede|cashmere)$/;
+  let best = null;
+  for (const item of wardrobe) {
+    const name = tax.normalize(item.name || '');
+    if (name.length < 4) continue;
+    const head = name.split(/\s+/).pop();
+    // Too generic to anchor on: "shirt" alone matches almost any wardrobe.
+    if (head.length < 5 || COLOR_WORDS.test(head)) continue;
+    if (!new RegExp(`\\b${head}(s|es)?\\b`, 'i').test(q)) continue;
+    if (!best || head.length > best.head.length) best = { item, head };
+  }
+  return best ? best.item : null;
+}
+
 /**
  * Offline stylist: intent routing + outfit attachment.
  *
- * This is the fallback whenever no LLM key is configured, so it has to carry
- * the product on its own. It is memory-aware (honours "less formal", "not
- * these shoes", "I haven't worn it") and always returns a real outfit built
- * from the user's own wardrobe.
+ * This is the fallback whenever no LLM key is configured — and, in practice,
+ * whenever the free tier is too busy to answer inside the time budget, which
+ * is most of the time under load. It has to carry the product on its own, so
+ * it leans on `scoring.explain()` for the reasoning rather than restating a
+ * list of garment names. It is memory-aware (honours "less formal", "not these
+ * shoes", "I haven't worn it") and always returns a real outfit built from the
+ * user's own wardrobe.
  */
 function chatReply(message, ctx = {}) {
   const q = tax.normalize(message);
@@ -483,7 +561,7 @@ function chatReply(message, ctx = {}) {
       ...extra,
     })[0] || null;
 
-  const intro = `It's ${weather.summary || `${weather.tempC}°C`}`;
+  const intro = weatherLine(weather);
 
   // "I haven't worn X" / "surprise me" → rotation.
   if (/(haven'?t worn|not worn|unworn|new (thing|piece)|something different|surprise me|rotate)/.test(q)) {
@@ -493,7 +571,7 @@ function chatReply(message, ctx = {}) {
     const fresh = chosen?.items.find((i) => !i.timesWorn);
     return {
       text: chosen && fresh
-        ? `${intro} and your least-worn piece is the ${fresh.name} (never worn). I built a look around it:`
+        ? `${intro} Your least-worn piece is the ${fresh.name} (never worn) — I built a look around it.`
         : 'You have worn everything at least once, so I mixed the pieces you reach for least.',
       outfit: chosen || null,
       intent: 'build_outfit',
@@ -509,7 +587,7 @@ function chatReply(message, ctx = {}) {
     const outfit = build(detectOccasion(q) || 'casual', { excludeIds: excluded });
     return {
       text: outfit
-        ? `${intro} — swapped the ${target ? target[0] : 'shoes'} out. This works instead:`
+        ? `${intro} Swapped the ${target ? target[0] : 'shoes'} out — this works instead.`
         : `Add a ${target ? target[0] : 'second'} option and I will show you the swap.`,
       outfit,
       intent: 'remix',
@@ -519,14 +597,14 @@ function chatReply(message, ctx = {}) {
   // Formality shifts.
   if (/(less formal|more casual|casual version|relaxed|laid ?back|toned down)/.test(q)) {
     return {
-      text: `${intro} — here is the relaxed version, same palette:`,
+      text: `${intro} Here is the relaxed version, same palette.`,
       outfit: build('casual'),
       intent: 'remix',
     };
   }
   if (/(more formal|dress (it )?up|sharper|smarter|business)/.test(q)) {
     return {
-      text: `${intro} — dressed up. Blazers and smarter shoes dial the formality in:`,
+      text: `${intro} Dressed up — a blazer and smarter shoes dial the formality in.`,
       outfit: build('formal dinner'),
       intent: 'remix',
     };
@@ -536,10 +614,12 @@ function chatReply(message, ctx = {}) {
   if (/(weather|hot|cold|rain|snow|temperature|what do i wear today)/.test(q)) {
     const outfit = build(detectOccasion(q) || 'casual');
     const advice = Number(weather.tempC) >= 26
-      ? 'keep it light and breathable'
-      : Number(weather.tempC) <= 14 ? 'layer up' : 'a mid-layer is enough';
+      ? 'so keep it light and breathable'
+      : Number(weather.tempC) <= 14 ? 'so layer up' : 'so a mid-layer is enough';
     return {
-      text: `${weather.summary} in ${weather.city || 'your area'} — ${advice}. ${outfit ? `Try:` : ''}`,
+      text: outfit
+        ? `${intro} ${advice.charAt(0).toUpperCase()}${advice.slice(1)} — ${outfit.explanation}`
+        : `${intro} ${advice.charAt(0).toUpperCase()}${advice.slice(1)}.`,
       outfit,
       intent: 'build_outfit',
     };
@@ -551,29 +631,44 @@ function chatReply(message, ctx = {}) {
     const outfit = build('travel');
     const list = packingList(wardrobe, { days });
     return {
-      text: `${intro}. Pack ${list.items.length} pieces for ${days} days — that gives you about ${list.outfitsEstimate} combinations without repeating anything.`,
+      text: `${intro} Pack ${list.items.length} pieces for ${days} days — that gives you about ${list.outfitsEstimate} combinations without repeating anything.`,
       outfit,
       intent: 'build_outfit',
       packing: list,
     };
   }
 
-  // Colour-led.
+  // Anchored request: the user named a garment or a colour, so the reply must
+  // actually contain it. The verb gate used to require an explicit
+  // "wear/put/show", which meant "what about my navy shirt?" fell through to the
+  // generic branch and answered with an outfit containing no navy at all.
   const colorWord = q.match(/\b(blue|white|beige|black|navy|brown|grey|gray|green|red|olive|cream|denim|khaki|tan|charcoal|indigo)\b/);
-  if (colorWord && /(wear|put|with|around|find|show|has)/.test(q)) {
-    const anchor = wardrobe.find((i) => tax.normalize(i.color).includes(colorWord[0]));
-    if (anchor) {
-      const outfit = build(detectOccasion(q) || 'casual', { anchorItemId: anchor.id });
-      return {
-        text: outfit
-          ? `Anchored on the ${anchor.name} — ${outfit.match}% match built around it:`
-          : `The ${anchor.name} is the anchor. Add a bottom and shoes to complete it.`,
-        outfit,
-        intent: 'build_outfit',
-      };
-    }
+  const colorWanted = colorWord
+    && /(wear|put|with|around|find|show|has|about|got|own|any)/.test(q);
+  const byColor = colorWanted
+    ? wardrobe.find((i) => tax.normalize(i.color).includes(colorWord[0]))
+    : null;
+  const named = findNamedItem(q, wardrobe);
+
+  // Both signals present - "my navy shirt". Prefer the garment that is actually
+  // that colour, then the colour alone. A colour is a stronger signal than a
+  // bare noun like "shirt", which would otherwise anchor on whichever shirt the
+  // wardrobe happened to list first.
+  const anchor = (byColor && named) ? (findNamedItem(q, [byColor]) || byColor) : (byColor || named);
+
+  if (anchor) {
+    const outfit = build(detectOccasion(q) || 'casual', { anchorItemId: anchor.id });
     return {
-      text: `You do not own anything in ${colorWord[0]}. I could suggest what to add — want that?`,
+      text: outfit
+        ? `${intro} Built around your ${anchor.name} — ${outfit.explanation}`
+        : `I can start from the ${anchor.name}, but I need a bottom and shoes to complete the look.`,
+      outfit,
+      intent: 'build_outfit',
+    };
+  }
+  if (colorWanted) {
+    return {
+      text: `${intro} You do not own anything in ${colorWord[0]}. I could suggest what to add — want that?`,
       outfit: null,
       intent: 'learn',
     };
@@ -586,7 +681,7 @@ function chatReply(message, ctx = {}) {
     const outfit = build(use);
     return {
       text: outfit
-        ? `${intro}. For ${use}: ${outfit.pieces.join(' + ')} — ${outfit.match}% match.`
+        ? `${intro} For ${occasionPhrase(use)}, ${outfit.explanation}`
         : 'Add a few pieces and I will build looks from what you own.',
       outfit,
       intent: 'build_outfit',
@@ -594,12 +689,24 @@ function chatReply(message, ctx = {}) {
     };
   }
 
+  // Greetings and acknowledgements. Answering "hello" with a random outfit is
+  // worse than saying hello back — the user has not asked for anything yet.
+  if (/^(hi|hey|hello|yo|sup|thanks|thank you|ok|okay|cool|nice|great|awesome|perfect|bye|goodbye|cheers|good (morning|afternoon|evening|night))\b/.test(q)) {
+    return {
+      text: `${intro} Tell me where you are headed — university, work, a date, a trip — and I will build it from what you own.`,
+      outfit: null,
+      intent: 'chat',
+    };
+  }
+
   // Fallback: still return something wearable rather than a dead end.
   const outfit = build(occasion || 'casual');
   const note = memory.facts?.[0]?.text;
   return {
+    // `explanation` already opens with the pieces, so listing them again here
+    // just made the sentence repeat itself.
     text: outfit
-      ? `${note ? `${cap(note)} — and yes, ` : ''}${outfit.pieces.join(' + ')} is your strongest ${outfit.match}% look right now. ${outfit.explanation}`
+      ? `${note ? `${cap(note)} — and yes, ` : ''}${outfit.explanation}`
       : 'Tell me the occasion — university, date, work, travel — and I will build it from your wardrobe.',
     outfit,
     intent: 'chat',

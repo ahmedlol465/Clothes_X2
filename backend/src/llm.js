@@ -28,6 +28,51 @@ const weatherService = require('./weather');
 const TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) || 25000;
 
 /**
+ * Wall-clock budget for one logical call, shared across every model tried.
+ *
+ * Giving each model in the rotation its own full `TIMEOUT_MS` meant one hung
+ * model cost 25s and the next cost another 25s, so a congested free tier turned
+ * a 7s reply into a 38s wait before the caller finally fell back. The deadline
+ * below is spent instead of restated.
+ */
+const TOTAL_BUDGET_MS = Number(process.env.LLM_TOTAL_TIMEOUT_MS) || TIMEOUT_MS;
+
+/**
+ * Budget for the preferred model.
+ *
+ * Deliberately less than the whole budget: on a cold start there is no
+ * known-good model yet, so if the first one hangs we still want time left to
+ * try another rather than reporting failure to the user. When a model fails
+ * *fast* (404/503 answer in under a second) this cap is irrelevant — the next
+ * model simply gets what is left.
+ */
+const FIRST_ATTEMPT_MS = Number(process.env.LLM_FIRST_ATTEMPT_MS) || 17000;
+
+/**
+ * Budget for a fallback model. Later models are only reached when the first
+ * failed fast or hung, so they share what remains.
+ */
+const FALLBACK_ATTEMPT_MS = 9000;
+
+/** Below this there is no point starting another request. */
+const MIN_ATTEMPT_MS = 2000;
+
+/**
+ * Cut-off for a stream that stops producing tokens entirely. Generous, because
+ * a free tier can pause mid-answer under load — this exists to catch a dead
+ * connection, not a slow one.
+ */
+const STREAM_STALL_MS = 60000;
+
+/**
+ * How long a model stays skipped after it times out or reports a busy tier.
+ *
+ * Free tiers go busy in waves, and without this the preferred model is retried
+ * on every single request even though it just burned the entire budget.
+ */
+const MODEL_COOLDOWN_MS = Number(process.env.LLM_MODEL_COOLDOWN_MS) || 90000;
+
+/**
  * Candidate model lists, most-preferred first.
  *
  * Free-tier model IDs turn over fast — Google alone retired
@@ -81,6 +126,9 @@ const PROVIDERS = {
 /** provider name → the model id that last worked, so we stop re-probing. */
 const workingModel = new Map();
 
+/** `${provider}/${model}` → epoch ms before which the model is skipped. */
+const modelCooldown = new Map();
+
 /** Statuses worth trying the next model for rather than reporting failure. */
 const ROTATE_ON = [400, 404, 429, 500, 502, 503, 504];
 
@@ -89,7 +137,8 @@ const ROTATE_ON = [400, 404, 429, 500, 502, 503, 504];
  *
  * An explicit `LLM_MODEL` is honoured exactly (the user asked for it, so a
  * failure should be reported rather than silently routed elsewhere). Otherwise
- * the last known-good model leads, then the rest of the list.
+ * the last known-good model leads, then the rest of the list, minus anything
+ * still cooling down from a recent failure.
  */
 function modelChain(p, { vision = false } = {}) {
   const list = (vision ? p.visionModels || p.models : p.models) || [];
@@ -97,8 +146,18 @@ function modelChain(p, { vision = false } = {}) {
   const override = process.env.LLM_MODEL;
   if (override) return [override];
   const known = workingModel.get(p.name);
-  const rest = list.filter((m) => m !== known);
-  return known ? [known, ...rest] : list;
+  const now = Date.now();
+  const usable = list.filter((m) => {
+    const until = modelCooldown.get(`${p.name}/${m}`);
+    if (until && until > now) return false;
+    if (until) modelCooldown.delete(`${p.name}/${m}`);
+    return true;
+  });
+  // If the cooldown list emptied the wardrobe, ignore it rather than give up:
+  // a stale outage should not permanently disable the stylist.
+  const candidates = usable.length ? usable : list;
+  const rest = candidates.filter((m) => m !== known);
+  return known && candidates.includes(known) ? [known, ...rest] : candidates;
 }
 
 function pickProvider() {
@@ -153,27 +212,51 @@ function assertProvider() {
 }
 
 /**
- * Run `attempt(model)` against each candidate model in turn, keeping the first
- * success and remembering it. A model is abandoned on a retired/quota/busy
- * status or on a transport error; a real refusal (401/403) aborts immediately
- * because rotating will not fix bad credentials.
+ * Run `attempt(model, timeoutMs)` against each candidate model in turn, keeping
+ * the first success and remembering it.
+ *
+ * The first candidate is expected to work, so it gets most of the budget.
+ * Later candidates only run when an earlier one failed fast (404/503 answer in
+ * under a second) or hung, and they are capped so a second slow model cannot
+ * double the user's wait. A model is abandoned on a retired/quota/busy status
+ * or a transport error, and put on a short cooldown so the next request skips
+ * it instead of re-paying the timeout. A real refusal (401/403) aborts
+ * immediately because rotating will not fix bad credentials.
  */
 async function withModelRotation(p, { vision = false }, attempt) {
   const chain = modelChain(p, { vision });
   if (!chain.length) throw new Error(`No model configured for ${p.name}.`);
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
   let lastError;
-  for (const model of chain) {
+  for (const [index, model] of chain.entries()) {
+    const remaining = deadline - Date.now();
+    const budget = index === 0
+      ? Math.min(remaining, FIRST_ATTEMPT_MS)
+      : Math.min(remaining, FALLBACK_ATTEMPT_MS);
+    if (budget < MIN_ATTEMPT_MS) {
+      lastError = lastError || new Error(
+        `Out of LLM time budget after ${chain.length - index} model(s) for ${p.name}.`,
+      );
+      break;
+    }
     try {
-      const result = await attempt(model);
+      const result = await attempt(model, budget);
       if (result == null) {
         lastError = new Error(`Empty reply from ${p.name}/${model}`);
+        modelCooldown.set(`${p.name}/${model}`, Date.now() + MODEL_COOLDOWN_MS);
         continue;
       }
       workingModel.set(p.name, model);
+      modelCooldown.delete(`${p.name}/${model}`);
       return result;
     } catch (e) {
       lastError = e;
-      if (!ROTATE_ON.includes(e.status)) throw e;
+      if (!ROTATE_ON.includes(e.status) && e.name !== 'TimeoutError' && !/abort|timeout/i.test(String(e.message))) {
+        throw e;
+      }
+      // A busy or slow model is skipped for a while so the next request does not
+      // spend its whole budget rediscovering the same outage.
+      modelCooldown.set(`${p.name}/${model}`, Date.now() + MODEL_COOLDOWN_MS);
     }
   }
   throw lastError || new Error(`Every model for ${p.name} failed.`);
@@ -201,7 +284,7 @@ async function postCompletion(p, model, payload, { timeout = TIMEOUT_MS } = {}) 
 /** Raw chat-completions call. Returns { text, tokens }. */
 async function complete({ system, user, maxTokens = 500, temperature = 0.7, json = false }) {
   const p = assertProvider();
-  const data = await withModelRotation(p, {}, async (model) => {
+  const data = await withModelRotation(p, {}, async (model, timeout) => {
     const res = await postCompletion(p, model, {
       temperature,
       max_tokens: maxTokens,
@@ -210,7 +293,7 @@ async function complete({ system, user, maxTokens = 500, temperature = 0.7, json
         ...(system ? [{ role: 'system', content: system }] : []),
         { role: 'user', content: user },
       ],
-    });
+    }, { timeout });
     // A reasoning model can spend the whole token budget thinking and return
     // no content. That is a model problem, not a request problem — rotate.
     if (!res?.choices?.[0]?.message?.content) return null;
@@ -395,31 +478,46 @@ async function* streamChat({ message, history = [], wardrobe = [], weather, styl
 
   // Rotation is resolved before any token is yielded: once a stream starts we
   // cannot restart it without duplicating the text the user already saw.
-  const res = await withModelRotation(p, {}, async (model) => {
-    const response = await fetch(`${p.base}/chat/completions`, {
-      method: 'POST',
-      headers: authHeaders(p),
-      body: JSON.stringify({
-        model,
-        temperature: 0.75,
-        max_tokens: 500,
-        stream: true,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-      }),
-      signal: AbortSignal.timeout(TIMEOUT_MS + 10000),
-    });
-    if (!response.ok || !response.body) {
-      const err = await response.json().catch(() => ({}));
-      const e = new Error(
-        err?.error?.message || `Stream HTTP ${response.status} (${p.name}/${model})`,
-      );
-      e.status = response.status;
+  const { response: res, settle } = await withModelRotation(p, {}, async (model, timeout) => {
+    // Two phases, because they need different deadlines. Getting the response
+    // headers is a request the rotation is allowed to abandon. Reading the body
+    // is the model already talking to the user, so it must not be aborted by a
+    // request timeout — doing that truncated replies mid-sentence.
+    const controller = new AbortController();
+    const headerTimer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(`${p.base}/chat/completions`, {
+        method: 'POST',
+        headers: authHeaders(p),
+        body: JSON.stringify({
+          model,
+          temperature: 0.75,
+          max_tokens: 500,
+          stream: true,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) {
+        const err = await response.json().catch(() => ({}));
+        const e = new Error(
+          err?.error?.message || `Stream HTTP ${response.status} (${p.name}/${model})`,
+        );
+        e.status = response.status;
+        clearTimeout(headerTimer);
+        throw e;
+      }
+      clearTimeout(headerTimer);
+      // Only a stalled stream should still be cut short, not a slow one.
+      const stallTimer = setTimeout(() => controller.abort(), STREAM_STALL_MS);
+      return { response, settle: () => clearTimeout(stallTimer) };
+    } catch (e) {
+      clearTimeout(headerTimer);
       throw e;
     }
-    return response;
   });
 
   let full = '';
@@ -427,32 +525,36 @@ async function* streamChat({ message, history = [], wardrobe = [], weather, styl
   const decoder = new TextDecoder();
   let buffer = '';
 
-  for await (const chunk of res.body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    // SSE frames are separated by a blank line.
-    let split;
-    while ((split = buffer.indexOf('\n\n')) !== -1) {
-      const frame = buffer.slice(0, split);
-      buffer = buffer.slice(split + 2);
-      for (const line of frame.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        let json;
-        try {
-          json = JSON.parse(payload);
-        } catch {
-          continue;
-        }
-        if (json.usage) usage = json.usage;
-        const delta = json.choices?.[0]?.delta?.content;
-        if (delta) {
-          full += delta;
-          yield { delta };
+  try {
+    for await (const chunk of res.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      // SSE frames are separated by a blank line.
+      let split;
+      while ((split = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+        for (const line of frame.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const payload = trimmed.slice(5).trim();
+          if (!payload || payload === '[DONE]') continue;
+          let json;
+          try {
+            json = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+          if (json.usage) usage = json.usage;
+          const delta = json.choices?.[0]?.delta?.content;
+          if (delta) {
+            full += delta;
+            yield { delta };
+          }
         }
       }
     }
+  } finally {
+    settle();
   }
 
   yield {
@@ -472,7 +574,7 @@ const VISION_ATTRS = ['category', 'color', 'style', 'pattern', 'material', 'seas
 /** Clothing analysis from a photo. Returns { attrs, tokens }. */
 async function analyzeImage({ dataUrl, hint = '' }) {
   const p = assertProvider();
-  const data = await withModelRotation(p, { vision: true }, async (model) => {
+  const data = await withModelRotation(p, { vision: true }, async (model, timeout) => {
     const res = await postCompletion(p, model, {
       temperature: 0.2,
       max_tokens: 300,
@@ -496,7 +598,7 @@ async function analyzeImage({ dataUrl, hint = '' }) {
           ],
         },
       ],
-    }, { timeout: 30000 });
+    }, { timeout: Math.min(timeout, 30000) });
     if (!res?.choices?.[0]?.message?.content) return null;
     return res;
   });
@@ -531,7 +633,7 @@ const OUTFIT_VISION_SYSTEM =
  */
 async function describeOutfit({ dataUrl, hint = '' }) {
   const p = assertProvider();
-  const data = await withModelRotation(p, { vision: true }, async (model) => {
+  const data = await withModelRotation(p, { vision: true }, async (model, timeout) => {
     const res = await postCompletion(p, model, {
       temperature: 0.2,
       max_tokens: 600,
@@ -545,7 +647,7 @@ async function describeOutfit({ dataUrl, hint = '' }) {
           ],
         },
       ],
-    }, { timeout: 30000 });
+    }, { timeout: Math.min(timeout, 30000) });
     if (!res?.choices?.[0]?.message?.content) return null;
     return res;
   });

@@ -228,7 +228,7 @@ function learnChat(memory, message) {
   // sentiment gate too: "stop showing me linen" carries no praise or complaint.
   for (const clause of parts) {
     const never = clause.match(
-      /\b(?:never|don'?t want|do not want|stop|avoid)\b\s*(?:wearing|wear|show(?:ing)?|putting|using)?\s*(?:me\s+)?(?:any\s+)?([a-z][a-z -]{2,30})/i,
+      /\b(?:never|don'?t want|do not want|stop|avoid)\b\s*(?:to\s+)?(?:wearing|wear(?:s|ing)?|show(?:s|ing)?|put(?:s|ting)?|us(?:ing|e|ed|es))?\s*(?:me\s+)?(?:any\s+)?([a-z][a-z -]{2,30})/i,
     );
     if (!never) continue;
     // "jeans or t-shirts" is two exclusions, not one phrase to be truncated.
