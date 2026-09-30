@@ -473,3 +473,194 @@ class StyleColor {
   final int value;
   final int? count;
 }
+
+// ----------------------------------------------------------------- profile
+
+/// The signed-in account plus its editable style blueprint.
+///
+/// Mirrors `GET /users/me` on the backend, where the subject is always resolved
+/// from the bearer token — the client never sends a user id. Every field other
+/// than [id] is either read-only (email, createdAt) or editable through
+/// [toStyleProfileJson] / [copyWith].
+@immutable
+class UserProfile {
+  const UserProfile({
+    required this.id,
+    required this.name,
+    required this.email,
+    required this.createdAt,
+    this.avatarUrl,
+    this.favoriteColors = const [],
+    this.preferredStyles = const [],
+    this.heightCm,
+    this.weightKg,
+    this.fitPreference = 'regular',
+    this.topSize,
+    this.bottomSize,
+    this.shoeSize,
+  });
+
+  final String id;
+  final String name;
+  final String email;
+
+  /// Account creation time from the backend, used for "Member since".
+  final DateTime? createdAt;
+
+  /// Optional remote avatar. Null falls back to the bundled placeholder.
+  final String? avatarUrl;
+
+  final List<String> favoriteColors;
+  final List<String> preferredStyles;
+  final int? heightCm;
+  final int? weightKg;
+
+  /// One of slim | regular | relaxed | oversized.
+  final String fitPreference;
+
+  final String? topSize;
+  final String? bottomSize;
+  final String? shoeSize;
+
+  /// "Member since Sep 2026", derived from [createdAt] — never a hardcoded
+  /// string. Returns null when the backend sent no timestamp.
+  String? get memberSince {
+    final at = createdAt;
+    if (at == null) return null;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return 'Member since ${months[at.month - 1]} ${at.year}';
+  }
+
+  /// Initials for the avatar fallback.
+  String get initials {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return '?';
+    if (parts.length == 1) return parts.first[0].toUpperCase();
+    return (parts.first[0] + parts.last[0]).toUpperCase();
+  }
+
+  /// The first name, used for the avatar fallback and greetings.
+  String get firstName => name.trim().split(RegExp(r'\s+')).first;
+
+  /// "178 cm", or null when the user has not set a height.
+  String? get heightLabel => heightCm == null ? null : '$heightCm cm';
+
+  /// "Medium (M)" style summary, preferring the top size then the bottom one.
+  String? get sizeLabel {
+    final top = topSize;
+    if (top != null) return '${_sizeName(top)} ($top)';
+    final bottom = bottomSize;
+    if (bottom != null) return 'Waist $bottom';
+    return null;
+  }
+
+  static String _sizeName(String size) => switch (size) {
+        'XS' => 'Extra Small',
+        'S' => 'Small',
+        'M' => 'Medium',
+        'L' => 'Large',
+        'XL' => 'Extra Large',
+        'XXL' => 'Double Extra Large',
+        _ => size,
+      };
+
+  /// Body & fit line shown under the specs tiles.
+  String? get fitLabel => switch (fitPreference) {
+        'slim' => 'Slim fit',
+        'regular' => 'Regular fit',
+        'relaxed' => 'Relaxed fit',
+        'oversized' => 'Oversized fit',
+        _ => null,
+      };
+
+  /// Human readable weight, e.g. "72 kg".
+  String? get weightLabel => weightKg == null ? null : '$weightKg kg';
+
+  /// Parses the `/users/me` payload. Tolerant by design: a missing style
+  /// profile or a null measurement renders as "not set" rather than throwing.
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
+    final style = (json['styleProfile'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final sizes = (style['sizes'] as Map?)?.cast<String, dynamic>() ?? const {};
+    return UserProfile(
+      id: '${json['id'] ?? ''}',
+      name: '${json['name'] ?? ''}'.trim().isEmpty
+          ? '${json['email'] ?? 'Member'}'
+          : '${json['name']}'.trim(),
+      email: '${json['email'] ?? ''}',
+      createdAt: DateTime.tryParse('${json['createdAt'] ?? ''}')?.toLocal(),
+      avatarUrl: json['avatarUrl'] == null
+          ? null
+          : '${json['avatarUrl']}'.trim().isEmpty
+              ? null
+              : '${json['avatarUrl']}',
+      favoriteColors: _strings(style['favoriteColors']),
+      preferredStyles: _strings(style['preferredStyles']),
+      heightCm: _intOrNull(style['heightCm']),
+      weightKg: _intOrNull(style['weightKg']),
+      fitPreference: '${style['fitPreference'] ?? 'regular'}',
+      topSize: _nullIfEmpty(sizes['top']),
+      bottomSize: _nullIfEmpty(sizes['bottom']),
+      shoeSize: _nullIfEmpty(sizes['shoe'] ?? sizes['shoes']),
+    );
+  }
+
+  /// Only the editable style fields, shaped for `PATCH /users/me/style-profile`.
+  Map<String, dynamic> toStyleProfileJson() => {
+        'favoriteColors': favoriteColors,
+        'preferredStyles': preferredStyles,
+        'heightCm': heightCm,
+        'weightKg': weightKg,
+        'fitPreference': fitPreference,
+        'sizes': {
+          'top': topSize,
+          'bottom': bottomSize,
+          'shoe': shoeSize,
+        },
+      };
+
+  UserProfile copyWith({
+    String? name,
+    String? email,
+    String? avatarUrl,
+    List<String>? favoriteColors,
+    List<String>? preferredStyles,
+    int? heightCm,
+    int? weightKg,
+    String? fitPreference,
+    String? topSize,
+    String? bottomSize,
+    String? shoeSize,
+  }) =>
+      UserProfile(
+        id: id,
+        name: name ?? this.name,
+        email: email ?? this.email,
+        createdAt: createdAt,
+        avatarUrl: avatarUrl ?? this.avatarUrl,
+        favoriteColors: favoriteColors ?? this.favoriteColors,
+        preferredStyles: preferredStyles ?? this.preferredStyles,
+        heightCm: heightCm ?? this.heightCm,
+        weightKg: weightKg ?? this.weightKg,
+        fitPreference: fitPreference ?? this.fitPreference,
+        topSize: topSize ?? this.topSize,
+        bottomSize: bottomSize ?? this.bottomSize,
+        shoeSize: shoeSize ?? this.shoeSize,
+      );
+
+  static List<String> _strings(Object? value) => [
+        for (final v in (value as List? ?? const [])) '$v'.trim(),
+      ].where((v) => v.isNotEmpty).toList();
+
+  static int? _intOrNull(Object? value) {
+    if (value is num) return value.toInt();
+    return int.tryParse('${value ?? ''}'.trim());
+  }
+
+  static String? _nullIfEmpty(Object? value) {
+    final text = '${value ?? ''}'.trim();
+    return text.isEmpty ? null : text;
+  }
+}

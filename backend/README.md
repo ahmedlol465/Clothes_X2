@@ -20,7 +20,10 @@ to bundled mock data and shows an "Offline demo" badge.
 ## API map (spec §8)
 
 Auth: `POST /auth/register|login|refresh|logout`
-Users: `GET|PATCH /users/me`, `GET|PATCH /users/me/style-profile`
+Users: `GET|PATCH /users/me`, `POST /users/me/avatar`,
+`GET|PATCH /users/me/style-profile`
+Storage: `POST /wardrobe/upload` (multipart `photos[]`, max 10 × 10MB),
+files are written to `backend/storage/` and served at `GET /storage/<file>`
 Wardrobe: `GET|POST /wardrobe/items`, `GET|PATCH|DELETE /wardrobe/items/:id`,
 `POST /wardrobe/items/batch-upload`, `GET /wardrobe/collections`
 AI: `POST /ai/analyze-clothing|generate-outfit|calculate-compatibility|style-profile|wardrobe-gap|packing-list|chat`,

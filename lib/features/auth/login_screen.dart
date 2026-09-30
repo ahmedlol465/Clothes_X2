@@ -132,15 +132,6 @@ class _LoginScreenState extends State<LoginScreen> {
               action: 'Create Account',
               onTap: () => Navigator.of(context).pushNamed(Routes.signUp),
             ),
-            const SizedBox(height: Insets.xl),
-            Center(
-              child: TextButton(
-                onPressed: () => Navigator.of(
-                  context,
-                ).pushNamedAndRemoveUntil(Routes.shell, (_) => false),
-                child: const Text('Explore the demo'),
-              ),
-            ),
           ],
         ),
       ),
