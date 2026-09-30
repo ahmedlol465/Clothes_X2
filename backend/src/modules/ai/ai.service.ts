@@ -29,6 +29,19 @@ export interface AnalyzeParams extends AnalyzeOptions {
 }
 
 /**
+ * Wire contract with the Python clothing-analysis service
+ * (`ai-service/clothing_ai/api/analyze.py`).
+ *
+ * The multipart file field MUST be `file` and the request id MUST travel as
+ * the `x-request-id` header: anything else is a 422 or a silently dropped id.
+ * Both sides' unit tests stub the transport, so these constants — and the
+ * contract test below — are what guard the real call.
+ */
+const PYTHON_FILE_FIELD = 'file';
+const REQUEST_ID_HEADER = 'x-request-id';
+const ANALYZE_PATH = '/api/v1/clothing/analyze';
+
+/**
  * Client for the Python clothing-analysis service.
  *
  * The design rule here is that the AI service being down must not take the
@@ -111,13 +124,15 @@ export class AiService {
   /** Raw call. Kept separate so the mapping can be tested without a network. */
   private async post(params: AnalyzeParams): Promise<ClothingServiceEnvelope> {
     const form = new FormData();
-    form.append('image', new Blob([new Uint8Array(params.image)], { type: params.mimeType ?? 'image/jpeg' }), params.filename ?? 'image.jpg');
+    form.append(PYTHON_FILE_FIELD, new Blob([new Uint8Array(params.image)], { type: params.mimeType ?? 'image/jpeg' }), params.filename ?? 'image.jpg');
     if (params.includeEmbedding) form.append('include_embedding', 'true');
     if (params.includeMask) form.append('include_mask', 'true');
-    if (params.requestId) form.append('request_id', params.requestId);
 
-    const response = await this.client.post<ClothingServiceEnvelope>('/api/v1/clothing/analyze', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    const response = await this.client.post<ClothingServiceEnvelope>(ANALYZE_PATH, form, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+        ...(params.requestId ? { [REQUEST_ID_HEADER]: params.requestId } : {}),
+      },
     });
     return response.data;
   }

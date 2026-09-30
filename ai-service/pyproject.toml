@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = { text = "UNLICENSED" }
 
 # Versions below were resolved against the live PyPI index on 2026-09-29.
-# See docs/MODEL_LICENSES.md for the licence audit of every model dependency.
+# See MODEL_LICENSES.md for the licence audit of every model dependency.
 dependencies = [
     # torchvision pins an exact torch, so the pair must move together.
     "torch==2.14.0",

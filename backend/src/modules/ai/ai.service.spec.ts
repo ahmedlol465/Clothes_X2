@@ -382,6 +382,66 @@ describe('AiService', () => {
   });
 });
 
+describe('wire contract with the Python service', () => {
+  const RealFormData = globalThis.FormData;
+
+  /** Records every `append`, so the test sees the exact multipart field names. */
+  function recordFormData() {
+    const appends: Array<{ name: string; value: unknown; options: unknown[] }> = [];
+    class RecordingFormData {
+      append(name: string, value: unknown, ...options: unknown[]) {
+        appends.push({ name, value, options });
+      }
+    }
+    (globalThis as unknown as { FormData: unknown }).FormData = RecordingFormData;
+    return appends;
+  }
+
+  afterEach(() => {
+    globalThis.FormData = RealFormData;
+  });
+
+  it('sends the image as `file` to /api/v1/clothing/analyze', async () => {
+    const ai = service();
+    const fields = recordFormData();
+    const post = jest.fn().mockResolvedValue({ success: true, data: fullResult });
+    (ai as unknown as { client: { post: unknown } }).client = { post };
+
+    await (ai as unknown as { post: (p: unknown) => Promise<unknown> }).post({
+      image: Buffer.from('bytes'),
+      filename: 'shirt.jpg',
+      mimeType: 'image/png',
+      requestId: 'req-1',
+    });
+
+    // The Python endpoint declares `file: UploadFile = File(...)`: sending
+    // `image` here is a 422 that degrades into a silent fallback.
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls[0][0]).toBe('/api/v1/clothing/analyze');
+    expect(fields.map((f) => f.name)).toContain('file');
+    expect(fields.map((f) => f.name)).not.toContain('image');
+    expect(fields.map((f) => f.name)).not.toContain('request_id');
+  });
+
+  it('carries the request id as an x-request-id header', async () => {
+    const ai = service();
+    recordFormData();
+    const post = jest.fn().mockResolvedValue({ success: true, data: fullResult });
+    (ai as unknown as { client: { post: unknown } }).client = { post };
+
+    await (ai as unknown as { post: (p: unknown) => Promise<unknown> }).post({
+      image: Buffer.from('bytes'),
+      requestId: 'req-1',
+    });
+
+    // The service reads `x-request-id` from headers; a form field with the
+    // same value would be silently dropped.
+    expect(post.mock.calls[0][2]).toMatchObject({
+      headers: expect.objectContaining({ 'x-request-id': 'req-1' }),
+    });
+  });
+});
+
 describe('AiService as a Nest provider', () => {
   it('is injectable and exports itself', async () => {
     const moduleRef = await Test.createTestingModule({
