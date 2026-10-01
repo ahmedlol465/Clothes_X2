@@ -44,6 +44,14 @@ class ApiClient {
 
   Future<dynamic> delete(String path) => _send('DELETE', path);
 
+  /// As [post], for endpoints that call the LLM and need [ApiConfig.aiTimeout].
+  Future<dynamic> postAi(String path, [Map<String, dynamic>? body]) =>
+      _send('POST', path, body: body, timeout: ApiConfig.aiTimeout);
+
+  /// As [get], for endpoints that call the LLM and need [ApiConfig.aiTimeout].
+  Future<dynamic> getAi(String path, [Map<String, String>? query]) =>
+      _send('GET', path, query: query, timeout: ApiConfig.aiTimeout);
+
   /// Server-sent-events POST ([path]) used by the stylist stream.
   ///
   /// Yields `({String event, Map<String, dynamic> data})` for every `event:`
@@ -67,7 +75,13 @@ class ApiClient {
 
     final http.StreamedResponse response;
     try {
-      response = await _http.send(request).timeout(timeout ?? ApiConfig.timeout);
+      // Covers headers only: the server flushes them before it does any work, so
+      // this is not the time the model takes to think. It is generous anyway,
+      // because a busy event loop must not be reported to the user as a
+      // disconnected backend.
+      response = await _http
+          .send(request)
+          .timeout(timeout ?? ApiConfig.aiTimeout);
     } on TimeoutException {
       throw ApiException('Stylist timed out.');
     } on http.ClientException {
@@ -187,6 +201,7 @@ class ApiClient {
     String path, {
     Map<String, String>? query,
     Map<String, dynamic>? body,
+    Duration? timeout,
   }) async {
     final uri = Uri.parse('${ApiConfig.baseUrl}$path')
         .replace(queryParameters: query);
@@ -194,8 +209,9 @@ class ApiClient {
       final request = http.Request(method, uri)
         ..headers.addAll(_headers);
       if (body != null) request.body = jsonEncode(body);
-      final streamed =
-          await _http.send(request).timeout(ApiConfig.timeout);
+      final streamed = await _http
+          .send(request)
+          .timeout(timeout ?? ApiConfig.timeout);
       final res = await http.Response.fromStream(streamed);
       final decoded = res.body.isEmpty ? {} : jsonDecode(res.body);
       if (res.statusCode >= 400) {

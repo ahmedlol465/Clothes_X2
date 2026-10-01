@@ -23,7 +23,22 @@ abstract final class ApiConfig {
     return 'http://localhost:3001';
   }
 
+  /// Budget for ordinary CRUD. The backend answers these in well under 100ms,
+  /// so a short cap is what turns a genuine hang into a fast, honest error.
   static const Duration timeout = Duration(seconds: 8);
+
+  /// Budget for the AI endpoints, which are a different order of magnitude.
+  ///
+  /// The stylist calls a free-tier LLM and then falls back to the rule engine,
+  /// so a legitimate response takes 5-25s depending on how busy the tier is.
+  /// Capping those at [timeout] meant the app threw "Backend unreachable" at a
+  /// server that was about to answer normally — the request was aborted by the
+  /// client, not failed by the backend.
+  ///
+  /// This is deliberately longer than the server's own worst case (~30s: the
+  /// LLM budget plus context assembly). The server always replies before this
+  /// expires, so a real hang still surfaces promptly.
+  static const Duration aiTimeout = Duration(seconds: 45);
 
   /// Uploads carry photo bytes — allow a full minute.
   static const Duration uploadTimeout = Duration(seconds: 60);

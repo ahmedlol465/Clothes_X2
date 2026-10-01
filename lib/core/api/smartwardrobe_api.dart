@@ -151,7 +151,7 @@ class SmartWardrobeApi {
     Map<String, dynamic> input,
   ) async =>
       Map<String, dynamic>.from(
-        await _client.post('/ai/analyze-clothing', input),
+        await _client.postAi('/ai/analyze-clothing', input),
       );
 
   /// Analysis of a real photo: pass the stored [imageUrl] from
@@ -189,7 +189,7 @@ class SmartWardrobeApi {
       'count': count,
     };
     if (anchorItemId != null) body['anchorItemId'] = anchorItemId;
-    final res = await _client.post('/ai/generate-outfit', body);
+    final res = await _client.postAi('/ai/generate-outfit', body);
     return List<dynamic>.from((res as Map)['outfits'] as List);
   }
 
@@ -217,7 +217,7 @@ class SmartWardrobeApi {
     String? conversationId,
   }) async =>
       Map<String, dynamic>.from(
-        await _client.post('/ai/chat', {
+        await _client.postAi('/ai/chat', {
           'message': message,
           'history': history,
           'conversationId': ?conversationId,
@@ -256,7 +256,7 @@ class SmartWardrobeApi {
       body['dataUrl'] = 'data:$mimeType;base64,${base64Encode(imageBytes)}';
     }
     return Map<String, dynamic>.from(
-      await _client.post('/ai/match-outfit', body),
+      await _client.postAi('/ai/match-outfit', body),
     );
   }
 

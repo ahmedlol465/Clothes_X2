@@ -139,6 +139,12 @@ const STYLE_SIZES = {
 
 const str = (v, max) => (v == null ? null : String(v).trim().slice(0, max) || null);
 const num = (v, min, max) => {
+  // `Number(null)`, `Number('')` and `Number([])` are all 0 and `isFinite`, so a
+  // missing or blank value would silently clamp to `min` — an unset height came
+  // back as 80cm and an unset weight as 25kg. Treat "no value" as no value.
+  if (v === null || v === undefined || v === '' || typeof v === 'boolean') {
+    return null;
+  }
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
   return Math.min(max, Math.max(min, Math.round(n * 10) / 10));

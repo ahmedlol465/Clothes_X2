@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/api/api_client.dart';
@@ -19,6 +20,31 @@ class AppState extends ChangeNotifier {
   static final AppState instance = AppState._();
 
   final ApiClient _client = ApiClient();
+
+  /// [ChangeNotifier.notifyListeners] throws if it is called while the framework
+  /// is building widgets, and screens call `load*()` directly from `initState()`
+  /// — which runs during build. Those methods set a `...Loading` flag and notify
+  /// synchronously before their first `await`, so entering the wardrobe, home,
+  /// outfits, planner, shop, travel or insights screen threw
+  /// "setState() or markNeedsBuild() called during build" and left the tree in a
+  /// broken state. It surfaced on web, where the whole home shell rebuilds.
+  ///
+  /// Deferring to just after the current frame keeps the same contract — a
+  /// listener still gets told — while landing outside the build phase. Listeners
+  /// are consumed on a later frame regardless, so nothing observable changes.
+  @override
+  void notifyListeners() {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    final building = phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks;
+    if (!building) {
+      super.notifyListeners();
+      return;
+    }
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (hasListeners) super.notifyListeners();
+    });
+  }
   late final SmartWardrobeApi api = SmartWardrobeApi(_client);
 
   /// True once a backend call has succeeded at least once.
