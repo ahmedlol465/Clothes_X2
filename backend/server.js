@@ -270,6 +270,24 @@ function readStoredImage(imageUrl) {
   return fs.readFileSync(file);
 }
 
+/**
+ * Sniff an image type from its magic bytes.
+ *
+ * Never trust the filename or a client-supplied content type. `assets/images/
+ * item_shirt_white_small.jpg` is PNG data behind a .jpg name, and a decoder
+ * handed the wrong type can throw or silently mis-sample.
+ */
+function sniffImageMime(bytes) {
+  if (!bytes || bytes.length < 12) return null;
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.slice(0, 6).toString('latin1') === 'GIF87a'
+    || bytes.slice(0, 6).toString('latin1') === 'GIF89a') return 'image/gif';
+  if (bytes.slice(0, 4).toString('latin1') === 'RIFF' && bytes.slice(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp';
+  return null;
+}
+
 // ================================================================== 8.1 Auth
 app.post('/auth/register', (req, res) => {
   const { name, email, password } = req.body || {};
@@ -440,16 +458,93 @@ app.get('/wardrobe/items', optionalAuth, (req, res) => {
   res.json({ items, total: items.length, categories: ['All', ...CATEGORIES] });
 });
 
-app.post('/wardrobe/items', optionalAuth, (req, res) => {
+app.post('/wardrobe/items', optionalAuth, async (req, res) => {
   const b = req.body || {};
-  if (!b.name) return res.status(400).json({ error: 'name is required.' });
+
+  // When the client uploads an image and does not hand us tags, analyse it here
+  // so the saved row is a real measurement rather than a "Tops / White / Cotton"
+  // default that looks identical for every item in the wardrobe.
+  let analysis = b.analysis || null;
+  let derived = {};
+  {
+    // Always analyse when the bytes are here, even if the user already tagged
+    // the item: the analysis is what records *how* each value was reached and
+    // whether the model agreed. Skipping it would leave a user-tagged row with
+    // no provenance at all, and would mean a bottle added as an "Accessories"
+    // belt-looking object is stored with no warning attached.
+    const bytes = ai.imageBytesFor(b) || readStoredImage(b.imageUrl || b.image);
+    if (bytes) {
+      const r = await ai.analyzeClothing({
+        filename: b.filename,
+        bytes,
+        // Everything the caller set explicitly is treated as an override, so
+        // `userAdjusted` records what the human changed rather than what the
+        // model happened to agree with.
+        ...(b.name ? { name: b.name } : {}),
+        ...(b.category ? { category: b.category } : {}),
+        ...(b.color ? { color: b.color } : {}),
+        ...(b.style ? { style: b.style } : {}),
+        ...(b.pattern ? { pattern: b.pattern } : {}),
+        ...(b.material ? { material: b.material } : {}),
+        ...(b.season ? { season: b.season } : {}),
+        ...(b.formality ? { formality: b.formality } : {}),
+      }).catch((e) => {
+        console.error('[wardrobe] analysis failed:', e.message);
+        return null;
+      });
+      if (r) {
+        analysis = r;
+        // A rejection is not fatal here: the user may be deliberately filing an
+        // odd item. The row is created, flagged, so the detail screen can
+        // explain why nothing was detected.
+        if (r.success !== false) {
+          derived = {
+            category: b.category || r.category,
+            color: b.color || r.color,
+            style: b.style || r.style,
+            pattern: b.pattern || r.pattern,
+            material: b.material || r.material,
+            season: b.season || r.season,
+            formality: b.formality || r.formality,
+            name: b.name || r.suggestedName,
+          };
+        }
+      }
+    }
+  }
+
+  const name = b.name || derived.name;
+  if (!name) return res.status(400).json({ error: 'name is required.' });
+
   const item = {
-    id: store.uid('w'), name: b.name,
+    id: store.uid('w'), name,
     image: b.image || 'assets/images/item_tee_white.jpg',
-    category: b.category || 'Tops', color: b.color || 'White', style: b.style || 'Casual',
-    material: b.material || 'Cotton', season: b.season || 'All Season',
-    formality: b.formality || 'Casual', pattern: b.pattern || 'Plain', brand: b.brand || '',
+    category: derived.category || b.category || 'Tops',
+    color: derived.color || b.color || 'White',
+    style: derived.style || b.style || 'Casual',
+    material: derived.material || b.material || 'Cotton',
+    season: derived.season || b.season || 'All Season',
+    formality: derived.formality || b.formality || 'Casual',
+    pattern: derived.pattern || b.pattern || 'Plain',
+    brand: b.brand || '',
     timesWorn: 0, lastWornLabel: 'Just added', createdAt: now(),
+    // Analysis provenance, so the detail screen can show how each field was
+    // decided and which ones the model was unsure about.
+    analysis: analysis || null,
+    analysisSource: analysis ? (analysis.source || (analysis.success === false ? analysis.error_type : 'clothing-vision')) : null,
+    // Set when the pipeline looked at the image and refused it. The item is
+    // still stored (the user may know better than the model) but the UI has to
+    // say so instead of silently showing default tags.
+    analysisRejected: analysis && analysis.success === false
+      ? { error_type: analysis.error_type, error: analysis.error, closest: analysis.rejected?.closestNonClothing ?? null }
+      : null,
+    analysisConfidence: Number.isFinite(analysis?.confidence) ? analysis.confidence : null,
+    confidenceKind: analysis?.confidenceKind || null,
+    agreement: Number.isFinite(analysis?.agreement) ? analysis.agreement : null,
+    uncertainAttributes: analysis?.uncertainAttributes || [],
+    colorDetail: analysis?.colorDetail || null,
+    analysisModel: analysis?.model || null,
+    analyzedAt: analysis?.analyzedAt || null,
   };
   db.wardrobe.unshift(item);
   persist();
@@ -504,37 +599,73 @@ app.get('/wardrobe/collections', optionalAuth, (req, res) => {
 // =================================================================== 8.4 AI
 app.post('/ai/analyze-clothing', optionalAuth, async (req, res) => {
   const t0 = Date.now();
-  const remote = await proxyAI('/analyze-clothing', req.body).catch(() => null);
-  const base = remote || ai.analyzeClothing(req.body || {});
-  // Gemini vision when a photo is supplied + a free key is configured.
-  // Accepts (in order): dataUrl, raw base64, or a /storage/<file> URL from
-  // POST /wardrobe/upload (read straight off disk — no re-upload needed).
-  let dataUrl =
-    req.body?.dataUrl ||
-    (req.body?.imageBase64
-      ? `data:${req.body.mime || 'image/jpeg'};base64,${req.body.imageBase64}`
-      : null);
-  if (!dataUrl && req.body?.imageUrl) {
-    const bytes = readStoredImage(req.body.imageUrl);
-    if (bytes) dataUrl = `data:image/jpeg;base64,${bytes.toString('base64')}`;
-    else dataUrl = req.body.imageUrl; // absolute http(s) URL — provider fetches it
+  const body = req.body || {};
+
+  // Collect the image once. Every downstream consumer wants a dataUrl (the LLM
+  // providers) and raw bytes (the local CLIP + colour pipeline), and decoding
+  // base64 twice is how a 12MB upload becomes a 24MB one.
+  let dataUrl = body.dataUrl || null;
+  let bytes = null;
+  if (!dataUrl && body.imageBase64) {
+    const b64 = String(body.imageBase64).replace(/^data:[^;]+;base64,/, '');
+    dataUrl = `data:${body.mime || 'image/jpeg'};base64,${b64}`;
+    try {
+      bytes = Buffer.from(b64, 'base64');
+    } catch {
+      bytes = null;
+    }
   }
-  let source = 'heuristic';
+  if (!dataUrl && body.imageUrl) {
+    bytes = readStoredImage(body.imageUrl);
+    // readStoredImage decodes the file itself and sniffs its real type, which
+    // matters: one of our own fixtures is PNG bytes behind a .jpg name.
+    if (bytes) dataUrl = `data:${sniffImageMime(bytes) || 'image/jpeg'};base64,${bytes.toString('base64')}`;
+    else dataUrl = body.imageUrl; // absolute http(s) URL — provider fetches it
+  }
+
+  // Local pipeline first: it reads the pixels and can reject non-clothing, which
+  // no remote provider is asked to do and which the old regex never could.
+  const local = await ai.analyzeClothing({ ...body, bytes }).catch((e) => {
+    console.error('[ai] local vision failed:', e.message);
+    return null;
+  });
+
+  // A rejection is a final answer. Do not let a remote provider overwrite it
+  // with a guess — that is exactly how a water bottle became a belt.
+  if (local && local.success === false) {
+    trackAi('analyze-clothing', Date.now() - t0, { source: 'clothing-vision', rejected: local.error_type });
+    return res.status(422).json({ analysis: local, source: 'clothing-vision', rejected: true });
+  }
+
+  const base = local || ai.filenameAnalysis(body);
+  let source = local ? (local.source || 'clothing-vision') : 'filename';
   let tokens;
+
+  // Optional Gemini/Groq refinement when a key is configured. It may fill in
+  // attributes the local model was unsure about, but it must not overwrite a
+  // measured colour or a decided category — those came from the pixels.
   if (dataUrl && llm.status().configured) {
     try {
       const vision = await llm.analyzeImage({
         dataUrl,
-        hint: req.body?.filename || req.body?.name || '',
+        hint: body.filename || body.name || '',
       });
-      Object.assign(base, vision.attrs);
-      if (vision.attrs.confidence != null) base.confidence = vision.attrs.confidence;
-      source = llm.status().provider + '-vision';
+      const a = vision.attrs || {};
+      const preferLocal = (key) => (base[key] && !base.uncertain?.includes(key) ? base[key] : undefined);
+      base.color = preferLocal('color') || a.color || base.color;
+      base.category = preferLocal('category') || a.category || base.category;
+      base.style = a.style || base.style;
+      base.pattern = a.pattern || base.pattern;
+      base.material = a.material || base.material;
+      base.season = a.season || base.season;
+      if (a.confidence != null) base.visionConfidence = a.confidence;
+      source += `+${llm.status().provider}`;
       tokens = vision.tokens;
     } catch (e) {
-      console.error('[ai] vision failed, heuristic fallback:', e.message);
+      console.error('[ai] vision refine failed, keeping local result:', e.message);
     }
   }
+
   trackAi('analyze-clothing', Date.now() - t0, { source, tokens });
   res.json({ analysis: base, source });
 });

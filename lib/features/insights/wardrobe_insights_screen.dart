@@ -26,7 +26,11 @@ class _WardrobeInsightsScreenState extends State<WardrobeInsightsScreen> {
   @override
   void initState() {
     super.initState();
-    _state.loadWardrobe();
+    // Same deferral as WardrobeScreen: loadWardrobe() notifies synchronously
+    // during the build phase when this pushed route is being built.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _state.loadWardrobe();
+    });
   }
 
   @override
