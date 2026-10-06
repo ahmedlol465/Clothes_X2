@@ -612,8 +612,106 @@ function cap(s) {
 
 // ------------------------------------------------------------- other tools
 
-/** Heuristic clothing analysis from upload filename + hints. */
-function analyzeClothing(input = {}) {
+/**
+ * Analyse an uploaded garment.
+ *
+ * This used to be a filename regex table with a fabricated confidence of
+ * `0.82 + Math.random() * 0.12`. That is worse than no analysis: it reported a
+ * confident "Blue / Denim / Casual" for a photo of a green coat named
+ * `IMG_4821.jpg`, and the random number meant the same upload could not be
+ * reproduced. It also had no way to say "this is not clothing" — a photo of a
+ * water bottle was quietly filed as a belt.
+ *
+ * The real pipeline runs a local fashion-CLIP model over the image for category
+ * and attributes, measures colour off the segmented garment pixels, and rejects
+ * anything that does not look like clothing. See `src/clothing-vision/`.
+ *
+ * When no image bytes are available it falls back to the filename heuristic, but
+ * labels the result as unverified and marks `color`/`category` as guesses, so a
+ * client can tell the difference instead of trusting a number it cannot check.
+ *
+ * Non-clothing and unreadable images return `{ success: false }` with an
+ * `error_type` — never a forced clothing result.
+ */
+async function analyzeClothing(input = {}) {
+  const overrides = {};
+  for (const key of ['category', 'color', 'style', 'pattern', 'material', 'season', 'formality']) {
+    if (input[key]) overrides[key] = input[key];
+  }
+
+  const bytes = imageBytesOf(input);
+  if (bytes) {
+    const { analyzeClothingImage } = require('./clothing-vision');
+    const result = await analyzeClothingImage(bytes, overrides);
+    if (result.success) return result;
+    // Preserve the rejection contract. A caller must not receive a clothing
+    // guess for an image we just proved is not clothing.
+    return { ...result, hint: result.hint || undefined };
+  }
+
+  return {
+    ...filenameGuess(input),
+    success: true,
+    source: 'filename',
+    verified: false,
+    note: 'No image data was provided, so these attributes were guessed from the filename. '
+      + 'Send the image bytes for a real analysis.',
+    confidence: 0.3,
+    uncertain: ['category', 'color', 'style', 'pattern', 'material', 'season'],
+  };
+}
+
+/**
+ * Pull image bytes out of whatever the request body managed to hand us.
+ *
+ * Accepts raw base64, a data URL, an already-decoded Buffer, or a
+ * `/storage/<file>` reference to something uploaded earlier.
+ */
+function imageBytesFor(input = {}) {
+  const direct = imageBytesOf(input);
+  if (direct) return direct;
+
+  const fromBase64 = (value) => {
+    const b64 = String(value).replace(/^data:[^;]+;base64,/, '').trim();
+    if (!b64) return null;
+    try {
+      const buf = Buffer.from(b64, 'base64');
+      return buf.length ? buf : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const source = input.dataUrl || input.imageBase64;
+  if (source) {
+    const buf = fromBase64(source);
+    if (buf) return buf;
+  }
+
+  const url = input.imageUrl || input.image;
+  if (url && /^\/storage\//.test(String(url))) {
+    // Resolved by the caller, which owns the storage root. Passed through here
+    // as a marker rather than silently analysing the wrong file.
+    return null;
+  }
+  return null;
+}
+
+/** Pull image bytes out of whatever the route managed to hand us. */
+function imageBytesOf(input = {}) {
+  if (Buffer.isBuffer(input.bytes)) return input.bytes;
+  if (Buffer.isBuffer(input.image)) return input.image;
+  if (Buffer.isBuffer(input.buffer)) return input.buffer;
+  if (Buffer.isBuffer(input.data) && input.data.length) return input.data;
+  return null;
+}
+
+/**
+ * The old filename table, kept only as the no-image fallback. It is deliberately
+ * reported as unverified, because everything it returns is a guess about a
+ * string rather than a reading of a garment.
+ */
+function filenameGuess(input = {}) {
   const name = String(input.filename || input.name || 'uploaded garment').toLowerCase();
   const guess = (re, val, fb) => (re.test(name) ? val : fb);
   const category = guess(/shoe|sneaker|loafer|boot/, 'Shoes',
@@ -640,7 +738,6 @@ function analyzeClothing(input = {}) {
     material: input.material || material,
     season: input.season || season,
     formality: input.formality || (style === 'Formal' ? 'Formal' : style === 'Casual' ? 'Casual' : 'Smart Casual'),
-    confidence: 0.82 + Math.random() * 0.12,
   };
 }
 
@@ -799,6 +896,10 @@ function packingList(wardrobe = [], trip = {}) {
 module.exports = {
   calculateCompatibility,
   generateOutfits,
+  imageBytesFor,
+  // Exposed so the route can fall back to the filename table without re-running
+  // the local pipeline, and so it can be tested on its own.
+  filenameAnalysis: filenameGuess,
   remixOutfit,
   outfitName,
   explainOutfit,

@@ -474,6 +474,18 @@ class AppState extends ChangeNotifier {
         ),
         source: '${res['source'] ?? 'heuristic'}',
       );
+    } on ApiException catch (e) {
+      if (e.status != null) {
+        // The backend looked at the pixels and answered with an error status.
+        // A rejection (422) or a server failure must never be wrapped in
+        // default garment tags — the Add Clothes screen surfaces it instead.
+        if (e.status == 422) {
+          throw ApiException(_notClothingMessage, status: 422);
+        }
+        rethrow;
+      }
+      // Unreachable backend → documented offline heuristics.
+      return (url: url, analysis: <String, dynamic>{}, source: 'heuristic');
     } catch (_) {
       return (url: url, analysis: <String, dynamic>{}, source: 'heuristic');
     }
@@ -516,6 +528,12 @@ class AppState extends ChangeNotifier {
         );
         a = (res['analysis'] as Map?)?.cast<String, dynamic>() ?? {};
         source = '${res['source'] ?? 'heuristic'}';
+      } on ApiException catch (e) {
+        if (e.status == 422) {
+          throw ApiException(_notClothingMessage, status: 422);
+        }
+        if (e.status != null) rethrow;
+        // Unreachable backend → keep filename heuristics below.
       } catch (_) {
         // Analyze must never block saving: fall back to filename heuristics.
       }
@@ -546,12 +564,18 @@ class AppState extends ChangeNotifier {
     return created;
   }
 
+  /// Shown when the clothing gate rejects a photo with HTTP 422 so a bottle,
+  /// chair or other object is never staged as a default-tagged garment.
+  static const _notClothingMessage =
+      "This photo doesn't look like clothing. Tap it to retry with a garment photo.";
+
   /// Runs AI analysis (§8.4) then saves the garment (§8.3).
   Future<ClothingItem?> analyzeAndAdd({
     required String name,
     String filename = 'upload.jpg',
     String image = 'assets/images/item_tee_white.jpg',
-  }) async {    try {
+  }) async {
+    try {
       final analysis = await api.analyzeClothing({
         'filename': filename,
         'name': name,

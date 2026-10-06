@@ -58,6 +58,12 @@ backend/storage/
 backend/data/
 *.tsbuildinfo
 
+# Local AI model weights (Marqo/marqo-fashionCLIP + Xenova/all-MiniLM-L6-v2).
+# NOT committed — teammates obtain them via `npm run setup:models` (see README).
+# The directory is safe to delete/clean on CI; production clones must not
+# commit these ~255 MB of binary weights.
+/backend/.model-cache/
+
 # Environment files (.env.example is tracked on purpose)
 .env
 .env.*

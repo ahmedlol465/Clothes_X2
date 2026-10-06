@@ -1,0 +1,2575 @@
+================================================================================
+CURRENT SESSION HANDOFF - 2026-10-06  (SESSION 6: DIAGNOSTIC LOGGING - COMPLETE)
+READ THIS SECTION FIRST. It is the newest work.
+================================================================================
+
+FINAL SESSION-6 VERDICT (verified, 2026-10-06 00:40 local)
+
+  LOGGER_EXCEPTION:  PASS
+  PIPELINE:         84/84  EXITCODE 0
+  MODEL_DOWNLOADS:   0. All three cache manifests byte-identical to the pre-change
+                     fingerprint; 0 *.incomplete files.
+  DB:                CLEAN - exactly [18,19,20,21,22,38,39], 7 PNGs, orphans=[],
+                     missing=[], PRAGMA integrity_check ok.
+                     sqlite_sequence.seq 89 -> 95 (autoincrement counter, benign,
+                     same class of change as sessions 4 and 5).
+  REGRESSIONS:       NONE. Behaviour, API contract, models, gate and thresholds
+                     all untouched. One line added, zero lines changed.
+
+  PURPOSE
+    Close the last defect session 5 left behind: analyze()'s blanket
+    `except Exception` turned ANY unexpected failure into a bare HTTP 500
+    ("Processing failed inside the AI pipeline.") with NO log line anywhere.
+    That is why the session-4 bottle.jpg failure took two sessions to
+    attribute - it presented as a pipeline bug when it was actually the OS
+    refusing a commit charge (WinError 1455). This session makes every future
+    occurrence self-diagnosing.
+
+  STATUS: complete, verified live, nothing half-done.
+
+--------------------------------------------------------------------------------
+1. THE ONE-LINE CHANGE (the entire code delta of this session)
+--------------------------------------------------------------------------------
+FILE: D:\testAi\testai\backend\main.py
+
+  LOCATION: inside analyze()'s blanket handler, immediately BEFORE the existing
+            `return JSONResponse(...)`. main.py:1271-1272.
+
+    except AnalysisError as exc:
+        return _error_response(exc)
+    except Exception:
+  +     LOGGER.exception("analyze() failed")        <-- main.py:1272
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": "Processing failed inside the AI pipeline.",
+                "error_type": "pipeline_error",
+            },
+        )
+
+  WHY THIS LOGGER, NOT A NEW ONE: main.py:57 already defines
+  `LOGGER = logging.getLogger("api")`, and main.py:52-56 already calls
+  logging.basicConfig(level=INFO, format=..., datefmt=...). The same logger
+  already writes the per-request lines in log_request() (main.py:514-550), so
+  no new logger, no new handler and no new import was needed. Verified live:
+  those `-> POST /analyze ...` / `<- POST /analyze ... 422` lines are present
+  in server8000_session6.err, so an exception logged from this exact handler
+  will land in the same file with the same format.
+
+  LOGGER.exception (not LOGGER.error) is deliberate: it appends the ACTIVE
+  TRACEBACK, which is the entire point of the change.
+
+PROOF THE CHANGE IS EXACTLY ONE LINE AND NOTHING ELSE
+  Byte-level line diff against the pre-change backup
+  (D:\Temp\opencode\backup_main_session6_20261005\main.py), Compare-Object:
+
+      InputObject                                 SideIndicator
+      ----------------------------------------    -------------
+              LOGGER.exception("analyze() failed") =>
+
+      changed lines: 1        (one added line, zero modified, zero removed)
+
+  main.py   54,243 B  SHA-256 17D0DDAEF1167043505AA24A3ACAA5E5486B6D6B0EF4E7DCB50E7D6643AD92BF
+        ->  54,288 B  SHA-256 6A4991DBD593CFB78B73AACD0931859A95D1E461CA37AEBC27BB471146FE899E
+
+  label_maps.py  11,087 B  SHA-256 07350508A94E8206D9F51C7448B61AC456A0734823CC2028464ECEB83CA2B773
+      UNCHANGED from session 5 - the gate constant was not touched.
+
+  `python -m py_compile main.py`  -> EXITCODE 0.
+
+--------------------------------------------------------------------------------
+2. EXPLICITLY UNCHANGED (session 6 touched none of these)
+--------------------------------------------------------------------------------
+  Response status code (500)                UNCHANGED
+  Response message text                     UNCHANGED
+  error_type ("pipeline_error")             UNCHANGED
+  Response JSON shape / API contract         UNCHANGED
+  AnalysisError handling above it           UNCHANGED (still returns first)
+  MIN_GARMENT_CONF = 0.35                   NOT raised
+  GATE_AGREE_MARGIN = 0.0                   NOT tuned
+  corroborate_detection()                   NOT touched
+  All four AI models / architecture         NOT changed
+  fashion_clip_loader.py                    NOT touched
+  DB schema, DB rows, DB file               NOT modified (written only by the
+                                             test's own INSERT+DELETE cycle)
+  Port 8010                                 NOT started, NOT touched - still down
+  Model caches                              NOT downloaded, NOT cleared
+  D:\Clothes_X2-main\Clothes_X2-main        NOT modified except this file
+
+--------------------------------------------------------------------------------
+3. MID-SESSION INTERRUPTION - 8000 WAS HEALTHY, NOTHING WAS WRONG
+--------------------------------------------------------------------------------
+  The session was reported as "no progress for ~30 minutes" immediately after
+  the port-8000 launch command returned. Diagnosed, NOT restarted:
+
+      port 8000  LISTENING, pid 19116 (new launcher 7352), started 23:55:14
+      server8000_session6.err  "Application startup complete."
+                               "Uvicorn running on http://0.0.0.0:8000"
+      GET /health   -> {"status":"ok"}
+      GET /status   -> models_ready=true, saved_items=7, all four models,
+                       offline env on, bound_on 0.0.0.0:8000
+      port 8010     down (untouched, as required)
+
+  Conclusion: the launch SUCCEEDED. The apparent stall was silence in the
+  session between commands, not a hung model load. Server was NOT restarted a
+  second time and no second server was started.
+
+  Server-process fact that still bites (unchanged from sessions 4 and 5): the
+  port-8000 server is TWO processes. venv\Scripts\python.exe is a virtualenv
+  shim that spawns .python\python\python.exe as its child, and only the CHILD
+  ever appears in Get-NetTCPConnection. Stopping only the listener leaves the
+  launcher alive - both must be stopped.
+
+--------------------------------------------------------------------------------
+4. TESTS RUN AND EXACT RESULTS
+--------------------------------------------------------------------------------
+  Preconditions measured immediately before the run:
+      port 8000 listeners = 1, models_ready=True, saved_items=7
+      port 8010 listeners = 0   (confirmed down)
+      commit charge 21.62 GB of 43.95 GB limit (~22.3 GB headroom)
+
+  D:\testAi\testai\backend\venv\Scripts\python.exe D:\Temp\opencode\test_pipeline.py
+      RESULT: 84/84   EXITCODE 0        <-- SESSION 6 CLOSED ON THIS
+      Evidence: D:\Temp\opencode\session6_pipeline.txt
+      1 WARNING, the same pre-existing model decision seen in sessions 4 and 5
+      and NOT a regression:
+          clothing_20260927_235410_166.png declined by the detector
+          (label "pants", conf 0.343 below MIN_GARMENT_CONF 0.35,
+           clip_margin -0.0355)
+      All six non-clothing fixtures rejected at HTTP 422 non_clothing:
+          bottle, phone, laptop, tv_remote, chair, mug
+      Six garment photos accepted, served over HTTP, then deleted via the API
+      (ids 90-95), delete-then-404 verified for each.
+      corrupt bytes -> 422 bad_image; missing image field -> 422; nothing saved.
+      baseline rows byte-identical (changed=[]), orphans=[], missing=[].
+
+  IDENTITY OF RESULT: the 84/84 is the SAME number and the SAME pass/fail set
+  as session 5's final run. That is the expected outcome for a logging-only
+  change and is itself the regression evidence.
+
+  cache_fingerprint.py, run after the pipeline test
+      HF hub  64 files / 3,599,295,617 B sha256 eed3d67f9f90aaff
+      .u2net   1 file  /   175,997,641 B sha256 37480e457699c129
+      models   1 file  /     6,549,796 B sha256 36259ea9f7e51052
+      *.incomplete files: 0
+      ALL THREE byte-identical to the pre-change fingerprint measured before
+      the edit AND to session 5's fingerprint. NETWORK DOWNLOADS: none.
+
+  Server log audit after the run: 0 ERROR lines, 0 Tracebacks, 0 occurrences of
+  "analyze() failed" - correct, because nothing failed. The only stderr content
+  is uvicorn's startup lines, the same two third-party deprecation notices that
+  appeared in every previous session, and the INFO request lines.
+
+--------------------------------------------------------------------------------
+5. CURRENT STATE OF BOTH PROJECTS
+--------------------------------------------------------------------------------
+D:\Clothes_X2-main\Clothes_X2-main
+  A SEPARATE, UNRELATED Flutter app. Not part of this bug. NOT MODIFIED except
+  this handoff file. Its Node backend on port 3001 is NOT listening.
+
+D:\testAi\testai                      <-- THE REAL PROJECT
+  backend/main.py         = session 5 gate fix + session 6 one-line log
+  backend/label_maps.py   = unchanged since session 5 (GATE_AGREE_MARGIN = 0.0)
+  backend/wardrobe_data/wardrobe.db
+                         = 7 rows [18,19,20,21,22,38,39], integrity_check ok
+  backend/wardrobe_data/images/
+                         = 7 PNGs + .gitkeep, no orphans, no missing
+  backend/models/yolov8n.pt = present, sha unchanged
+  venv/ and .python/      = both interpreters present
+  Rollback for main.py:   D:\Temp\opencode\backup_main_session6_20261005\main.py
+                           (54,243 B, SHA 17D0DDAEF116...) - copy it back over
+                           backend/main.py and restart 8000. DB needs no
+                           rollback; it was never corrupted.
+
+--------------------------------------------------------------------------------
+6. SERVERS / PROCESSES AT STOP TIME
+--------------------------------------------------------------------------------
+  PORT 8000  LISTENING, 0.0.0.0  - THE LIVE PHONE-BACKING SERVER
+      launcher  PID 7352   (venv\Scripts\python.exe -m uvicorn main:app
+                            --host 0.0.0.0 --port 8000)
+      listener  PID 19116  (.python\python\python.exe, actual worker,
+                            started 2026-10-05 23:55:14 local; the pipeline
+                            test ran 2026-10-06 00:38)
+      models_ready=True, saved_items=7. Session 6 code is what is running.
+      Logs: D:\Temp\opencode\server8000_session6.log (stdout, 0 B - the
+      banner goes to the console stream and is not captured here)
+            D:\Temp\opencode\server8000_session6.err (stderr, 7,131 B - this
+            is where uvicorn AND the LOGGER output land)
+
+  PORT 8010  DOWN. Not started, not touched, not to be restarted. See section 8.
+  PORT 8011  not listening.  PORT 3001  not listening.
+
+  Start command used (from the backend dir; -WindowStyle Hidden reduces the
+  console-close risk that killed earlier instances):
+      Start-Process -FilePath "D:\testAi\testai\backend\venv\Scripts\python.exe" `
+        -ArgumentList "-m","uvicorn","main:app","--host","0.0.0.0","--port","8000" `
+        -WorkingDirectory "D:\testAi\testai\backend" -WindowStyle Hidden `
+        -RedirectStandardOutput "D:\Temp\opencode\server8000_session6.log" `
+        -RedirectStandardError  "D:\Temp\opencode\server8000_session6.err"
+
+--------------------------------------------------------------------------------
+7. MODELS - DO NOT DOWNLOAD AGAIN
+--------------------------------------------------------------------------------
+  All five model artefacts are ALREADY ON DISK. Nothing needs fetching. See the
+  session 5 section below for the full inventory. Fingerprint after session 6,
+  identical to the pre-change measurement:
+      HF hub  eed3d67f9f90aaff    .u2net  37480e457699c129
+      yolov8n 36259ea9f7e51052   *.incomplete  0
+
+  The next session must keep working offline: HF_HUB_OFFLINE=1 /
+  TRANSFORMERS_OFFLINE=1 (offline_env.apply() sets these itself inside
+  main.py), never delete or clear C:\Users\dell\.cache\huggingface,
+  C:\Users\dell\.u2net or backend\models, and re-run cache_fingerprint.py to
+  PROVE zero downloads rather than assuming it.
+
+--------------------------------------------------------------------------------
+8. STILL TRUE FROM SESSION 5 (unchanged, do not re-litigate)
+--------------------------------------------------------------------------------
+  * Two torch model stacks cannot coexist on this box. With 8000 + 8010 both
+    up, commit charge hit 48.46 GB of a 48.68 GB limit and ANY allocation
+    failed - that, not code, caused the session-4 bottle.jpg HTTP 500. Keep
+    8010 down unless the user explicitly decides otherwise.
+  * MIN_GARMENT_CONF cannot fix non-clothing false positives (the phone scores
+    0.8498, higher than two real garments). Do not raise it.
+  * wargon was deliberately rejected as corroboration. Do not add it.
+  * Never reset, re-create or edit the DB with direct SQL. Use the API's
+    DELETE endpoint, which also removes the image file.
+  * Neither project is a git repo. Use the file backups, not git.
+
+--------------------------------------------------------------------------------
+9. EXACT NEXT TASK FOR THE NEXT SESSION
+--------------------------------------------------------------------------------
+STEP 5 FROM SESSION 12 IS NOW DONE. NOTHING FROM SESSION 6 REMAINS UNFINISHED.
+
+There is no outstanding defect. The remaining items are all low-value or
+need a human decision, carried forward verbatim from the session 5 list:
+
+  * DECIDE WITH THE USER: port 8010 is dead (killed by a console-close event,
+    not by any agent). Restarting it costs ~32 GB of commit charge on a
+    43.95 GB limit and WILL make test runs flaky. RECOMMENDATION: leave it down.
+  * /status reports a HARDCODED bound_on (HOST/PORT constants, not the real
+    bind). Cosmetic.
+  * main.py:94 references tool/test_style_confidence.py, which does not exist.
+    Create it or delete the reference.
+  * README stale in five places; does not mention offline mode, AI_OFFLINE=0,
+    offline_env.py or composite_color.
+  * 697 MB reclaimable on C: (models--patrickjohncyh--fashion-clip 580.6 MB,
+    an orphaned fashionpedia blob 117.0 MB). Needs explicit go-ahead.
+  * dart format reports 13 of 14 files changed (in the OTHER project).
+  * No dev/app client regression sweep was ever performed.
+  * Needs a human: the real-uplink test (disable the network adapter, restart
+    8000, confirm models_ready, re-enable - not ours to decide), the physical
+    phone test, and anything GPU.
+
+================================================================================
+SESSION 6 CLOSING BLOCK
+================================================================================
+  LOGGER_EXCEPTION:  PASS   (one line, main.py:1272, LOGGER = logging.getLogger("api"))
+  PIPELINE:          84/84
+  EXITCODE:          0
+  MODEL_DOWNLOADS:   0
+  DB:                CLEAN   ([18,19,20,21,22,38,39], 7 PNGs, orphans=[])
+  NEXT_TASK:         none outstanding - no defect remains. Lower-value items in
+                     section 9 all need a user decision or are cosmetic.
+
+  Everything below this point is historical and unchanged: SESSION 5, then
+  SESSION 4, then the original CLOTHES_X2 audit.
+================================================================================
+END OF SESSION 6 HANDOFF
+================================================================================
+
+
+================================================================================
+SESSION 5 - NON-CLOTHING GATE FIX - COMPLETE  (2026-10-05)
+(historical - superseded by SESSION 6 above; content unchanged)
+================================================================================
+
+FINAL SESSION-5 VERDICT (verified, 2026-10-05 ~23:52 local)
+  GATE_FIX:         PASS
+  CHAIR_REJECTED:   YES (HTTP 422, error_type=non_clothing, nothing written)
+  PIPELINE:         84/84  EXIT CODE 0   (was 83/84 exit 1)
+  FIXTURES:         PASS   capture_api_fixtures.py exit 0
+  BOTTLE_ERROR:     NONE. bottle.jpg -> HTTP 422 non_clothing on this run.
+  MODEL_DOWNLOADS:  0. All three cache manifests byte-identical to the
+                    before-restart fingerprint; 0 *.incomplete files.
+  DB:               CLEAN - exactly [18,19,20,21,22,38,39], 7 PNGs, no orphans.
+                    sqlite_sequence.seq advanced 82 -> 88 (autoincrement counter,
+                    benign, same class of change as session 4).
+
+  THE PREVIOUS 83/84 WAS PURELY ENVIRONMENTAL, NOW PROVEN. bottle.jpg's HTTP 500
+  was WinError 1455 paging-file exhaustion caused by running two full torch model
+  stacks (ports 8000 + 8010) on a 43.95 GB commit limit. With 8010 down the same
+  code returns a clean 422. No pipeline code was touched to achieve 84/84.
+
+PURPOSE (historical)
+  Fix the Session-4 defect: non-clothing photos (chair, bottle, mug, phone, TV
+  remote) were ACCEPTED by the AI and saved to the wardrobe. Target: reject them
+  without raising MIN_GARMENT_CONF, without changing model architecture, without
+  any download, without changing the API contract, and without breaking the 7
+  legitimately saved garments.
+
+  STATUS: the code change is complete, verified live, and now backed by a clean
+  84/84 pipeline run plus a clean fixture capture. Nothing is left half-done.
+
+--------------------------------------------------------------------------------
+1. WHAT WAS COMPLETED
+--------------------------------------------------------------------------------
+a) DIAGNOSIS (measured over all 4 models on all 13 real images, no DB writes)
+   Probes: D:\Temp\opencode\session5_probe_evidence.py
+           D:\Temp\opencode\session5_probe_features.py
+   Output:  session5_evidence.json, session5_features.json
+
+   ROOT CAUSE: Fashionpedia (YOLOS) cannot carry the non-clothing gate. It returns
+   the SAME class "top, t-shirt, sweatshirt" for five of the six objects:
+       bottle.jpg     0.4662
+       chair.jpg      0.4363
+       mug.jpg        0.6960
+       phone.jpg      0.8498
+       tv_remote.jpg  0.4333
+       laptop.jpg     0.5231   (X2I6RXc9)
+   Its confidence means "how apparel-shaped is this region", NOT "does this photo
+   contain apparel". It is not comparable across subjects: the phone (0.8498)
+   scores higher than two genuine garments. Therefore NO value of
+   MIN_GARMENT_CONF can separate chair.jpg from a garment. This is why session 4
+   concluded MIN_GARMENT_CONF cannot be the fix - CONFIRMED CORRECT.
+
+   WHY OBJECTS EVER GOT REJECTED: only fashionCLIP did. The old rule was
+   clip_gate_margin > GATE_MARGIN (-0.05), which was a TOLERANCE, not agreement.
+   chair.jpg scored -0.0488 and passed by 0.0012 - a coin flip.
+
+b) SEPARABILITY ANALYSIS (17 candidate readings, all 13 images)
+   Probe: D:\Temp\opencode\session5_separability.py -> session5_separability.txt
+   Only 4 of 17 readings separate the 6 accepted garments from the 6 fixtures:
+       fashionCLIP relative margin (logit gap) .... gap 0.0830   <-- used
+       fashionCLIP absolute garment similarity .... gap 0.0652
+       fashionCLIP garment-vs-object logit mass ... gap 0.3136
+       wargon top-1 confidence .................... gap 0.0182
+   Confirmed OVERLAPPING (cannot gate):
+       detector confidence, rembg alpha coverage, rembg x detector IoU,
+       wargon entropy.
+       rembg coverage: garments 0.658..0.972 vs objects 0.755..0.934
+                       (chair 0.812, mug 0.844 - inside the garment band)
+       rembg IoU:     garments 0.556..0.775 vs objects 0.544..0.728
+
+   Measured band for the chosen feature:
+       accepted garments : margin +0.0342 .. +0.0637
+       non-clothing      : margin -0.1954 .. -0.0488
+   0.0 is the natural semantic boundary and sits inside a 0.0830-wide empty band.
+
+   WARGOON DELIBERATELY REJECTED as corroboration. It is a closed-set
+   classifier with no non-clothing class, so it can only ever supply POSITIVE
+   evidence and can never veto. On the chair it returned a wrong garment
+   (Trousers 0.1603); on phone, Trousers 0.6760. Its 0.0182 band is 4.4x thinner
+   than the margin's 0.0830 and is not monotonic. Adding it would gain 0 extra
+   rejections on this evidence set while risking real garments. Decision recorded
+   rather than shipped.
+
+c) THE FIX (smallest reliable cross-model gate: 1 function, 1 constant)
+   See section 5. Compiles, loads, verified live against chair.jpg.
+
+d) LIVE VERIFICATION AFTER RESTART
+   D:\Temp\opencode\session5_prove_loaded.py -> session5_prove_loaded.txt
+       /status models_ready=True, all 4 models present
+       NEW debug keys present in response
+       chair.jpg -> HTTP 422, error_type=non_clothing
+                    clip_gate_margin=-0.0488, clip_required_margin=0.0,
+                    models_agree_on_clothing=false
+       chair NOT written to DB (0 rows)
+       Rejection response top-level keys: byte-for-byte the same set as before
+       (message, error_type, status_code, details, debug) - contract unchanged.
+
+e) FULL PIPELINE TEST: 75/84 -> 83/84 -> 84/84 EXIT 0 (see section 6)
+   The 84/84 is the final verification: 8010 down, 84/84, exit 0, all six
+   non-clothing fixtures rejected at HTTP 422, bottle.jpg included.
+f) FIXTURES AND DOWNLOAD PROOF: both re-run after the gate change, both green.
+   Fixtures refreshed (exit 0). All three model-cache manifests byte-identical
+   to the before-restart fingerprint, 0 *.incomplete. Zero downloads all session.
+
+--------------------------------------------------------------------------------
+2. WHAT I WAS DOING WHEN THE USER STOPPED ME  (RESOLVED - for the record)
+--------------------------------------------------------------------------------
+  At the stop point I had just restarted the 8000 server alone (8000 up, 8010
+  confirmed dead) and was about to re-run D:\Temp\opencode\test_pipeline.py to
+  obtain a clean 84/84. That run has now been done: 84/84, exit 0.
+
+--------------------------------------------------------------------------------
+3. UNFINISHED  ->  NOW: NOTHING FROM SESSION 5 REMAINS
+--------------------------------------------------------------------------------
+  1. [CLOSED] 84/84 OBTAINED. 84/84 checks, exit 0, evidence
+     session5_final_pipeline.txt. bottle.jpg now rejects cleanly at HTTP 422.
+  2. [CLOSED] capture_api_fixtures.py re-run after the gate change, exit 0,
+     evidence session5_final_fixtures.txt. It probes /analyze, then deletes its
+     own probe row (id 89) and its image via the API.
+  3. [CLOSED] Post-run cache fingerprint matches the before-restart fingerprint
+     EXACTLY on all three caches, 0 *.incomplete. Evidence:
+     cache_fingerprint_session5_after_final.txt.
+  4. [OPEN, not requested] No dev/app client regression sweep was performed.
+  5. [OPEN, deliberately out of scope] The out-of-memory -> silent HTTP 500 issue
+     in analyze() is still unfixed. It is no longer blocking anything, but it is
+     still the highest-value real bug left. See section 10.
+
+--------------------------------------------------------------------------------
+4. ALL FILES CHANGED / CREATED / DELETED
+--------------------------------------------------------------------------------
+CHANGED (2 files, both in the real project D:\testAi\testai\backend):
+  main.py          54243 bytes, SHA-256 17D0DDAEF116...
+  label_maps.py    11087 bytes, SHA-256 07350508A94E...
+  (originals: main.py 18FD66A8C5F1..., label_maps.py BC5BF34795C3...)
+
+CREATED - all inside D:\Temp\opencode\, NONE inside either project:
+  session5_probe_evidence.py / .json / .txt
+  session5_probe_features.py / .json / .txt
+  session5_separability.py / .txt
+  session5_show.py
+  session5_debug_bottle.py
+  session5_prove_loaded.py / .txt
+  session5_before_pipeline.txt          (baseline 75/84)
+  session5_after_pipeline.txt           (post-fix 83/84, bottle 500)
+  session5_after_pipeline_run2.txt      (aborted: server was dead)
+  session5_final_pipeline.txt           (FINAL 84/84, exit 0, bottle 422)
+  session5_final_fixtures.txt           (capture_api_fixtures.py, exit 0)
+  cache_fingerprint_session5_before_restart.json
+  cache_fingerprint_session5_after_final.txt
+  cache_fingerprint_run.json
+  server8000_session5.log / .err        (first restart 21:59:54, later died)
+  server8000_session5b.log / .err       (current live server)
+
+DELETED: none. No file was deleted or overwritten in either project.
+D:\Clothes_X2-main\Clothes_X2-main was NOT modified except for this one
+handoff file. Its opencode_flutter_splash.jpg was left untouched.
+
+--------------------------------------------------------------------------------
+5. THE CODE CHANGES AND WHY
+--------------------------------------------------------------------------------
+D:\testAi\testai\backend\label_maps.py
+  - GATE_MARGIN = -0.05
+  + GATE_AGREE_MARGIN = 0.0
+    With an evidence comment recording the measured bands, so nobody re-raises
+    MIN_GARMENT_CONF or re-tunes this number without new evidence.
+
+D:\testAi\testai\backend\main.py
+  - import: from label_maps import GATE_MARGIN, ...
+  + import: from label_maps import GATE_AGREE_MARGIN, ...
+  - def gate_is_clothing(det, wargon, clip, clip_margin):  # margin > -0.05
+  + def corroborate_detection(det, wargon, clip, clip_margin):
+  +     """Detection is ACCEPTED only if the detector found clothing AND
+  +     fashionCLIP agrees (relative margin > GATE_AGREE_MARGIN)."""
+        Internal to the function:
+        + is_clothing  = det.get("is_clothing", False)
+        + corroborates  = float(clip_margin) > GATE_AGREE_MARGIN
+        + return (is_clothing and corroborates,
+        +         is_clothing, corroborates)
+  - allowed, _ = gate_is_clothing(det, wargon, clip, clip_margin)
+  + allowed, det_claims_clothing, clip_corroborates = corroborate_detection(...)
+  + debug: clip_required_margin, clip_corroborates_detector,
+  +        detector_claims_clothing, models_agree_on_clothing
+  - reason "the model did not think this is a clothing item"
+  + reason "the detector found a garment but fashionCLIP does not corroborate it"
+
+  Semantics changed: a RELATIVE MARGIN used as a tolerance  ->  a CROSS-MODEL
+  AGREEMENT requirement. That is the whole fix.
+
+  The four new debug keys are ADDITIVE. The response contract is unchanged; this
+  was verified key-for-key against the pre-change rejection shape.
+
+EXPLICITLY UNCHANGED (deliberately):
+  MIN_GARMENT_CONF = 0.35            NOT raised
+  fashion_clip_loader.py            NOT touched (streamer untouched)
+  model architecture                NOT changed
+  supported category list            NOT narrowed
+  DB schema                         NOT changed
+  API request/response contract      NOT changed
+  no new model, no new forward pass, no download
+
+--------------------------------------------------------------------------------
+6. TESTS RUN AND EXACT RESULTS
+--------------------------------------------------------------------------------
+  python D:\Temp\opencode\test_pipeline.py    (baseline, before any change)
+      RESULT: 75/84   EXITCODE 1
+      chair.jpg was ACCEPTED, then cascaded into 8 more failures
+      (duplicate garbage in the wardrobe + image files) - one root cause.
+      Restored baseline afterwards: 7 rows / 7 images.
+
+  python D:\Temp\opencode\test_pipeline.py    (after the gate fix, first run)
+      RESULT: 83/84   EXITCODE 1
+      SOLE FAILURE: "bottle.jpg rejected (http=500 error_type=pipeline_error)"
+      -> environmental, see section 10.
+
+  python D:\Temp\opencode\test_pipeline.py    (FINAL run, 8010 down)
+      RESULT: 84/84   EXITCODE 0   <-- SESSION 5 CLOSED ON THIS
+      Evidence: D:\Temp\opencode\session5_final_pipeline.txt
+      Preconditions measured immediately before this run:
+          port 8010 listeners = 0 (confirmed down)
+          port 8000 listeners = 1 (PID 16012), models_ready=True, saved_items=7
+          commit charge 17.44 GB of 43.95 GB limit  (~26.5 GB headroom)
+      All six non-clothing fixtures rejected, all at HTTP 422 non_clothing:
+          bottle.jpg, phone.jpg, laptop.jpg, tv_remote.jpg, chair.jpg, mug.jpg
+      -> bottle.jpg no longer 500s. Same binary, same gate, one server instead
+         of two. That is the proof the 500 was WinError 1455 memory pressure and
+         not a code regression.
+      All six accepted garment photos saved (ids 83..88), served over HTTP,
+      then deleted through the API; delete-then-404 verified for each.
+      corrupt bytes -> 422 bad_image; missing image field -> 422; nothing saved.
+
+  python D:\testAi\testai\tool\capture_api_fixtures.py   (after the gate fix)
+      RESULT: exit 0. Wrote live_root / live_health / live_status / live_items /
+      live_item / live_analyze; captured item id 39; cleaned up its own probe
+      row 89 and its image. Evidence session5_final_fixtures.txt.
+
+  python D:\Temp\opencode\cache_fingerprint.py   (after the gate fix + both runs)
+      RESULT: HF hub 64 files / 3,599,295,617 B sha256 eed3d67f9f90aaff
+              .u2net  1 file  /   175,997,641 B sha256 37480e457699c129
+              models   1 file  /     6,549,796 B sha256 36259ea9f7e51052
+              *.incomplete files: 0
+      ALL THREE IDENTICAL to cache_fingerprint_session5_before_restart.json.
+      NETWORK DOWNLOADS: none, for the whole of session 5.
+
+  Pre-existing, unrelated, still warns: clothing_20260927_235410_166.png
+      declined (det_conf 0.343 below MIN_GARMENT_CONF 0.35). Unchanged from
+      sessions 4 and earlier. The test scores it as a model decision, not a
+      defect. Not a regression, and deliberately not "fixed".
+
+  DB / image state after the final run: rows [18,19,20,21,22,38,39] = 7 items,
+  byte-identical to the section-11 backup (changed=[]), 7 clothing_*.png +
+  .gitkeep, orphans=[], missing=[]. sqlite_sequence.seq 82 -> 88. CLEAN.
+
+--------------------------------------------------------------------------------
+7. CURRENT STATE OF BOTH PROJECTS
+--------------------------------------------------------------------------------
+D:\Clothes_X2-main\Clothes_X2-main
+  A SEPARATE, UNRELATED Flutter app. Not part of this bug. NOT MODIFIED except
+  this handoff file. Its own backend port 3001 is NOT listening (Node down).
+  Its web build went stale at the end of session 4 (build/web/assets/index-
+  Cth59Kxj.js missing). Untouched here.
+
+D:\testAi\testai                      <-- THE REAL PROJECT
+  backend/main.py, backend/label_maps.py  = the session 5 change, live and running
+  backend/wardrobe_data/wardrobe.db       = 7 rows [18,19,20,21,22,38,39], clean,
+                                            matches the pre-session backup
+  backend/wardrobe_data/images/           = 7 PNGs + .gitkeep, clean, no orphans
+  backend/models/yolov8n.pt              = present, sha unchanged
+  venv/ and .python/                     = both interpreters present
+  tool/capture_api_fixtures.py           = RE-RUN after the gate change, exit 0;
+                                            fixtures refreshed (section 6)
+  Backup available if a rollback is wanted: D:\Temp\opencode\wardrobe_pre_session5_20261005.db
+
+--------------------------------------------------------------------------------
+8. MODELS ALREADY DOWNLOADED - DO NOT DOWNLOAD AGAIN
+--------------------------------------------------------------------------------
+All five model artefacts are ALREADY ON DISK. Nothing needs fetching.
+
+  HuggingFace cache  C:\Users\dell\.cache\huggingface\hub\
+      models--valentinafevu--yolos-fashionpedia                (YOLOS detection)
+      models--patrickjohncyh--fashion-clip                    (openai/clip-vit-base-patch32)
+      models--Marqo--marqo-fashionCLIP                        (Marqo-FashionCLIP 2.5B)
+      models--wargoninnovation--wargon-clothing-classifier    (Wargon model.onnx)
+      file counts 12 / 21 / 21 / 9 (63 files, ~1.80 GB excluding .locks)
+
+  rembg U2-Net      C:\Users\dell\.u2net\u2net.onnx           175,997,641 bytes
+  YOLOv8n           D:\testAi\testai\backend\models\yolov8n.pt  6,549,796 bytes
+
+  Pre-restart fingerprint (cache_fingerprint_session5_before_restart.json) matched
+  session 4 EXACTLY: HF EED3D67F9F90AAFF, u2net 37480E457699C129, yolov8n
+  36259EA9F7E51052, and zero *.incomplete files. No download occurred in session 5.
+
+  HOW THE NEXT SESSION MUST WORK OFFLINE (this is how it was done here):
+    * Keep HF_HUB_OFFLINE=1 / TRANSFORMERS_OFFLINE=1 set. All four models loaded
+      from the local cache on every restart, with no network.
+    * NEVER delete or clear C:\Users\dell\.cache\huggingface, C:\Users\dell\.u2net
+      or backend\models. They are the only copies.
+    * After any restart, re-run D:\Temp\opencode\cache_fingerprint.py and compare
+      to cache_fingerprint_session5_before_restart.json to PROVE zero downloads.
+    * Check `Get-ChildItem -Recurse -Filter *.incomplete` in both caches - must
+      stay 0. A non-zero count means a download was interrupted.
+
+--------------------------------------------------------------------------------
+9. SERVERS / PROCESSES RUNNING AT STOP TIME
+--------------------------------------------------------------------------------
+  PORT 8000  LISTENING, 0.0.0.0  - THIS IS THE LIVE PHONE-BACKING SERVER
+      launcher PID 11980  (venv\Scripts\python.exe -m uvicorn main:app
+                          --host 0.0.0.0 --port 8000)
+      listener  PID 16012  (.python\python\python.exe, actual worker,
+                          started 2026-10-05 ~23:0x)
+      models_ready=True, saved_items=7. Session 5 code is what is running.
+
+  PORT 8010  DEAD - CONFIRMED AGAIN AT FINAL VERIFICATION, and NOT by my hand.
+      Measured 0 listeners immediately before the final 84/84 run.
+      Was PIDs 1316 + 25620, started 2026-10-05 17:26, bound 127.0.0.1 only.
+      Killed by a console-close event, NOT by any change I made. Its stderr ends:
+          forrtl: error (200): program aborting due to window-CLOSE event
+      It was a leftover offline-test instance from session 4. I deliberately did
+      NOT restart it - see section 10, it is the main memory hog. Leaving it
+      down is what made the 84/84 possible.
+
+  PORT 8011  not listening (offline_server.py, session 2 fixture, on demand)
+  PORT 3001  not listening (Node backend of the OTHER project)
+
+  Start command used for 8000 (run from the backend dir; -WindowStyle Hidden
+  reduces the console-close risk that killed the previous instance):
+      Start-Process -FilePath "D:\testAi\testai\backend\venv\Scripts\python.exe" `
+        -ArgumentList "-m","uvicorn","main:app","--host","0.0.0.0","--port","8000" `
+        -WorkingDirectory "D:\testAi\testai\backend" -WindowStyle Hidden `
+        -RedirectStandardOutput "D:\Temp\opencode\server8000_session5b.log" `
+        -RedirectStandardError  "D:\Temp\opencode\server8000_session5b.err"
+
+--------------------------------------------------------------------------------
+10. ERRORS, BLOCKERS, MEMORY ISSUES, WARNINGS
+--------------------------------------------------------------------------------
+*** THE BLOCKER WAS THE MACHINE, NOT THE CODE - AND IT IS NOW PROVEN. ***
+
+  With 8010 down, the final verification run measured commit charge 17.44 GB of a
+  43.95 GB limit (~26.5 GB headroom) and produced 84/84, exit 0, with bottle.jpg
+  rejecting cleanly at HTTP 422. Same binary, same gate, one server instead of
+  two. The earlier 500 was therefore conclusively WinError 1455 memory pressure.
+
+  Original measurements during the bottle.jpg 500:
+      commit charge   48.46 GB
+      commit limit    48.68 GB        -> 0.22 GB headroom
+      OSError [WinError 1455] "The paging file is too small for this operation
+      to complete" raised while `import torch` loaded libiomp5md.dll
+      D:\Temp\opencode\session5_debug_bottle.py -> the proof
+
+  With BOTH servers killed:
+      commit charge   10.22 GB        limit 43.95 GB
+  With ONLY 8000 running:
+      commit charge   13.06 GB
+
+  => The two torch model stacks cost roughly 38 GB of COMMIT CHARGE while using
+     only ~6 GB of process memory (8000 = 3.40 GB priv, 8010 = 2.56 GB priv).
+     31.6 GB RAM + 17.07 GB pagefile. This box cannot host two model stacks plus
+     anything else and still be reliable.
+
+  CONSEQUENCE: with both up, ANY new allocation fails. bottle.jpg hit that inside
+  /analyze, the blanket handler turned it into HTTP 500, and NOTHING was logged.
+  Two independently-diagnosed failures (bottle 500, debug-script 1455) plus the
+  direct commit measurement all agree. This is environmental, not a gate defect.
+
+  *** HIGHEST-VALUE NEXT BUG (diagnosed, deliberately NOT fixed) ***
+  NOW THE ONLY UNFINISHED TASK - see section 12, STEP 5.
+  In main.py analyze(), `except Exception` returns a generic
+  "Processing failed inside the AI pipeline." with NO log line. An
+  out-of-memory therefore presents as a mislabeled pipeline bug and leaves zero
+  trace. I lost real time to this. A one-line LOGGER.exception in that handler
+  would make any future failure immediately diagnosable. It changes no response
+  contract.
+
+  KNOWN FRAGILITY: servers started from a session's PowerShell can die when that
+  console is recycled, exactly as 8000 and 8010 did. Verify with
+  Get-NetTCPConnection -LocalPort 8000 -State Listen before trusting a test run,
+  and if a run fails to connect to port 8000, check the server before blaming the
+  test.
+
+  CORRECTED MID-SESSION MISTAKE (recorded so it is not repeated): my first
+  separability output was WRONG - its "accepted garments" set accidentally
+  included chair.jpg, which made every feature trivially read NO. The second
+  script, session5_separability.py, recomputes it correctly and its numbers are
+  the ones in this report. The stale/incorrect output is
+  session5_probe_features.txt.
+
+--------------------------------------------------------------------------------
+11. BACKUPS AND TEMPORARY EVIDENCE FILES
+--------------------------------------------------------------------------------
+  BACKUP (restore point for the DB)   D:\Temp\opencode\wardrobe_pre_session5_20261005.db
+                                      28,672 bytes, taken BEFORE any change
+  BACKUP (restore point for source)   D:\Temp\opencode\backup_main_labelmaps_20261005_215820\
+                                        main.py        54305 B  SHA 18FD66A8C5F1
+                                        label_maps.py 10901 B  SHA BC5BF34795C3
+  ROLLBACK INSTRUCTIONS
+      copy backup\main.py       -> D:\testAi\testai\backend\main.py
+      copy backup\label_maps.py -> D:\testAi\testai\backend\label_maps.py
+      then restart port 8000 (DB needs no rollback; it was never corrupted)
+
+  EVIDENCE (D:\Temp\opencode\, all listed in section 4)
+  TOOLING (unchanged, reusable)
+      D:\Temp\opencode\cache_fingerprint.py
+      D:\Temp\opencode\test_pipeline.py
+      D:\testAi\testai\tool\capture_api_fixtures.py
+
+--------------------------------------------------------------------------------
+12. EXACT NEXT TASK FOR THE NEXT SESSION
+--------------------------------------------------------------------------------
+STEPS 1-4 BELOW ARE DONE. Do not repeat them. The single remaining task is
+STEP 5, and it is a small, safe, one-line change that closes the only real
+operational defect session 5 left behind.
+
+STEP 5 (THE ONLY UNFINISHED WORK)  LOG THE BLANKET-EXCEPTION IN analyze().
+    In D:\testAi\testai\backend\main.py, inside analyze()'s
+    `except Exception` handler that returns "Processing failed inside the AI
+    pipeline.", add ONE line:
+
+        LOGGER.exception("analyze() failed")
+
+    WHY, from what this session actually proved: on a memory-exhausted machine
+    that handler swallowed a WinError 1455 and returned a generic HTTP 500 with
+    no log line anywhere. That is exactly why the bottle.jpg failure cost two
+    sessions to attribute - it presented as a pipeline bug when it was the OS
+    refusing a commit charge. One LOGGER.exception call makes any future
+    failure self-diagnosing.
+
+    CONSTRAINTS - it must change no behaviour:
+      * add the log line only; do not alter the status code, the message text,
+        the error_type, or the JSON response shape
+      * confirm main.py already imports a logger (LOGGER or logging.getLogger);
+        use the one that is already there
+      * no threshold, model, gate or DB change
+      * copy main.py aside first (neither project is a git repo), then re-run:
+            D:\testAi\testai\backend\venv\Scripts\python.exe D:\Temp\opencode\test_pipeline.py
+        and it must still be 84/84 exit 0, with 8010 still down
+      * DB must still be exactly [18,19,20,21,22,38,39] and 7 PNGs afterwards
+
+LOWER-VALUE ITEMS STILL OPEN (all carried forward unchanged, none urgent):
+  * /status reports a HARDCODED bound_on (HOST/PORT constants, not the real bind).
+  * main.py:90 references tool/test_style_confidence.py, which does not exist.
+    Create it or delete the reference.
+  * README stale in five places; does not mention offline mode, AI_OFFLINE=0,
+    offline_env.py or composite_color.
+  * 697 MB reclaimable on C: (models--patrickjohncyh--fashion-clip 580.6 MB,
+    an orphaned fashionpedia blob 117.0 MB). Needs explicit go-ahead.
+  * dart format reports 13 of 14 files changed (in the OTHER project).
+  * Needs a human: the real-uplink test (disable the network adapter, restart
+    8000, confirm models_ready, re-enable - not ours to decide), the physical
+    phone test, and anything GPU.
+  * DECIDE WITH THE USER: port 8010 is dead (console-close event, not by my
+    hand). Restarting it costs ~32 GB of commit charge on a 43.95 GB limit and
+    WILL make test runs flaky. RECOMMENDATION: leave it down.
+
+--------------------------------------------------------------------------------
+13. WHAT MUST NOT BE REPEATED OR REDONE
+--------------------------------------------------------------------------------
+  DO NOT re-run the 75/84 baseline. It is already recorded in
+      session5_before_pipeline.txt and in this report.
+  DO NOT re-do the diagnosis or the separability analysis. The numbers in
+      section 1 are measured and final. Re-running session5_probe_features.py
+      reproduces the KNOWN-BAD output described in section 10 - use
+      session5_separability.py instead.
+  DO NOT raise MIN_GARMENT_CONF. It is proven incapable: the phone scores 0.8498,
+      higher than two real garments.
+  DO NOT add wargon as a second corroboration. Closed-set classifier, cannot
+      express "not clothing", band 4.4x thinner, gains 0 rejections, risks real
+      garments. The reasoning and numbers are in section 1b.
+  DO NOT tune GATE_AGREE_MARGIN. 0.0 is the semantic boundary and sits inside a
+      0.0830-wide empty band.
+  DO NOT touch fashion_clip_loader.py (the streamer exists to keep VRAM down).
+  DO NOT narrow the supported-category list to hide objects.
+  DO NOT reset, re-create or delete the DB. Never edit it with direct SQL - use
+      the API's DELETE endpoint, which also removes the image file.
+  DO NOT download, re-download or clear any model cache.
+  DO NOT start 8010 and 8000 together on this machine. See section 10.
+  DO NOT re-litigate bottle.jpg. It is now conclusively environmental, not a
+      regression: it returned HTTP 500 / WinError 1455 only when two torch model
+      stacks were resident, and returns a clean HTTP 422 non_clothing with one
+      stack up. Confirmed by a 84/84 exit-0 run on identical code.
+  DO NOT re-run capture_api_fixtures.py or cache_fingerprint.py "just to check".
+      Both were re-run after the gate change and both are green with the
+      fixtures refreshed and the caches byte-identical. Re-running adds no
+      information.
+  DO NOT start the other project's Node backend on 3001. Not part of this task.
+  DO NOT use git - neither project is a git repository. Use the section 11
+      backups.
+
+--------------------------------------------------------------------------------
+14. CONTINUING WITH THE EXISTING MODELS (summary)
+--------------------------------------------------------------------------------
+  Every model is already on disk (section 8). The 8000 server currently running
+  loaded all four successfully with no network access. The next session should
+  NOT fetch anything, and should NOT need to: set HF_HUB_OFFLINE=1 and
+  TRANSFORMERS_OFFLINE=1, start uvicorn from D:\testAi\testai\backend, and the
+  models resolve from C:\Users\dell\.cache\huggingface\hub,
+  C:\Users\dell\.u2net and backend\models. Verify with cache_fingerprint.py and
+  the *.incomplete count instead of trusting it.
+
+================================================================================
+SESSION 5 CLOSING BLOCK
+================================================================================
+  GATE_FIX:         PASS
+  CHAIR_REJECTED:   YES
+  PIPELINE:         84/84  (exit 0)
+  FIXTURES:         PASS   (exit 0)
+  BOTTLE_ERROR:     NONE
+  MODEL_DOWNLOADS:  0
+  DB:               CLEAN   ([18,19,20,21,22,38,39], 7 PNGs, orphans=[])
+  REMAINING_ISSUE:  analyze()'s blanket except returns HTTP 500 with no log line,
+                    so an out-of-memory failure is undiagnosable.
+  NEXT_TASK:        Add one LOGGER.exception line inside analyze()'s blanket
+                    except handler in D:\testAi\testai\backend\main.py. No
+                    behaviour change. Then re-run test_pipeline.py with 8010
+                    still down and confirm it stays 84/84 exit 0.
+  REGRESSIONS:      none
+  VALID_CLOTHING:   all 6 accepted garment photos still accepted
+
+  Everything below this point is historical and unchanged: SESSION 4, then the
+  original CLOTHES_X2 audit.
+================================================================================
+END OF SESSION 5 HANDOFF
+================================================================================
+
+================================================================================
+SESSION 4 - SAFE LIVE SERVER RESTART   (2026-10-05 20:40 -> 21:27 local, UTC+3)
+(historical - superseded by SESSION 5 above; content unchanged)
+================================================================================
+
+FINAL STATUS
+  BACKUP:         PASS
+  SERVER_8000:    PASS
+  MODELS_READY:   YES
+  PIPELINE_TEST:  FAIL  (script exit 1, 75/84 checks - ONE root cause, a
+                         pre-existing model false positive, detailed in 4)
+  FIXTURES:       PASS
+  NEXT_TASK:      Fix the non-clothing gate so chair.jpg is rejected. See 8.
+
+The server on port 8000 now runs the offline-safe code. That was the whole
+point of this session and it is done and verified.
+
+SCOPE NOTE - READ BEFORE THE OLD REPORT
+  This file now covers TWO projects. The session that wrote the section below
+  (the 20:27 audit) deliberately kept the D:\testAi\testai project out of this
+  file and said so. This session was explicitly instructed to record the
+  D:\testAi\testai port-8000 restart here, so it is recorded here.
+  Nothing below the divider was modified: the original 821-line
+  CLOTHES_X2 audit is preserved verbatim, including its scope warning.
+  Two different projects, one handoff file. Do not merge their findings.
+
+  Unchanged from what I was told NOT to do: no model architecture change, no
+  model replaced, no colour logic touched, no download, no database reset, no
+  unrelated file or process modified.
+
+================================================================================
+1. BACKUP - PASS
+================================================================================
+
+  D:\Temp\opencode\wardrobe_pre_offline_restart_20261005_204023.db
+      28,672 B
+      sha256 d14e52348e2b040fd87a56a8eeceac53328c587d3a1fe755dbb1a9eaade2ff09
+      PRAGMA integrity_check = ok
+      tables: sqlite_sequence (1 row), wardrobe_items (7 rows)
+      every table's full contents byte-identical to the live DB at backup time
+
+  A NOTE ON HOW IT WAS VERIFIED. Get-FileHash could NOT read the source file -
+  the running server held wardrobe.db open and Windows refused the read. The
+  Copy-Item itself succeeded (28,672 B, same size as the source). Rather than
+  trust the size, I compared the backup against the live database table by
+  table, row by row, cell by cell, using a read-only sqlite connection. All
+  7 rows matched exactly. That is a stronger check than a hash of a file that
+  could not be read.
+
+================================================================================
+2. SERVER_8000 - PASS
+================================================================================
+
+  A PROCESS-PAIRING FACT THAT THE EARLIER HANDOFFS GOT WRONG
+  The port-8000 server is TWO processes, not one:
+
+    PID 644    venv\Scripts\python.exe      -m uvicorn main:app --port 8000
+    PID 14496  .python\python\python.exe    -m uvicorn main:app --port 8000
+               (parent = 644)
+
+  venv\Scripts\python.exe is a virtualenv launcher shim: it spawns the real
+  worker, .python\python\python.exe (the venv's base interpreter), as a child.
+  Get-NetTCPConnection only ever reports the CHILD, 14496. An earlier handoff
+  recorded "PID 14496" as if it were the whole server.
+
+  This matters operationally: stopping only the listener leaves the launcher
+  alive. Both were stopped. They are the same server, so this is not a
+  violation of "stop only the port-8000 process".
+
+  IT ALSO EXPLAINS A CONFUSING FACT. backend\.python\python\Lib\site-packages
+  contains only pip - no fastapi, no torch. It cannot possibly serve the app.
+  That is fine: it is the base interpreter and it gets its packages from the
+  venv. Do not "fix" that directory; it is correct.
+
+  STOPPED (verified before killing, by matching the command line):
+    14496 listener, and 644 its launcher. Both confirmed gone, port 8000 free.
+
+  STARTED - the normal command, no manual environment variables:
+    Start-Process -FilePath "D:\testAi\testai\backend\venv\Scripts\python.exe" `
+      -ArgumentList "-m","uvicorn","main:app","--host","0.0.0.0","--port","8000" `
+      -WorkingDirectory "D:\testAi\testai\backend" `
+      -RedirectStandardOutput D:\Temp\opencode\server8000_offline.log `
+      -RedirectStandardError  D:\Temp\opencode\server8000_offline.err
+
+    New launcher PID 31868, new listener PID 18376, both started 20:41:59.
+    Both still alive at 21:27. The same command line as the process it
+    replaced, which is the point: only the module in memory changed.
+
+  GOTCHA FOR THE NEXT PERSON: -FilePath ".\venv\Scripts\python.exe" FAILS with
+  "The system cannot find the file specified." Start-Process resolves a relative
+  -FilePath against the PowerShell process's own cwd, NOT against
+  -WorkingDirectory. Always pass the absolute interpreter path.
+
+  STARTUP LOG - clean, all four models, no errors:
+    Database migration: schema already up to date
+    Loading AI models. Port 8000 stays closed until this finishes.
+    Ready: rembg
+    Ready: valentinafevu/yolos-fashionpedia (46 classes)
+    Ready: wargoninnovation/wargon-clothing-classifier (27 classes)
+    Ready: Marqo/marqo-fashionCLIP
+    All AI models loaded successfully.
+    Server ready.
+    stderr: INFO Started server process [18376] / Waiting for application
+    startup / Application startup complete / Uvicorn running on
+    http://0.0.0.0:8000
+
+  The banner line "Port 8000 stays closed until this finishes" is architecturally
+  important: models finish loading BEFORE the socket accepts, so no request can
+  ever reach a half-loaded server.
+
+  I did NOT capture an exact seconds-from-launch to listening figure. The
+  launcher started 20:41:59 and the port was confirmed listening by 21:19:49,
+  but those two observations are separated by an idle gap between commands, so
+  the real figure is somewhere inside that window and I will not invent it. For
+  scale, the previous pass measured a cold load of all four models at ~10 s in a
+  fresh process, which is the number to expect.
+
+  8010 WAS NOT TOUCHED. PID 1316, started 17:26:04, verified identical before
+  and after this session. Still listening.
+
+================================================================================
+3. MODELS_READY - YES, AND OFFLINE MODE IS ACTIVE
+================================================================================
+
+  GET /health  -> {"status":"ok"}
+
+  GET /status  -> status ok
+                   success true
+                   models_ready TRUE          <-- required
+                   device cpu
+                   saved_items 7
+                   detector valentinafevu/yolos-fashionpedia
+                   category_model wargoninnovation/wargon-clothing-classifier
+                   fashion_model Marqo/marqo-fashionCLIP
+                   offline { HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1",
+                             HF_HUB_DISABLE_TELEMETRY: "1",
+                             HF_HUB_DISABLE_PROGRESS_BARS: "1",
+                             HF_HUB_ETAG_TIMEOUT: "1",
+                             HF_HUB_DOWNLOAD_TIMEOUT: "1",
+                             YOLO_OFFLINE: "True" }
+                   bound_on 0.0.0.0:8000
+                   lan_ip 192.168.1.5
+
+  THE OFFLINE BLOCK IS SET BY THE CODE, NOT BY ME. Before launching I listed
+  the inherited environment: no HF_HUB_OFFLINE, no TRANSFORMERS_OFFLINE, no
+  HF_HOME, no TORCH_HOME, no PYTHONPATH, nothing. So offline_env.apply() running
+  inside main.py is what put those seven variables in force. That is exactly the
+  property the previous pass wanted proven, now proven on the real server.
+
+  PROOF THE NEW CODE IS ACTUALLY LOADED (not just that a server answers)
+  Four independent confirmations, since "the server responds" proves nothing:
+
+  1. /status now has an "offline" key. The 13:06 build had no such key. The
+     fixture captured tonight contains it.
+  2. /analyze now returns composite_color and composite_color_display. Both
+     are new in this pass. Confirmed in the captured fixture.
+  3. The staleness probe from the previous handoff is closed. It said
+     "GET /items from 8000 returns fewer bytes than from 8010 because the 8000
+     payload lacks detector_model". Tonight both return 8,255 bytes and both
+     contain detector_model.
+  4. All six source files sha256-match the values the previous handoff recorded
+     for its finished pass, so the running module is exactly the verified code
+     with no unrecorded edit since:
+        main.py               18fd66a8c5f1  52,841 B  MATCH
+        offline_env.py        4416f7368405   3,774 B  MATCH
+        download_models.py    eae20bea5a19   8,656 B  MATCH
+        color_analysis.py     f5ae3cdd2bbe   8,727 B  MATCH
+        label_maps.py         bc5bf34795c3  10,304 B  MATCH
+        fashion_clip_loader.py ae84928aa4fa  8,548 B  MATCH
+
+  ZERO DOWNLOADS - measured, not assumed
+  I fingerprinted all three model caches before the restart and again at the
+  end: every file's path, size and mtime-ns, hashed into one manifest.
+
+    cache                                    files   bytes        manifest sha256
+    HF hub  before / after                    64      3,599,295,617  eed3d67f9f90aaff
+    HF hub  before / after                    64      3,599,295,617  eed3d67f9f90aaff
+    .u2net  before / after                     1        175,997,641  37480e457699c129
+    .u2net  before / after                     1        175,997,641  37480e457699c129
+    models\  before / after                    1          6,549,796  36259ea9f7e51052
+    models\  before / after                    1          6,549,796  36259ea9f7e51052
+
+    Identical file counts, identical byte totals, identical manifest hashes.
+    0 *.incomplete files before and after. Nothing was fetched, nothing was
+    written, nothing was deleted.
+
+================================================================================
+4. PIPELINE_TEST - FAIL (script exit 1, 75 of 84 checks)
+================================================================================
+
+  D:\Temp\opencode\test_pipeline.py, run against the live server on 8000.
+  75/84 passed, exit code 1, 2 warnings.
+
+  Report it as FAIL because the script says so. But read this before acting:
+  NINE failures, and they have ONE root cause.
+
+  ROOT CAUSE: fixtures/chair.jpg was ACCEPTED (HTTP 200) instead of rejected.
+  The test asserts all six non-clothing fixtures are rejected and saves nothing.
+  Because the chair was accepted, /analyze INSERTED it as a real wardrobe row
+  and wrote its image to disk. Every other failure is bookkeeping noticing that
+  extra row:
+
+    chair.jpg rejected                        FAIL  http=200 error_type=None
+    rejections inserted no database rows      FAIL  <- the chair row
+    rejections wrote no image files            FAIL  <- the chair image
+    row count == baseline + created           FAIL  14 == 7 + 6
+    GET /items count matches                  FAIL  count=14
+    baseline row ids unchanged                FAIL  after=[...,38,39,60]
+    final count back to baseline              FAIL  8 == 7
+    no leftover test images on disk           FAIL  orphan=clothing_...212032_336.png
+    bad input saved nothing                   FAIL  <- still the chair row
+
+  What the chair row actually contained:
+    id 60, original_filename chair.jpg, category "bag", colour gray,
+    style elegant, category_score 0.3641, category_status "uncertain",
+    detection_confidence 0.4363,
+    detection_label "top, t-shirt, sweatshirt"   <- the detector hallucinating
+    category_model_label "Trousers"              <- the classifier disagreeing
+    fashion_category "bag"
+
+  So Fashionpedia saw a t-shirt in a chair at 0.4363 confidence, the gate let
+  it through, and the fused answer was "bag". The plumbing around it is
+  perfect: all 16 provenance columns were filled, image_path persisted, image
+  written to disk and served over HTTP at 200.
+
+  WHY THIS IS NOT A RESTART REGRESSION
+  The gate is main.py:81  MIN_GARMENT_CONF = 0.35. The chair scored 0.4363,
+  just over it. That constant is pre-existing and was not touched: main.py's
+  sha256 still matches the hash the previous pass recorded, and that pass
+  states it changed no threshold, weight, model ID or pipeline behaviour. The
+  offline pass changed only environment variables and local_files_only flags,
+  which cannot change a detection score when the weights are identical - and
+  the previous pass already proved tensor-by-tensor that all 398 fashionCLIP
+  tensors equal the on-disk checkpoint.
+  Honest limit on that claim: I did NOT restart the old 13:06 build to watch it
+  accept the chair too, so "the old build behaved identically" is inference, not
+  measurement. What is measured is that nothing in the offline pass could have
+  changed this outcome.
+
+  IT IS ALSO FULLY DETERMINISTIC, WHICH IS WHY IT MATTERS
+  Three POSTs of the same fixture: identical every time.
+    det_conf 0.4363, det_label "top, t-shirt, sweatshirt",
+    clip_margin -0.0488, category "bag", all three runs.
+  A user who photographs their dining chair gets a "bag" in their wardrobe,
+  every time. That is a real product defect and it is now the top item.
+
+  THE TWO WARNINGS ARE NOT DEFECTS AND THE SCRIPT KNOWS IT
+    clothing_20260927_235410_166.png declined - det_conf 0.343, label "pants",
+      "garment confidence 0.34 below threshold"
+    clothing_20261005_212032_336.png declined - det_conf 0.5847, label "dress",
+      "fashionCLIP prefers a non-clothing subject"
+  6 of 8 garment photos were accepted; 2 were declined by the models. The
+  script scores these as warnings, correctly, because a model declining a photo
+  is a model decision rather than a broken pipe.
+
+  ONE PRE-EXISTING BLIND SPOT IN THE TEST ITSELF, worth knowing
+  test_pipeline.py gives clothing photos tolerance for model disagreement but
+  gives the non-clothing fixtures none. A single borderline fixture therefore
+  converts one model disagreement into nine red checks. That is why the raw
+  number (9 failures) wildly overstates the size of the problem (1 decision).
+
+  A GOOD SIGN IN THE SAME RUN: the live contract is now the FIXED one.
+  Corrupt bytes return 422 / error_type "bad_image". The script has a branch
+  for exactly this, and it printed "live contract: 422/bad_image (the load_image
+  fix is active)". Before the restart that branch warned that the live server
+  was still running the pre-fix 400/error code. So the restart activated a
+  second fix that had also been sitting in memory.
+
+================================================================================
+5. FIXTURES - PASS
+================================================================================
+
+  Found at D:\testAi\testai\tool\capture_api_fixtures.py (3,870 B, 16:58).
+  Run unmodified, default --base-url, exit code 0.
+
+    wrote flutter_app\test\fixtures\live_root.json
+    wrote flutter_app\test\fixtures\live_health.json
+    wrote flutter_app\test\fixtures\live_status.json
+    wrote flutter_app\test\fixtures\live_items.json
+    wrote flutter_app\test\fixtures\live_item.json
+    captured item id 39
+    probing /analyze with clothing_20260927_235323_354.png
+    wrote flutter_app\test\fixtures\live_analyze.json
+    /analyze http 200 success=True
+    cleaned up probe row 69 -> {'success': True, 'id': 69, 'deleted': True,
+                                'image_removed': True}
+
+  It cleans up after itself by design. It did.
+
+  These files are also independent evidence the restart worked: the newly
+  captured live_status.json contains the offline block, and live_analyze.json
+  contains composite_color "purple" / composite_color_display "Purple", with
+  color.method clothing_pixel_analysis, color.status supported,
+  category t-shirt / uncertain. The previous fixtures on disk were captured at
+  16:58 and had neither.
+
+  Note for whoever reads them next: detector_model is NOT a top-level /analyze
+  field. It is a database column and it appears in /items; in the /analyze
+  payload the model names live under "debug". That is pre-existing shape, not
+  something this session changed.
+
+================================================================================
+6. LOG AUDIT - NO ERRORS, NO NETWORK ATTEMPTS
+================================================================================
+
+  Scanned both server logs for download, network, retry, timeout, error and
+  exception patterns. Every hit was benign:
+
+    server8000_offline.log  4 hits, all the startup banner's own URLs
+                            (192.168.1.5:8000/health, 127.0.0.1:8000/health,
+                             the docs line, and the Android-emulator
+                             10.0.2.2:8000 hint)
+    server8000_offline.err  1 http hit, uvicorn's own
+                            "Uvicorn running on http://0.0.0.0:8000"
+
+  Zero occurrences of: Traceback, ERROR, Exception, Retry, connect, Failed,
+  timeout, .incomplete, Downloading, Fetching.
+
+  Two warnings on stderr, both third-party deprecation notices, neither an
+  error and neither actionable here:
+    "Using a slow image processor as `use_fast` is unset ..."
+    "The `max_size` parameter is deprecated ... use size['longest_edge']"
+
+  Logs: D:\Temp\opencode\server8000_offline.log and .err
+
+================================================================================
+7. DATABASE LEFT EXACTLY AS IT WAS FOUND
+================================================================================
+
+  My verification runs created three rows (60 from test_pipeline.py, and 67 and
+  68 from the chair determinism probe). All three were removed through the
+  API's own DELETE /items/{id} route, which also removed their image files.
+  I did not touch the database file directly, did not reset it, and did not
+  delete any pre-existing row.
+
+  Verified against the section-1 backup, cell by cell:
+    wardrobe_items   7 rows, ids [18,19,20,21,22,38,39]   0 differing cells
+    images/          7 PNGs + .gitkeep, exactly the originals, 0 strays
+
+  THE ONE INEVITABLE DIFFERENCE, and it is not data:
+    sqlite_sequence.seq  59 -> 68
+  That is SQLite's autoincrement counter. It advanced because rows were
+  inserted and then deleted. No row content differs anywhere. The only visible
+  consequence is that the next saved item will get id 69 instead of 60. I am
+  flagging it rather than hiding it, and I am not "fixing" it, because forcing
+  the counter back would be a direct write to the database file.
+
+================================================================================
+8. EXACT NEXT TASK  (one task, do it first)
+================================================================================
+
+  FIX THE NON-CLOTHING GATE SO chair.jpg IS REJECTED.
+
+  It is the only reason the pipeline test is red, it is deterministic, it is now
+  reproducible against the live server on port 8000, and it is a defect a user
+  hits by photographing furniture. Everything else in this project is either
+  working or cosmetic.
+
+  WHAT IS KNOWN, ALL MEASURED TONIGHT:
+    fixture            D:\Temp\opencode\fixtures\chair.jpg
+    gate constant      MIN_GARMENT_CONF = 0.35   (main.py:81)
+    chair detection    0.4363, label "top, t-shirt, sweatshirt" (false positive)
+    chair clip_margin  -0.0488 (fashionCLIP does not prefer non-clothing)
+    fused answer       "bag", score 0.3641, category_status "uncertain"
+    reproducibility    identical on 3 separate POSTs
+    result today       HTTP 200, row auto-saved, image auto-saved
+
+  THE CRITICAL WARNING, OR THE FIX WILL BREAK THE PIPELINE
+  Do NOT fix this by raising MIN_GARMENT_CONF. Look at the numbers:
+
+    chair (must REJECT)            0.4363
+    dress declined (must ACCEPT)   0.5847
+    pants  declined (must ACCEPT)  0.3430
+
+  The chair sits BETWEEN a photo that must be accepted and one that is already
+  being rejected. There is no threshold that separates them, and nudging the
+  constant up starts rejecting real garments - which is exactly the failure the
+  current two WARNs represent. The detector is not merely unconfident about the
+  chair, it is confidently WRONG (0.4363 on "top, t-shirt, sweatshirt"), so
+  confidence alone cannot carry the decision.
+
+  THE SHAPE OF A REAL FIX
+  Reject on disagreement rather than on confidence alone. This chair has the
+  detector saying t-shirt, the clothing classifier saying Trousers, and
+  fashionCLIP saying bag, with the top category score at 0.3641. Genuine
+  garments in tonight's run did not look like that - the accepted ones landed
+  at 0.6356 and higher, or fused to high_agreement. A cross-model agreement or
+  top-score floor would catch this chair without touching the confidence
+  threshold. fashionCLIP's own verdict is the most promising signal and it is
+  already computed and discarded at the gate.
+
+  REGATE ANY FIX AGAINST ALL OF THIS, NOT JUST THE CHAIR
+    6 non-clothing fixtures  (only chair is currently misbehaving; keep the
+                             other 5 rejecting)
+    8 garment photos         (2 are already declined - do not lose more)
+    D:\Temp\opencode\test_pipeline.py must reach 84/84, exit 0
+    tool/capture_api_fixtures.py must stay green
+  Both scripts already exist and both run against the live server. Do not write
+  new harnesses; run these.
+
+  STILL OPEN FROM EARLIER HANDOFFS, unchanged by this session, all lower value
+  than the chair:
+    - The real-uplink test. The previous pass could only prove offline startup
+      with the socket blocked in-process on port 8011. The genuine test is to
+      disable the network adapter, restart 8000, confirm models_ready is still
+      true, then re-enable. I did NOT do this: taking the machine's network
+      down is not mine to decide. It needs explicit approval.
+    - /status still reports a HARDCODED bound_on. Confirmed still wrong
+      tonight: the 8010 instance answers "0.0.0.0:8000" while actually on
+      127.0.0.1:8010. main.py uses HOST/PORT constants, not the real bind.
+    - Dangling pointer: main.py:90 references tool/test_style_confidence.py,
+      which still does not exist. Create it or delete the reference.
+    - README is stale in five places; still does not mention offline mode,
+      AI_OFFLINE=0, offline_env.py or composite_color.
+    - 697 MB reclaimable on C: (models--patrickjohncyh--fashion-clip 580.6 MB,
+      a fashionpedia orphan blob 117.0 MB). Still needs explicit go-ahead.
+    - dart format still reports 13 of 14 files changed.
+    - No git repository in D:\testAi\testai. Copy a file aside before editing.
+    - STILL NEEDS A HUMAN: the physical phone test, and anything GPU.
+
+================================================================================
+9. COMMANDS USED THIS SESSION
+================================================================================
+
+  # backup + verification
+  Copy-Item D:\testAi\testai\backend\wardrobe_data\wardrobe.db `
+            D:\Temp\opencode\wardrobe_pre_offline_restart_20261005_204023.db
+  venv\Scripts\python.exe D:\Temp\opencode\verify_backup_8000.py <backup>
+  venv\Scripts\python.exe D:\Temp\opencode\cache_fingerprint.py before_restart
+
+  # stop, only the 8000 server
+  Get-NetTCPConnection -LocalPort 8000 -State Listen          # -> 14496
+  Get-CimInstance Win32_Process -Filter "ProcessId=14496"     # confirm cmdline
+  Get-CimInstance Win32_Process -Filter "ProcessId=644"       # the launcher
+  Stop-Process -Id 14496 -Force        # listener; 644 exited on its own
+
+  # start, normal command, no env vars
+  Start-Process D:\testAi\testai\backend\venv\Scripts\python.exe `
+    -ArgumentList "-m","uvicorn","main:app","--host","0.0.0.0","--port","8000" `
+    -WorkingDirectory D:\testAi\testai\backend -Redirect... (see section 2)
+
+  # verify
+  Invoke-RestMethod http://127.0.0.1:8000/health
+  Invoke-RestMethod http://127.0.0.1:8000/status
+  venv\Scripts\python.exe D:\Temp\opencode\test_pipeline.py                  # exit 1
+  venv\Scripts\python.exe D:\testAi\testai\tool\capture_api_fixtures.py      # exit 0
+
+  # hygiene / evidence
+  venv\Scripts\python.exe D:\Temp\opencode\chair_probe_and_restore.py <backup>
+  venv\Scripts\python.exe D:\Temp\opencode\diff_backup_live.py <backup>
+  venv\Scripts\python.exe D:\Temp\opencode\inspect_rows_8000.py
+  venv\Scripts\python.exe D:\Temp\opencode\cache_fingerprint.py after_restart
+
+================================================================================
+10. SESSION-4 FINAL VERDICT
+================================================================================
+
+  BACKUP:         PASS
+  SERVER_8000:    PASS
+  MODELS_READY:   YES
+  PIPELINE_TEST:  FAIL   (exit 1, 75/84; one root cause - chair.jpg accepted,
+                         pre-existing model false positive, not a regression)
+  FIXTURES:       PASS
+  NEXT_TASK:      Fix the non-clothing gate so chair.jpg is rejected - by
+                  cross-model disagreement, NOT by raising MIN_GARMENT_CONF.
+
+================================================================================
+END OF SESSION 4 SECTION
+================================================================================
+
+
+================================================================================
+CLOTHES_X2 - MASTER HANDOFF REPORT (consolidated, authoritative)
+[the original 20:27 audit follows below, preserved verbatim and unmodified]
+================================================================================
+
+Repo root:      D:\Clothes_X2-main\Clothes_X2-main
+Git repo:       yes (.git present). Branch main @ 4cbb677, nothing committed
+                by any OpenCode session. All AI-pipeline work is uncommitted.
+Supersedes:     the previous OPENCODE_HANDOFF_REPORT.txt (1,188 lines,
+                58,636 bytes, written 2026-10-05 02:43 by session ses_ef75).
+Generated:      2026-10-05 20:27 local (UTC+3) by an audit-only OpenCode session
+                (ses_ef32). That session modified nothing except this file.
+Scope of audit: read-only verification of the current state of THIS repository.
+                No server was started, stopped or restarted. No model was
+                downloaded. No source file, data file or dependency was changed.
+
+HOW TO READ THIS REPORT
+  Every statement is one of:
+    VERIFIED  - confirmed in this audit by reading code/data, by git, by an
+                OpenCode session record, or by a read-only HTTP/process probe.
+    HISTORICAL- a claim carried over from the 02:43 report that could not be
+                re-verified without re-running the pipeline. Not re-tested here.
+    UNVERIFIED- explicitly unknown or unattributed.
+  Times are LOCAL time (UTC+3). OpenCode's own database stores UTC; both are
+  given where it matters.
+
+CRITICAL SCOPE WARNING - TWO DIFFERENT PROJECTS SHARE THIS MACHINE
+  This repo (Flutter + Express/NestJS, port 3001) is NOT the project described
+  in D:\Temp\opencode\handoff*.txt or in D:\اخر حاجة وصلها.txt. Those files
+  belong to a separate Python/FastAPI "AI CLOSET ANALYZER" at D:\testAi\testai
+  (uvicorn, port 8000/8010/8011, rembg + yolos-fashionpedia +
+  wargon-clothing-classifier + Marqo/marqo-fashionCLIP, SQLite wardrobe.db).
+  VERIFIED: zero write/edit tool calls targeting this repository occurred after
+  2026-10-05 02:45 local (see section 3). Nothing from that project belongs in
+  this file, and nothing from that project was merged into this one.
+
+================================================================================
+1. PROJECT CURRENT STATUS
+================================================================================
+
+SmartWardrobe: a Flutter client plus a Node backend that in practice ships TWO
+backends in one directory (verified from backend/package.json and the tree):
+
+  backend/server.js        Express 4 legacy runtime - the one that is actually
+                           used. "main": "server.js", npm start -> node
+                           server.js. This is where the clothing-AI pipeline
+                           lives. VERIFIED.
+  backend/src/*.ts + nest-cli.json
+                           NestJS 11 service (auth, wardrobe, outfits, planner,
+                           shopping, admin) started by npm run start:nest.
+                           Separate app, not started by npm start. VERIFIED.
+
+Status of the work the previous session claimed to have finished:
+
+  Backend clothing-AI pipeline    COMPLETE - code verified present in the tree
+  Backend API routes              COMPLETE - code verified present in the tree
+  Provenance persistence          COMPLETE - code verified; only the 6 archived
+                                  test rows in db.json prove a round trip
+  Live HTTP proof of the pipeline PARTIAL - see section 6: a real app-driven
+                                  analysis succeeded today, but 2 full e2e
+                                  suites were run by the previous session and
+                                  were not re-run here
+  Flutter model layer             NOT DONE - ClothingItem has no analysis
+                                  fields (VERIFIED)
+  Flutter analysis UI            NOT DONE - no details screen exists (VERIFIED)
+  Home screen greeting / avatar   NOT DONE - hardcoded (VERIFIED)
+  Nothing committed               TRUE - VERIFIED, 26 untracked files
+
+Runtime right now (VERIFIED 2026-10-05 20:2x local):
+  - Backend IS up on http://localhost:3001 and healthy.
+      GET /health          -> {"status":"ok","service":"smartwardrobe-backend"}
+      GET /docs            -> HTTP 200
+      GET /wardrobe/items  -> total=13, 6 categories
+  - It is NOT the process the previous report described. That PID 29556 is gone.
+  - It was started today at 17:02:53 local by a human, as `npm run dev`:
+      PID 7516  npm-cli.js run dev        (started 17:02:53)
+      PID 16860 node --watch server.js    (started 17:02:53, the watcher)
+      PID 25772 the actual listener       (started 20:20:34)
+  - The watch child is being replaced repeatedly: PID 6508 started 18:39:34 and
+    was gone by 20:19; PID 25772 started 20:20:34. Roughly every ~100 minutes.
+    Cause UNVERIFIED (the npm dev output is not redirected to any file, so there
+    is no crash log). Practical effect: the in-memory prompt bank is thrown away
+    every time, so the next /ai/analyze-clothing call pays the full cold cost
+    again (see section 6).
+
+================================================================================
+2. AUDIT METHOD AND SOURCES
+================================================================================
+
+Read-only actions taken in this audit (no writes except this report):
+
+  Git          git status --porcelain; git status --untracked-files=all;
+               git log --date=iso -n 20; git reflog -n 15; git branch -a -v;
+               git diff on two files; git check-ignore -v backend/data/db.json
+  Code         read backend/package.json, server.js (analyze/upload/items/
+               storage regions), src/ai-engine.js, src/retrieval.js,
+               src/clothing-vision/*, scripts/vision-selftest.js,
+               lib/data/models.dart, lib/data/app_state.dart,
+               lib/core/api/api_client.dart, lib/core/api/api_config.dart,
+               lib/features/home/home_screen.dart
+  Data         backend/data/db.json (all 13 top-level keys), backend/storage/,
+               backend/.model-cache/, assets/images/, build/, .dart_tool/,
+               .gitignore, pubspec.yaml, ai-service/requirements.txt
+  Toolchain    node -v, flutter --version, python/python3/pip availability
+  Filesystem   recursive mtime+size inventory of the repo (jpegs/pngs excluded
+               from the first pass, then counted separately)
+  Sessions     C:\Users\dell\.local\share\opencode\opencode.db read with
+               node:sqlite in readOnly mode - session/message/part tables only.
+               Used for session windows, tool counts and write/edit targets.
+  Runtime      Get-CimInstance Win32_Process, Get-NetTCPConnection, and
+               read-only GETs to /health, /docs, /wardrobe/items
+  Temp dir     D:\Temp\opencode listing, and identification of which artifacts
+               belong to this project (see section 3)
+
+Things this audit deliberately did NOT do:
+  - Did not run `npm run vision:selftest` (it loads models and takes ~1 minute).
+  - Did not POST to any endpoint, so nothing was analysed or saved.
+  - Did not start/stop/restart any server.
+  - Did not run flutter analyze, flutter test or flutter build.
+  - Did not touch backend/.env (contains secrets; existence only confirmed).
+
+================================================================================
+3. VERIFIED SESSION TIMELINE (from opencode.db + file mtimes)
+================================================================================
+
+OpenCode session records for directory D:/Clothes_X2-main (local times, UTC+3).
+"write/edit" = count of write+edit tool calls.
+
+  #   window (local)              w/e  what it actually did
+  --  --------------------------  ---  ---------------------------------------
+  1   09-24 15:05 -> 15:32        84  "3D Wardrobe & Virtual Try-On"
+                                       (dir was D:/Clothes_X, different folder)
+  2   09-29 19:19 -> 19:21         0  "Flutter backend startup diagnosis"
+                                       (read-only diagnosis)
+  3   09-29 20:32 -> 22:24        59  "SmartWardrobe dynamic profile
+                                       integration" - the last session that
+                                       edited lib/ code in this repo
+  4   10-04 22:27 -> 23:45         0  "تعديل لقطة شاشة تسجيل الدخول"
+                                       (read-only: glob+bash only)
+  5   10-04 23:47 -> 23:47         0  "Audit and complete clothing AI
+                                       pipeline" (10 parts, aborted/short)
+  6   10-04 23:48 -> 10-05 02:45  91  "Flutter + FastAPI clothing AI
+                                       pipeline audit" = THE AI-PIPELINE
+                                       SESSION. 21 writes, 70 edits, 189 bash.
+                                       Its last user message asked for this
+                                       report; it wrote the previous
+                                       OPENCODE_HANDOFF_REPORT.txt at 02:43 and
+                                       verified 1,188 lines / 58,636 bytes.
+  7   10-05 02:49 -> 03:28         0  "Clothes_X2 handoff verification and
+                                       continuation" - read-only (67 bash) and
+                                       it pivoted to D:\testAi\testai
+  8   10-05 13:02 -> 16:19         0  "E2E testing and Flutter completion" -
+                                       0 writes; all work targeted
+                                       D:\testAi\testai\backend (port 8000)
+  9   10-05 16:24 -> 17:26        46  "server and model verification" - 10
+                                       writes + 36 edits, ALL to
+                                       D:\testAi\testai\backend\*.py
+  10  10-05 18:45 -> 19:01         1  "Project state audit and handoff
+                                       update" - its single write was
+                                       D:\اخر حاجة وصلها.txt
+  11  10-05 19:03 -> 19:17         3  "Fashion AI model loading and cache
+                                       reuse" - 3 writes, all to
+                                       D:\Temp\opencode + D:\اخر حاجة وصلها.txt
+  12  10-05 19:22 -> 20:25        40  "Offline AI pipeline with local models" -
+                                       the Python project again
+                                       (offline_env.py etc.), plus the
+                                       redirection to this audit at ~20:10
+
+  VERIFIED: query "write/edit tool parts whose target path contains
+  Clothes_X2-main\Clothes_X2-main, after 2026-10-05 02:45 local" returns 0 rows.
+  Consequence: the code in this repository has not been touched by any agent
+  since 2026-10-05 01:49 local (last write = backend/server.js). Every later
+  session, despite its title, worked on D:\testAi\testai.
+
+Unattributed filesystem events in this repo (VERIFIED as events, cause
+UNVERIFIED - no matching session record):
+  10-04 19:21 49  git checkout main (reflog). This rewrote lib/, pubspec.yaml,
+                 ios/Flutter/*, analysis_options.yaml - which is why ~40 files
+                 share the mtime 10-04 19:22:24.
+  10-04 19:34:45  android/gradle.properties gained two lines written by the
+                 Flutter migrator ("android.builtInKotlin=false",
+                 "android.newDsl=false"). android/local.properties and
+                 android/gradlew were created in the same minute. This is
+                 evidence that a flutter command DID run here on 10-04.
+  10-04 22:25:51  backend/.env.example was edited into a BROKEN state - see
+                 section 10, issue 4.
+  10-05 12:41-12:59 android/.gradle/8.14/{executionHistory,fileHashes}.bin
+                 rewritten - an Android/Gradle build ran again today.
+  10-05 17:02-17:05 a human ran `npm run dev`, logged in as kemo@gmail.com,
+                 uploaded 2 photos and ran one analysis (see section 6).
+
+Artifacts in D:\Temp\opencode that DO belong to this project (VERIFIED by
+content: they reference port 3001, "SmartWardrobe backend", node server.js):
+  srv.log 01:50:02  "SmartWardrobe backend listening on http://localhost:3001"
+                    + "[ai] local embeddings ready"
+  srv.err 01:50:00  dotenv banner only
+  mask_ascii.js 01:02:53, dbg_hue.js 00:50:45, size.ps1 01:26:13,
+  e2e.ps1 01:48:56, e2e.js 01:49:52  (the 7-group end-to-end HTTP test)
+  ort_test.txt, ort2.txt, out_marqo.txt, smoke_ort.js, test_clip.js,
+  test_clip2.js, test_clip3.js, test_hft.js, test_zs.js, test_eval.js,
+  eval.json, fixtures/, testcases/, testimg/, errtest/  (10-04 23:54 ->
+  10-05 00:20: the @xenova vs onnxruntime compatibility investigation)
+
+Artifacts in D:\Temp\opencode that DO NOT belong to this project (VERIFIED):
+  backend_start.log/.err (03:29), server_run.log/.err (16:24-18:57),
+  test_pipeline.py (16:39), wardrobe_test_8010, server8010.log/.err,
+  handoff_tail.txt (03:15), handoff_backup_20261005_1920.txt,
+  handoff_read.txt, handoff_new.txt, handoff.txt (20:05),
+  verify_offline.py, verify_download_models_offline.py, offline_server.py,
+  run_offline_server_test.ps1, verify_models.py, probe_no_network.py
+  -> all are the Python "AI CLOSET ANALYZER" at D:\testAi\testai.
+  EXCLUDED from this report on purpose.
+
+================================================================================
+4. VERIFIED ACTIONS
+================================================================================
+
+Actions that really happened, with evidence. Times local.
+
+4.1  2026-10-04 23:48 -> 2026-10-05 02:45  (session 6, ses_ef75)
+     Replaced the fabricated filename-regex clothing analysis with a real local
+     CPU pipeline, in this repository.
+     Evidence: 91 write/edit tool calls recorded in opencode.db for that
+     session, all targeting this repo; the resulting files exist with mtimes
+     inside that window (00:26 -> 01:49); db.json aiUsage shows two full e2e
+     HTTP suites at 01:48:52 and 01:50:45; srv.log shows the server being
+     started at 01:50:02.
+
+4.2  Dependency migration @xenova/transformers -> @huggingface/transformers
+     Reason recorded by that session: @xenova/transformers fails at runtime
+     against onnxruntime-node 1.17-1.30 with "TypeError: Tensor.location must
+     be a string."; versions 1.17.3/1.18.0/1.19.2/1.20.1 were each installed
+     and tested. The scratch files ort_test.txt, ort2.txt, out_marqo.txt,
+     smoke_ort.js, test_clip*.js, test_hft.js, test_zs.js in D:\Temp\opencode
+     (10-04 23:54 -> 10-05 00:20) are consistent with that investigation.
+     VERIFIED in the tree: package.json now has "@huggingface/transformers":
+     "^4.3.0" in optionalDependencies, "sharp": "^0.35.4" in dependencies, the
+     "overrides" block is gone, there is no direct onnxruntime-node dependency
+     and no @xenova/transformers anywhere. VERIFIED in the tree:
+     retrieval.js requires @huggingface/transformers with dtype 'q8'.
+
+4.3  Added a non-clothing gate so a bottle cannot come back as a belt.
+     VERIFIED in the tree: backend/src/clothing-vision/classify.js (6,656 B,
+     00:34:09) with margin/mass thresholds, and prompts.js (11,705 B, 00:34:13)
+     holding the declared GARMENTS / NON_CLOTHING / STYLES / SEASONS /
+     PATTERNS / MATERIALS banks plus GATE and MODEL constants.
+     VERIFIED at runtime: the 422 branch in server.js:635-638 returns
+     `{ analysis, source:'clothing-vision', rejected:true }`.
+
+4.4  Made colour a pixel measurement instead of a CLIP answer.
+     VERIFIED in the tree: backend/src/clothing-vision/color.js (24,377 B,
+     01:04:22) - segmentation by border flood fill / k-means colour models /
+     whole-frame tiers, then erosion, then median CIELAB + chroma-weighted hue,
+     then naming in CIELAB LCh.
+
+4.5  Made confidence honest.
+     VERIFIED in the tree: ai-engine.js:636-663 - the filename fallback returns
+     verified:false, confidence 0.3, an `uncertain` list and a note; the regex
+     table survives only as filenameGuess, exported as `filenameAnalysis`
+     (ai-engine.js:902). No 0.82+Math.random()*0.12 remains in the analyze path.
+
+4.6  Persisted analysis provenance on save.
+     VERIFIED in the tree: server.js:461-552 - POST /wardrobe/items always
+     analyses the bytes when present, records analysis, analysisSource,
+     analysisConfidence, confidenceKind, agreement, gate-equivalent fields,
+     uncertainAttributes, colorDetail, analysisModel, analyzedAt and
+     analysisRejected, and treats explicit client fields as overrides.
+
+4.7  Sniffs image type from magic bytes.
+     VERIFIED in the tree: server.js:280-287 sniffImageMime (png/jpeg/gif/webp/
+     bmp) and readStoredImage (server.js:265-271) with a basename +
+     startsWith path guard. VERIFIED that the motivating defect is real:
+     assets/images/item_shirt_white_small.jpg begins 89 50 4E 47 0D 0A 1A 0A,
+     i.e. PNG data behind a .jpg name.
+
+4.8  Ran two end-to-end HTTP suites, 2026-10-05 01:48:52 and 01:50:45.
+     VERIFIED from db.json aiUsage (15 calls per suite):
+       call 1        37,498 ms / 37,173 ms  clothing-vision, rejected
+                     non_clothing  <- the cold prompt-bank build
+       calls 2-7      185-366 ms             clothing-vision, rejected
+                                               non_clothing (the 6 fixtures)
+       calls 8-13     282-366 ms             clothing-vision, accepted (6 photos)
+       call 14          1 ms                 source "filename" (no bytes)
+       call 15          1-3 ms               clothing-vision, rejected
+                                               unreadable_image
+     This is the strongest surviving evidence that the pipeline worked over
+     HTTP, and it also corrects the previous report's cold-start number
+     (section 10).
+
+4.9  Created 6 archived test rows in db.json during those suites.
+     VERIFIED: db.json holds 19 wardrobe rows = 13 live + 6 archived; the
+     archived ones are "Vintage 501s" x2, "My Water Bottle" x2, "Navy Jeans"
+     x2. Three of them carry analysisSource "clothing-vision", one carries
+     "non_clothing". backend/data/ is gitignored (.gitignore line 58 =
+     "backend/data/", confirmed by git check-ignore -v), so they never appear
+     in git status.
+
+4.10 2026-10-05 17:03-17:05  A human exercised the app end to end.
+     VERIFIED from db.json: a session token for kemo@gmail.com at 17:03:40;
+     two new files in backend/storage/ at 17:04 (28938 B and 51870 B, byte
+     identical to two files uploaded on 10-04 23:30/23:32); one aiUsage entry
+     at 17:05:00 = 28,909 ms, endpoint analyze-clothing, source clothing-vision,
+     NO rejection - i.e. a real garment photo was analysed from pixels and
+     accepted. VERIFIED: no new wardrobe row exists, so the item was analysed
+     but never saved.
+
+================================================================================
+5. VERIFIED CHANGES
+================================================================================
+
+Everything below is present in the working tree right now. Mtimes are local.
+
+5.1  Tracked files modified (`git status --porcelain`), with mtime:
+
+  M  android/gradle.properties        10-04 19:34:45   320 B
+       + android.builtInKotlin=false, + android.newDsl=false (Flutter migrator)
+       NOT part of the AI pipeline. Introduced before that session began.
+
+  M  backend/.env.example             10-04 22:25:51   4,243 B
+       ONE-LINE CORRUPTION, STILL PRESENT:
+         -STORAGE_PUBLIC_BASE_URL=http://localhost:3000/api/storage
+         +STORAGE_PUBLIC_BASE_URL=http://localhost:30 00/api/storage
+       A space inside the port. Anyone copying this example file gets a broken
+       URL. NOT introduced by the AI-pipeline session (mtime is 13 h earlier
+       than its first write). Author UNVERIFIED.
+
+  M  backend/package.json             10-05 00:26:20   3,105 B
+  M  backend/package-lock.json        10-05 00:26:44   416,167 B
+  M  backend/server.js                10-05 01:49:48   62,053 B
+  M  backend/src/ai-engine.js         10-05 01:06:41   36,557 B
+  M  backend/src/retrieval.js         10-05 00:26:55   11,615 B
+
+  M  android/gradle.properties and M backend/.env.example are the two entries
+     the previous report's git listing omitted.
+
+5.2  New untracked files (`git status --untracked-files=all`), 26 files:
+
+  backend/src/clothing-vision/prompts.js    10-05 00:34:13   11,705 B
+  backend/src/clothing-vision/encoder.js    10-05 00:31:59    7,894 B
+  backend/src/clothing-vision/classify.js   10-05 00:34:09    6,656 B
+  backend/src/clothing-vision/color.js      10-05 01:04:22   24,377 B
+  backend/src/clothing-vision/index.js      10-05 01:05:54    9,147 B
+  backend/scripts/vision-selftest.js        10-05 00:32:38    4,283 B
+  backend/test/fixtures/non-clothing/README.md               1,547 B
+  backend/test/fixtures/non-clothing/{bottle,chair,laptop,mug,phone,tv_remote}.jpg
+  backend/.model-cache/  10 files, 255.5 MB total:
+    Marqo/marqo-fashionCLIP/{config.json,preprocessor_config.json,
+      tokenizer.json,tokenizer_config.json,onnx/vision_model_quantized.onnx
+      (87,301,119 B), onnx/text_model_quantized.onnx (64,358,586 B)}
+    Xenova/all-MiniLM-L6-v2/{config.json,tokenizer.json,tokenizer_config.json,
+      onnx/model.onnx (90,387,606 B), onnx/model_quantized.onnx
+      (22,972,370 B)}
+  (The Xenova directory is the transformers.js cache path for MiniLM, not a
+   leftover of the @xenova/transformers package. VERIFIED by path.)
+
+  Note the model cache is untracked too, so `git clean -xdf` or a fresh
+  checkout loses 255 MB of weights and the pipeline stops working until they
+  are downloaded again.
+
+5.3  Git history (VERIFIED, nothing new was committed):
+  4cbb677 2026-09-30 17:42:03 +0300 Merge PR #2 from my-changes   <- main
+  25be911 2026-09-30 01:59:37 +0300 Add my Flutter and backend changes
+  64e17bf 2026-09-29 18:09:15 +0300 AI Stylist: real learning...
+  da64935 2026-09-29 12:23:44 +0300 Add NestJS backend...
+  reflog shows a local `master`/`backup-my-current-work` at 335f8d0
+  ("Add my current project work", 09-30 01:41) and the 10-04 19:21 merge
+  fast-forward to 4cbb677.
+
+================================================================================
+6. VERIFIED FINDINGS
+================================================================================
+
+6.1  The pipeline architecture as it exists in the code
+     POST /ai/analyze-clothing (server.js:600)
+       -> decode once: imageBase64 raw, data URL, or /storage/ reference
+       -> sniffImageMime + readStoredImage (magic bytes, path guard)
+       -> ai.analyzeClothing (ai-engine.js:636) async
+          -> imageBytesFor/imageBytesOf (ai-engine.js:670+)
+          -> analyzeClothingImage(bytes, overrides) (clothing-vision/index.js:58)
+             -> encoder.js: lazy CLIP towers from backend/.model-cache, one
+                prompt bank built once and reused
+             -> classify.js: clothing vs non-clothing gate (margin, clothingMass)
+             -> color.js: segmentation + CIELAB LCh measurement
+             -> index.js: formalityFor(), applyOverrides(); a rejection is
+                returned untouched
+       -> on rejection: HTTP 422 { analysis, source:'clothing-vision',
+          rejected:true } and NO remote refinement (server.js:635-638)
+       -> otherwise optional Gemini/Groq refinement that may fill uncertain
+          attributes but cannot overwrite a decided category or measured colour
+          (server.js:647-667)
+     Wardrobe save (server.js:461-552) re-analyses the bytes itself so a row
+     always carries provenance, and DELETE is a soft delete (archived=true,
+     server.js:568-574) so outfit history survives.
+
+6.2  Live behaviour measured today (VERIFIED)
+     17:05:00 local  POST /ai/analyze-clothing, source clothing-vision,
+                      28,909 ms, accepted (no rejection).
+     This is the single most important number in this report. The Flutter
+     client's ApiConfig.timeout is 8 s (api_config.dart:26). The call therefore
+     cannot have completed on the device: app_state.dart:477 catches the
+     timeout with a bare `catch (_)` and returns an EMPTY analysis with source
+     'heuristic'. The user sees no error and no tags, and nothing is saved -
+     which is exactly what the data shows (upload at 17:04, analysis at
+     17:05, no row).
+     The 8 s timeout vs a 29-37 s server cost is therefore no longer a
+     theoretical risk; it has happened in production.
+
+6.3  Data state (VERIFIED, backend/data/db.json, 45,881 B, mtime 17:05:00)
+     Top-level keys: users, sessions, wardrobe, outfits, wearEvents, feedback,
+     styleMemory, conversations, events, weeklyPlan, wishlist, products,
+     aiUsage.
+     wardrobe: 19 rows - 13 live, 6 archived (section 4.9).
+     users: 2 - u_demo karim@fashiontech.com (created 2026-09-29 16:21:11.842Z)
+                and u_5d7069247fca kemo@gmail.com (2026-09-29 16:48:21.879Z).
+     sessions: 15, newest 2026-10-05T14:03:40.807Z (= 17:03:40 local, the login
+               that precedes the 17:04 uploads).
+     Only 6 rows carry an `analysis` object at all: the 6 archived test rows.
+     The 13 live rows have no provenance, which is expected - 12 of them are
+     seeded demo rows with no createdAt, and the 13th,
+     w_93d77901d684 "scaled_green-puffer-jacket-8-471831_677x"
+     (Outerwear/Green, createdAt 2026-10-04T20:33:01.268Z = 23:33 local),
+     predates the provenance change in server.js (01:49 on 10-05).
+     Other collections: outfits 4, conversations 7, weeklyPlan 7 day keys,
+     products 3, aiUsage 46, events 2, styleMemory 1, wearEvents 0, feedback 0,
+     wishlist 0.
+
+6.4  Storage (VERIFIED, backend/storage/, 7 files - the old report said 5)
+     1790705612564-9d36577d931f.jpeg  279,358 B  09-29 21:13
+     1790710511287-4a5b8c2c8242.jpeg  203,859 B  09-29 22:35
+     1791145845236-fdff699011be.webp   77,764 B  10-04 23:30
+     1791145882770-06af0e166fa9.webp   28,938 B  10-04 23:31
+     1791145950657-1fea12aa44d8.webp   51,870 B  10-04 23:32
+     1791209049727-4da960bd83d3.webp   28,938 B  10-05 17:04  <- new today
+     1791209071172-efecfaf08b27.webp   51,870 B  10-05 17:04  <- new today
+     The two new files are byte-identical duplicates of the 10-04 23:31 and
+     23:32 uploads and are referenced by NO wardrobe row: orphaned uploads from
+     the 17:04 add-clothes attempt that never completed (section 6.2).
+
+6.5  Toolchain (VERIFIED)
+     node v24.14.0
+     Flutter 3.47.5 stable, Dart 3.13.4, DevTools 2.60.0, engine ab598368592d
+     python / python3 / pip: NOT available on PATH. (A Python venv exists at
+       D:\testAi\testai\backend\venv for the OTHER project; this repo's
+       ai-service/ has no environment. ai-service/requirements.txt is
+       fastapi, uvicorn, pydantic, python-multipart, mtime 09-29 19:05, i.e.
+       untouched and never installed.)
+
+6.6  Flutter build evidence - CORRECTION to the previous report
+     The previous report said no flutter build had ever been run here. That is
+     wrong for builds:
+       build/app/outputs/flutter-apk/app-debug.apk  96,776,097 B  10-04 22:41
+       build/app/outputs/apk/debug/app-debug.apk      96,776,097 B  10-04 19:36
+       build/web/main.dart.js                           2,946,022 B  09-29 21:19
+       android/gradle.properties rewritten by the Flutter migrator 10-04 19:34
+       android/.gradle/8.14/executionHistory.bin rewritten 10-05 12:41-12:59
+     So `flutter build apk --debug` and a web build have both run in this
+     project, and another Gradle build ran today. Still no evidence of
+     `flutter analyze` or `flutter test`: there is no .dart_tool/test directory.
+
+6.7  Self-test arithmetic (VERIFIED by counting, not by re-running)
+     assets/images contains exactly 65 images; backend/test/fixtures/non-clothing
+     contains exactly 6 photos plus a README. 65 + 6 = 71, which matches the
+     previous report's "71 images: 59 clothing, 12 rejected" and confirms the
+     asset set has not changed since. vision-selftest.js was read: it walks
+     fixtures + assets/images, calls vision.analyzeClothingImage per file, and
+     exits non-zero if a fixture is accepted as clothing.
+
+6.8  Dependency/API contract details worth keeping
+     POST /wardrobe/upload  multipart field `photos`, max 10 files, 10 MB each,
+       image mimetypes only (server.js:230-262); returns 201 { files:[{url,
+       filename, storedAs, mime, size}] }.
+     GET /storage/<file>   express.static, maxAge 7d (server.js:220).
+     GET /wardrobe/items   200 { items, total, categories } - confirmed live.
+
+================================================================================
+7. FAILED / ABORTED ATTEMPTS
+================================================================================
+
+7.1  Recorded in the previous report, re-listed because they are the reason the
+     current design looks the way it does (HISTORICAL, not re-tested):
+     - @xenova/transformers against onnxruntime-node 1.17.3 / 1.18.0 / 1.19.2 /
+       1.20.1: all four failed identically with
+       "TypeError: Tensor.location must be a string." Pinning ORT lower was
+       investigated and abandoned.
+     - Segmentation bug 1: the flood fill compared each candidate against its
+       neighbour instead of the fixed ground colour, so it walked across the
+       garment (groundRatio measured exactly 1.000 on every test image).
+     - Segmentation bug 2: keepLargeBlobs/blobs skipped pixels where
+       mask[i]===1, so the background was segmented and every mask inverted;
+       every image reported the backdrop colour.
+     - Colour bug 3: Math.atan2 returns radians and the code converted to
+       degrees a second time, collapsing all hues to ~0 (burgundy/pink).
+     - Three self-inflicted regressions that were fixed in-session and not
+       shipped: `const` reassignment of colour confidence; "a*/b*" inside a
+       comment being parsed as code; raw-buffer stride using i*3*channels
+       instead of i*channels; erode() not exported.
+
+7.2  Verified in this audit:
+     - The previous report's own expectations were wrong three times and were
+       corrected against measurement (documented there as FAILURE A/B/C). The
+       measured median RGB values it lists (#202c41 jeans, #38373c trousers,
+       #2a1e17 suede) are consistent with garments photographed darker than
+       their filenames suggest, so the "colour does not match the filename"
+       complaint was an expectation error, not a bug.
+     - The 10-04 23:47 session ("Audit and complete clothing AI pipeline")
+       produced 10 parts and stopped; the real work happened in the next
+       session. No output, no damage.
+     - Every session after 10-05 02:45 that claimed to "continue" or "complete"
+       this project actually worked on D:\testAi\testai instead. Six such
+       sessions produced 0 changes here. That is the most expensive failure in
+       this project's history and it is why this report had to be rebuilt from
+       evidence rather than trusted.
+     - The 10-05 17:03-17:05 real-world add-clothes attempt failed end to end
+       (uploaded, analysed for 28.9 s, timed out client-side, saved nothing).
+     - Two orphaned files in backend/storage/ are the debris of that attempt.
+
+================================================================================
+8. CURRENT PROJECT STATE
+================================================================================
+
+As of 2026-10-05 20:27 local, all VERIFIED unless stated.
+
+  Git            main @ 4cbb677, clean of commits; 6 modified + 26 untracked
+                 files; nothing staged.
+  Backend code   on disk = the state written 10-05 00:26 -> 01:49. Not
+                 committed.
+  Backend run    UP on :3001 via `npm run dev` (watcher 7516/16860 from
+                 17:02:53; listener child currently PID 25772 from 20:20:34).
+                 /health ok, /docs 200, /wardrobe/items total=13.
+                 Watch child churns roughly every ~100 min; cause unknown.
+  Data           db.json 19 wardrobe rows (13 live / 6 archived), 2 users,
+                 15 sessions, 46 aiUsage rows, last written 17:05.
+  Storage        7 files, 2 of them orphaned duplicates from today.
+  Models         all 5 ONNX files present in backend/.model-cache (255.5 MB);
+                 nothing was downloaded by this audit.
+  Flutter        41 .dart files under lib/. Unmodified since the 10-04 19:21
+                 git checkout. Debug APK built 10-04 (96.8 MB).
+  Flutter gaps   ClothingItem: no analysis fields. No details screen. Home
+                 greeting hardcoded, avatar a constant asset, avatar not
+                 tappable. stagePhoto and importPhotos both swallow analysis
+                 failures. analyzeAndAdd still sends filename only.
+  Tests          test/backend_contract_test.dart exists (267 lines, 2 tests:
+                 line 47 auth->wardrobe->AI->outfits->planner->shop, line 199
+                 /ai/chat/stream deltas). NEVER RUN - no .dart_tool/test.
+                 The previous report said 268 lines; it is 267.
+                 No .spec.ts tests were run either (jest exists in
+                 package.json but was not invoked).
+  Docs           README.md untouched (09-29). backend/README.md untouched
+                 (10-04 19:22). Neither documents the clothing-vision pipeline,
+                 the gate, the provenance fields or the offline model cache.
+  Secrets        backend/.env exists (4,242 B, 09-29) and is not in git;
+                 contents deliberately not read or reproduced here.
+
+================================================================================
+9. UNRESOLVED ISSUES
+================================================================================
+
+Priority order. Items 1-3 are the ones that break the product for a real user.
+
+1. CRITICAL - The 8 s client timeout cannot survive the server's cold start, and
+   it has now failed in production.
+   Evidence: api_config.dart:26 `timeout = Duration(seconds: 8)`;
+   aiUsage 10-05 17:05:00 = 28,909 ms accepted; the two e2e suites measured
+   37,498 ms and 37,173 ms for the first analyze after a server start; the
+   in-process figure the previous report quotes is 33.8 s. Warm calls are
+   185-372 ms, so only the first call per process is the problem - and the
+   watch child restarts every ~100 minutes, so it keeps coming back.
+   Fix options: warm the prompt bank before app.listen resolves in server.js;
+   or persist the bank; or raise the timeout on this route only.
+
+2. CRITICAL - The client throws the answer away instead of showing it.
+   Evidence: app_state.dart:477-479 `catch (_) { return (url: url, analysis:
+   <String, dynamic>{}, source: 'heuristic'); }` - a bare catch that converts
+   both a timeout and a 422 rejection into an empty analysis. The 422 body has
+   no top-level `error` key (server.js:637 returns { analysis, source,
+   rejected }), and api_client.dart:76-86 builds its message from the top-level
+   `error` field, so even a surfaced rejection would read
+   "Stream failed (422)". Both halves must be fixed together.
+   Same defect, second instance: app_state.dart:519-521 in importPhotos, which
+   falls back to "Tops/White/Cotton" defaults after swallowing the error.
+
+3. CRITICAL - Nothing is committed. backend/src/clothing-vision/*,
+   backend/scripts/vision-selftest.js and backend/test/fixtures/* are untracked,
+   so a clean checkout or `git clean -xdf` deletes the entire pipeline, and
+   .model-cache (255 MB) with it. This is the cheapest high-value action left.
+
+4. HIGH - backend/.env.example ships a corrupted URL:
+   `STORAGE_PUBLIC_BASE_URL=http://localhost:30 00/api/storage` (space inside
+   the port). Introduced 10-04 22:25, before the AI session, author unknown.
+
+5. HIGH - All analysis output is discarded by the client. ClothingItem
+   (lib/data/models.dart) has only id, name, image, category, color, style,
+   material, season, formality, timesWorn, lastWornLabel. Grep over lib/ finds
+   zero occurrences of analysisConfidence, confidenceKind, agreement,
+   uncertainAttributes, colorDetail or analysisRejected. The server's entire new
+   output cannot reach the UI until the model carries those fields.
+
+6. HIGH - No clothing details screen. Zero matches for ClothingDetails /
+   clothing_details anywhere under lib/ (VERIFIED). item_detail_screen.dart is
+   the pre-existing wardrobe view and was never updated.
+
+7. MEDIUM - Home screen: home_screen.dart:173 hardcodes 'Good morning,'; line
+   178 uses MockData.userName; line 194 uses the constant Img.avatarKarim with
+   no gesture handler and no reference to ProfileScreen. The backend already
+   serves GET /users/me with avatarUrl and accepts POST /users/me/avatar.
+
+8. MEDIUM - analyzeAndAdd (app_state.dart:550-558) sends only {filename, name},
+   so it always receives the unverified filename fallback
+   (confidence 0.3, everything uncertain). The other two paths
+   (stagePhoto:469, importPhotos:513) do send real bytes.
+
+9. MEDIUM - Never run: flutter analyze, flutter test
+   test/backend_contract_test.dart. The 422-body change in item 2 would very
+   likely affect the contract test, so run it in the same pass.
+
+10. MEDIUM - Unattributed write to android/gradle.properties (Flutter migrator
+    flags) and an unexplained Android build today at 12:41-12:59. No agent
+    session covers either. Someone is building the app by hand.
+
+11. LOW - assets/images/item_shirt_white_small.jpg is PNG behind a .jpg name
+    (magic bytes verified) and always returns unreadable_image. Re-encode it or
+    rename it to .png.
+
+12. LOW - 6 archived test rows and 2 orphaned storage files (518 KB) should be
+    purged.
+
+13. LOW - README.md and backend/README.md do not mention the clothing-vision
+    pipeline, the non-clothing gate, the provenance fields, the 8 s timeout
+    trap or the model cache.
+
+================================================================================
+10. CORRECTIONS TO THE PREVIOUS REPORT
+================================================================================
+
+  # previous claim                          correction (this audit)
+  1 "Flutter + Express wardrobe app"        Accurate for the runtime in use
+                                            (server.js, Express 4.19.2), but the
+                                            repo also contains a complete NestJS
+                                            11 service (backend/src/*.ts,
+                                            nest-cli.json, start:nest). Say
+                                            "Flutter + dual Node backend".
+  2 "Backend running, node PID 29556"       Dead. Now `npm run dev`: watcher
+                                            7516/16860 from 17:02:53, listener
+                                            child 25772 from 20:20:34, and the
+                                            child is replaced every ~100 min.
+  3 "5 files in backend/storage/"           7 files. Two added today at 17:04,
+                                            orphaned (no row references them).
+  4 "19 rows, 13 live, 6 archived"          Still exactly true.
+  5 "First analysis in a fresh process
+     33.8 s"                                 Measured over HTTP it is 37.5 s and
+                                            37.2 s (two suites). 33.8 s is the
+                                            in-process figure. Today's real app
+                                            call was 28.9 s. Any of these breaks
+                                            the 8 s client timeout.
+  6 "No flutter build has ever been run"    Wrong. app-debug.apk (96,776,097 B)
+                                            built 10-04 19:36 and re-emitted
+                                            22:41; build/web/main.dart.js from
+                                            09-29; Flutter migrator edited
+                                            android/gradle.properties 10-04
+                                            19:34. flutter analyze / flutter
+                                            test remain unevidenced.
+  7 git status listing (5 modified files)   Incomplete: android/gradle.properties
+                                            and backend/.env.example are also
+                                            modified, and .model-cache (10
+                                            files) is untracked as well.
+  8 "stagePhoto swallows the rejection"     Correct, and there is a second
+                                            instance the report missed:
+                                            importPhotos:519 does the same.
+  9 "test/backend_contract_test.dart,
+     268 lines"                              267 lines, 2 tests (line 47, line
+                                            199). Substance unchanged.
+  10 "self-test 71 images, 59 clothing,
+     12 rejected, 0 failures in 56.9 s"      Arithmetic re-verified (65 assets
+                                            + 6 fixtures = 71). NOT re-run here.
+  11 "Generated 2026-10-05, backend AI
+     pipeline scope"                         Correct. It was written by session
+                                            ses_ef75 at 02:43 local; this file
+                                            supersedes it.
+
+================================================================================
+11. UNVERIFIED HISTORICAL INFORMATION
+================================================================================
+
+Carried from the previous report. Plausible and internally consistent with the
+artifacts, but not re-verified in this audit because confirming them would mean
+re-running the pipeline or the LLM refinement. Do not treat as measured.
+
+  - Per-image confidence values quoted for 12 photos (0.2826 blazer ..
+    0.8071 white tee) and the 29-swatch colour calibration result.
+  - The exact in-process timings (first call 35,180 ms; warm 250-372 ms) and the
+    "models load 2.0 s from cache" figure.
+  - Segmentation confidence being multiplied by 0.7 for the colour-model and
+    whole-frame tiers, and the tier-1 acceptance thresholds (deltaE <= 20,
+    flood coverage 6%-90%, erosion of 2 px).
+  - The confidence formula numbers (agreement = winnerShare*0.7 +
+    min(1, separation*6)*0.3; confidence = agreement*(0.45 + 0.55*weakest))
+    and the claim that the weakest attribute caps the row.
+  - The six non-clothing fixture outcomes table (bottle->drinkware,
+    phone->phone and tablet, laptop->computer equipment,
+    tv_remote->audio and tv equipment, chair->other objects, mug->drinkware).
+    Note: two archived db.json rows are both named "My Water Bottle", one with
+    analysisSource "non_clothing", which is consistent with this.
+  - Known false positives on marketing assets (onboarding_ai_style,
+    onboarding_plan_alt, onboarding_plan_everything, style_avatar_sparkle
+    rejected as "retail and marketing").
+  - Known category confusions (denim skirt -> Jeans, khaki shorts -> Chinos,
+    Suit/Blazer near-ties, denim flatlay -> Jeans).
+  - The measured median RGB values (#202c41, #38373c, #263039, #2a1e17,
+    #483927) and the "white garment on white backdrop is the hardest case"
+    finding.
+  - The claim that Gemini/Groq refinement ran and was correctly prevented from
+    overwriting a rejection. llm.status().configured depends on backend/.env,
+    whose contents were not read; whether a provider was configured is UNKNOWN.
+  - Whether `node --check` was ever run on the four changed files (the claim is
+    plausible; not re-run here).
+
+================================================================================
+12. EXACT NEXT STEP
+================================================================================
+
+One change, in this order, because each one unblocks the next test:
+
+  1. Commit what exists before touching anything else.
+       git add backend/src/clothing-vision backend/scripts/vision-selftest.js \
+               backend/test/fixtures backend/package.json \
+               backend/package-lock.json backend/server.js \
+               backend/src/ai-engine.js backend/src/retrieval.js
+       git add .gitignore entry for backend/.model-cache/  (do NOT commit the
+       255 MB of weights - ignore them instead)
+       Also fix the one-line corruption in backend/.env.example while you are
+       in there, and decide whether to keep or revert the Flutter-migrator
+       lines in android/gradle.properties.
+     Nothing else matters if this is lost again.
+
+  2. Fix the timeout and the swallowed rejection as ONE change, because they
+     are the same user-visible failure:
+       a) server.js - warm the encoder's prompt bank before/just after
+          app.listen resolves, so the 29-37 s cost never lands on a request;
+          and add a top-level `error` string to the 422 body.
+       b) app_state.dart:477 - stop swallowing. Re-throw ApiException (or
+          return the rejection payload) so the UI can say "that photo is not
+          clothing" instead of silently producing empty tags.
+       c) app_state.dart:519 - same fix in importPhotos.
+     Verify by restarting the server and timing the first request, then by
+     adding one real garment photo and one real bottle through the app.
+
+  3. Only then add the analysis fields to ClothingItem (models.dart:
+     constructor, fromJson, toJson, copyWith) and build the details screen.
+     A details screen without the model fields shows nothing.
+
+  4. Verification order once Flutter is touched:
+       flutter analyze
+       flutter test test/backend_contract_test.dart
+       (optionally node scripts/vision-selftest.js to confirm no backend
+        regression - it needs ~1 minute and loads the CLIP model)
+
+================================================================================
+13. COMMANDS USED FOR THIS AUDIT
+================================================================================
+
+  git status --porcelain
+  git status --porcelain --untracked-files=all -- backend
+  git log --date=iso --format="%h|%ad|%an|%s" -n 20
+  git reflog --date=iso -n 15
+  git branch -a -v
+  git diff -- android/gradle.properties
+  git diff -- backend/.env.example
+  git check-ignore -v backend/data/db.json
+
+  node -v                                   # v24.14.0
+  flutter --version                         # 3.47.5 stable, Dart 3.13.4
+  python --version / python3 --version / pip --version   # not available
+
+  node -e "const db=require('./backend/data/db.json'); ..."      # row census
+  node -e "... SELECT ... FROM part WHERE data LIKE ..."        # opencode.db
+                                                                 # via node:sqlite
+                                                                 # readOnly:true
+
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'"
+  Get-NetTCPConnection -LocalPort 3001 -State Listen
+  Get-Process -Id 25772
+  Invoke-RestMethod http://localhost:3001/health
+  Invoke-WebRequest http://localhost:3001/docs          # 200
+  Invoke-RestMethod http://localhost:3001/wardrobe/items
+
+  Get-ChildItem -Recurse (mtime/size inventory), Get-ChildItem assets/images,
+  Get-ChildItem backend/storage, Get-ChildItem backend/.model-cache -Recurse,
+  Get-ChildItem build -Recurse -Include *.apk
+
+================================================================================
+14. FILES THAT MATTER
+================================================================================
+
+  OPENCODE_HANDOFF_REPORT.txt        this file (the only file changed)
+  backend/server.js                  Express runtime; analyze/upload/save routes
+  backend/src/ai-engine.js           analyzeClothing + honest filename fallback
+  backend/src/clothing-vision/       prompts, encoder, classify, color, index
+  backend/scripts/vision-selftest.js 71-image regression runner
+  backend/test/fixtures/non-clothing/ 6 Wikimedia fixtures + provenance README
+  backend/.model-cache/              255.5 MB of ONNX weights (untracked)
+  backend/data/db.json               45,881 B, gitignored, live wardrobe state
+  backend/storage/                   7 uploaded images, 2 orphaned
+  backend/package.json               dual scripts; @huggingface/transformers
+  backend/.env / .env.example        real config / example (one line broken)
+  lib/data/models.dart               ClothingItem - missing all analysis fields
+  lib/data/app_state.dart            stagePhoto:459, importPhotos:497,
+                                     analyzeAndAdd:550
+  lib/core/api/api_config.dart       baseUrl + the 8 s timeout
+  lib/core/api/api_client.dart       error extraction from the top-level `error`
+  lib/features/home/home_screen.dart hardcoded greeting/avatar
+  lib/features/wardrobe/item_detail_screen.dart   pre-existing, not updated
+  test/backend_contract_test.dart    267 lines, 2 tests, never run
+  ai-service/requirements.txt        Python service, never installed
+  android/gradle.properties          modified by the Flutter migrator
+  D:\Temp\opencode\srv.log|srv.err   the 01:50 server start of this project
+  D:\Temp\opencode\e2e.js            the 7-group HTTP test
+  D:\Temp\opencode\ort*.txt, test_clip*.js, test_hft.js, test_zs.js,
+  test_eval.js, eval.json, smoke_ort.js   the dependency-migration evidence
+
+================================================================================
+END OF REPORT
+================================================================================
+================================================================================
+SESSION 7 — FLUTTER ↔ BACKEND INTEGRATION AUDIT + IMAGE INPUT FLOW (COMPLETE)
+Date: 2026-10-06 06:36:04
+================================================================================
+
+WHAT WAS COMPLETED:
+1. Read SESSION 6 handoff to understand previous state (logger exception added, 84/84 pipeline, 8010 down).
+2. Verified live backend status: port 8000 running, /health OK, /status shows models_ready=true, saved_items=7, bound_on=0.0.0.0:8000, lan_ip=192.168.1.5.
+3. Audited backend API contract by reading main.py:
+   - Endpoints: GET /, GET /health, GET /status, POST /analyze, GET /items, GET /items/{id}, DELETE /items/{id}
+   - POST /analyze: multipart/form-data, field name 'image' (UploadFile), returns 200 on success with full result; 503 not_ready; 422 non_clothing/no_subject/bad_request; 500 pipeline_error/image_write
+   - Wardrobe endpoints: GET /items (limit 1-200), GET /items/{id} (404 if missing), DELETE /items/{id} (deletes row and image file if under /images/), images served via StaticFiles at /images
+   - Error handlers: AnalysisError, RequestValidationError (422 with clear message when 'image' missing), generic Exception logged via LOGGER.warning
+4. Audited Flutter project (lib/, pubspec.yaml): 
+   - Dependencies: camera ^0.12.1, image_picker ^1.2.3, http ^1.6.0
+   - API: ApiConfig (host 192.168.1.5, port 8000, configurable), ApiService (checkHealth before analyze, multipart sends 'image', parses error/error_type/message/hint, builds absolute image URLs)
+   - Models: ClothingAnalysis/SavedItem/Attribute/SizeInfo/DetectionInfo/TopPredictions/AnalysisDebug match backend shapes
+   - Screens: HomeScreen (camera/gallery + navigation to processing), CameraScreen (camera capture), ProcessingScreen (shows image, stages, calls analyze, handles non_clothing/errors), ResultScreen (displays full result), SavedItemsScreen (lists items, delete), ClothingDetailsScreen (read-only details), ProfileScreen (fetches /status)
+5. Compared backend vs Flutter: endpoints/methods/field names match; response/error shapes align; no mismatches found. Image input flow (camera/gallery/show/passing to analyzing screen) is fully implemented.
+6. Updated handoff with SESSION 7 findings.
+
+WHAT WAS VERIFIED:
+- Backend on port 8000 responds to /health and /status (models_ready=true).
+- Port 8010 is DOWN (0 listeners) as required.
+- Image upload field name matches ('image'). 
+- Error structure (non_clothing with error_type/message/hint/debug) matches Flutter's error parsing.
+- API client timeouts and base URL configuration present in Flutter code.
+- Camera/gallery/analyzing flow exists in Flutter codebase.
+
+TESTS/RESULTS:
+- HTTP checks to port 8000: /health OK, /status OK. No full end-to-end POST /analyze from Flutter run in this session.
+- No code changes, so no Flutter analyzer/dart format run required by change rules; baseline code is preserved.
+- MODEL_DOWNLOADS: 0 verified (not changed). 
+- DB: CLEAN (unchanged; 7 saved items unchanged).
+
+FILES CHANGED: 0 (no files modified, only audit/read; handoff file appended).
+
+ISSUES OR BLOCKERS: None. All flows already implemented in Flutter and match backend contract.
+
+CURRENT BACKEND/SERVER STATUS: Port 8000 running (0.0.0.0:8000), launcher+worker processes present (OwningProcess 19116 from listener), models_ready=true, 7 items, offline env set, LAN 192.168.1.5. Application startup complete; healthy.
+
+CURRENT DB STATUS: CLEAN - 7 rows [18,19,20,21,22,38,39] as per SESSION 6; not modified in this session.
+
+MODEL/DOWNLOAD STATUS: 0 downloads. All models on disk, offline configuration active. Do not download.
+
+PORT 8000 STATUS: LISTENING (0.0.0.0:8000)
+
+PORT 8010 STATUS: DOWN (0 listeners). DO NOT START.
+
+EXACT NEXT TASK FOR THE FOLLOWING SESSION:
+Option 1 (recommended minimal): End-to-end test of the image input → analyze flow with a real image. Use Flutter on target device with correct base URL (physical Android: 192.168.1.5:8000; emulator: 10.0.2.2:8000). Call POST /analyze with an actual image via the app and verify success (200) returns correct structure, or test via curl from host: 
+  curl -X POST http://127.0.0.1:8000/analyze -F "image=@D:\testAi\testai\test_images\some_garment.jpg"
+Also test non-clothing case (e.g. bottle) to confirm 422 with non_clothing. Do NOT change backend models/gate/DB/schema. Do NOT start port 8010.
+
+Option 2 (if issues found): Only make minimal targeted fixes to Flutter (API/model mapping or base URL handling) if runtime mismatches are discovered. Do not rewrite architecture/UI.
+
+PRIORITY: Verify end-to-end connectivity with actual image upload first; fix only if broken.
+
+END SESSION 7
+================================================================================
+
+================================================================================
+SESSION 8 - REAL FLUTTER <-> BACKEND MANUAL RUNTIME TEST (PARTIAL / FAILED)
+Appended 2026-10-06. APPEND-ONLY. Previous sessions above are untouched.
+================================================================================
+
+RESULT: PARTIAL / FAILED - the app runs, but two real defects were observed.
+         This session is a STATE SAVE ONLY. No code was written.
+
+1. SESSION 8 MANUAL RUNTIME TESTING WAS PERFORMED
+   The Flutter application was launched and exercised by hand against the
+   running backend. This is the first session in which the app actually ran,
+   rather than only being read.
+
+2. TARGET: CHROME
+   `flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:3001`
+   Chrome/web was the ONLY target available on this machine. Verified before
+   the run: `flutter devices` returned Windows, Chrome and Edge only;
+   `flutter emulators` reported "No emulators available"; no `adb` binary is
+   installed. No Android device and no emulator were connected.
+
+   CAMERA_RUNTIME_TEST: BLOCKED - no physical Android device, no emulator,
+   no adb. The camera flow was NOT exercised and is NOT claimed to pass.
+
+3. CLOTHING CLASSIFICATION: PASS
+   Real clothing images were accepted and classified correctly. Category,
+   colour and style came back as garment values and were presented as such.
+
+4. NON-CLOTHING REJECTION: FAIL
+   The backend gate does not reject arbitrary non-clothing objects. The app
+   continued through the normal clothing flow instead of showing the
+   non-clothing message/hint with a retry.
+
+5. BOTTLE TEST: FAIL
+   A bottle photo was NOT rejected. It was incorrectly treated as clothing
+   and carried through the clothing pipeline, presented with values such as
+   white colour in a clothing/worn presentation.
+
+6. CHAIR TEST: FAIL
+   A chair photo was NOT rejected. Same incorrect behaviour as the bottle:
+   it continued through the clothing flow rather than being refused.
+
+7. RUNTIME FLUTTER EXCEPTION: FOUND
+   A framework exception was raised during normal navigation. It is a real
+   defect in the running app, unrelated to the gate failure above.
+
+8. EXCEPTION DETAILS
+   Message:  setState() or markNeedsBuild() called during build.
+   Call chain:
+     WardrobeScreen.initState()
+       -> AppState.loadWardrobe()
+         -> AppState notifyListeners()
+           -> ListenableBuilder rebuild
+   Location:  lib/data/app_state.dart        around lines 425-427
+              lib/features/wardrobe/wardrobe_screen.dart  around line 37
+   Cause:  AppState notifies its listeners synchronously from inside a call
+   initiated by initState, so a ListenableBuilder is asked to rebuild while
+   the tree is still building. Diagnosis only - deliberately not fixed here.
+
+9. FILES CHANGED: 0
+   No file in either project was edited. No dependency, pubspec, api_config,
+   UI, backend, model, threshold or architecture change was made.
+
+10. FILES CREATED: 0 inside the project.
+    Only session logs were written OUTSIDE the project, in D:\\Temp\\opencode\\
+    (flutter_chrome_session8.log/.err, server8000_session8.log/.err,
+    srv3001_session8.log/.err). No project file was added.
+
+11. FILES DELETED: 0
+    Nothing was removed. Previous session history was not overwritten; this
+    section is appended only.
+
+12. EXACT NEXT TASK
+    SESSION 9: Fix non-clothing rejection for arbitrary objects such as
+    bottles/chairs while preserving correct clothing classification, and fix
+    the WardrobeScreen/AppState build-phase notification exception with the
+    minimum safe changes.
+
+--------------------------------------------------------------------------------
+ARCHITECTURE NOTE - CORRECTION TO THE SESSION 7 SECTION ABOVE
+--------------------------------------------------------------------------------
+  SESSION 7 described the Flutter app as talking to the FastAPI AI backend on
+  port 8000 via POST /analyze with multipart field `image`. That description is
+  OUTDATED AND INCORRECT. Evidence read from the files on disk:
+
+    lib/core/api/api_config.dart     -> http://localhost:3001 (non-Android)
+                                        http://10.0.2.2:3001 (Android)
+    lib/core/api/api_client.dart     -> multipart field name is `photos`
+    lib/core/api/smartwardrobe_api.dart -> POST /wardrobe/upload,
+                                        POST /ai/analyze-clothing (JSON body)
+    pubspec.yaml                     -> no `camera` dependency at all
+
+  ACTUAL ARCHITECTURE:  Flutter -> Node/Express backend :3001 -> its own
+  in-process AI/vision flow. Port 8000 is a SEPARATE project
+  (D:\\testAi\\testai) with an incompatible contract (POST /analyze, field
+  `image`) and is NOT this Flutter app's API. `proxyAI()` in backend/server.js
+  is defined but never called, so AI_SERVICE_URL is dead config.
+
+  CONSEQUENCE: the baseline IDs [18,19,20,21,22,38,39] belong to the OTHER
+  project's SQLite DB (D:\\testAi\\testai\\backend\\wardrobe_data\\wardrobe.db).
+  This Flutter/Node stack persists to backend/data/db.json and never writes to
+  that SQLite file, so testing the Flutter app cannot alter that baseline.
+
+PORT STATUS AT THE END OF THIS SESSION
+  PORT 3001  UP     - Node/Express, "SmartWardrobe backend listening on
+                      http://localhost:3001", local embeddings ready
+  PORT 8000  UP     - FastAPI, models_ready=true, saved_items=7 (separate
+                      project; left running but unused by the Flutter app)
+  PORT 8010  DOWN   - not started, not touched, must stay down
+  PORT 3000  DOWN   - NestJS backend not started
+
+MODEL / DOWNLOAD STATUS
+  MODEL_DOWNLOADS: 0. Nothing was downloaded, replaced or cleared.
+  The Node backend used its existing local embeddings model and its
+  existing in-process vision flow. The LLM path was off
+  (llm.configured=false, vision=false). No AI model, threshold or gate was
+  changed, and none was created.
+
+SESSION 8 CLOSING BLOCK
+================================================================================
+  SESSION_8_RESULT:            PARTIAL  (FAILED on two counts)
+  TARGET_DEVICE:               Chrome
+  CLOTHING_CLASSIFICATION:     PASS
+  NON_CLOTHING_REJECTION:      FAIL   (bottle FAIL, chair FAIL)
+  RUNTIME_EXCEPTION:           FOUND  (setState during build)
+  CAMERA_RUNTIME_TEST:         BLOCKED
+  FILES_CHANGED:               0
+  FILES_CREATED:               0 inside the project
+  FILES_DELETED:               0
+  MODEL_DOWNLOADS:             0
+  PORT_3001: UP   PORT_8000: UP   PORT_8010: DOWN
+  NEXT_TASK:                   SESSION 9 - Fix non-clothing rejection and the
+                                WardrobeScreen/AppState build-phase exception.
+================================================================================
+END SESSION 8
+================================================================================
+
+================================================================================
+SESSION 9 — FIX NON-CLOTHING REJECTION + WARDROBE BUILD-PHASE EXCEPTION
+================================================================================
+
+RUN REALITY CHECK (measured this session, real Flutter -> Node/Express :3001
+path, warm bank):
+  The backend gate ALREADY worked before any change. Six non-clothing fixtures
+  (bottle, chair, laptop, mug, phone, tv_remote) returned HTTP 422
+  {analysis:{error_type:'non_clothing',...}, source:'clothing-vision',
+  rejected:true}; 11/12 clothing assets returned 200 (the only decline,
+  onboarding_ai_style.jpg, is a marketing composite). Gate: margin 0.01,
+  clothingMass 0.4 (GATE in prompts.js). Chair margin 0.004, bottle -0.0825.
+  The DEFECT was 100% on the Flutter side.
+
+HARD EVIDENCE against backend/data/db.json and backend/storage (session 8 left):
+  1) A REJECTED object was SAVED as clothing: wardrobe row
+     w_0bf530679838 "scaled_icofu6326-env" (createdAt 05:39:53Z) is the CHAIR.
+     analysis.error_type = 'non_clothing', analysisSource = 'non_clothing',
+     analysisRejected = {error_type,closest:'furniture'} — yet category=Tops,
+     color=White, style=Casual, material=Cotton (the client's default tags).
+     This is exactly "bottle/chair classified as white clothing, then saved".
+  2) aiUsage shows 5 rejected analyze-clothing calls at 05:39:10-05:41:18Z,
+     three of them with an upload (avif, jpg, webp*2, jfif). All five were
+     correctly rejected server-side; one was nevertheless saved via the same
+     swallow. The clothing saves at 05:32-05:36Z succeeded via the same flow.
+  3) Cold-start measure: the FIRST analyze-clothing call after server boot took
+     28,649 ms (aiUsage 05:32:26.938Z) — far over the app's shared 8s budget.
+     A timeout fell into the same catch(_) and became an empty "heuristic"
+     analysis, i.e. default tags too.
+
+ROOT CAUSES (all client-side):
+  A. lib/data/app_state.dart stagePhoto (~line 477) had a bare `catch (_)`
+     that converted the backend's 422 rejection into an empty heuristic result.
+     add_clothing_screen._tagValue then filled defaults (CATEGORY Tops, COLOR
+     White ...), the photo reached _Phase.ready, and Save worked.
+  B. Same swallow in importPhotos (same file, ~line 519).
+  C. The 422 body carries no top-level `error` (it is {analysis..., source,
+     rejected}), so api_client produced the generic "Request failed (422)".
+  D. wardrobe_screen.initState called loadWardrobe() synchronously.
+     loadWardrobe sets wardrobeLoading=true then notifyListeners() BEFORE its
+     first await (app_state.dart 425-427). When the screen is built on top of
+     already-mounted AppState listeners (a pushed route, or a tab built while
+     the shell frame is still building), Element.markNeedsBuild throws
+     "setState() or markNeedsBuild() called during build." Because the call is
+     async the error is captured into an unhandled Future, so the load aborts
+     BEFORE the fetch and wardrobeLoading stays true. wardrobe_insights_screen
+     initState has the identical pattern (same reason: it is a pushed route).
+
+CHANGES MADE (minimal, no threshold/model/architecture change):
+  1. lib/data/app_state.dart — stagePhoto: an ApiException with a real HTTP
+     status is now rethrown instead of swallowed. A 422 surfaces a friendly
+     rejection (`_notClothingMessage`), server errors rethrow as-is, and the
+     documented offline fallback (status == null => unreachable backend =>
+     heuristic) is preserved. importPhotos got the same 422/status guard.
+  2. lib/core/api/api_config.dart — added analyzeTimeout (60s). lib/core/api/
+     api_client.dart — post()/_send() accept an optional per-call timeout.
+     lib/core/api/smartwardrobe_api.dart — analyzeClothing() uses the 60s
+     budget, so the gate verdict is never dropped on the shared 8s timeout.
+  3. lib/features/wardrobe/add_clothing_screen.dart — _StatusLine now shows
+     the photo's error message (the non-clothing hint) instead of the generic
+     "Analysis failed", and counts rejected photos next to ready ones.
+  4. lib/features/wardrobe/wardrobe_screen.dart and lib/features/insights/
+     wardrobe_insights_screen.dart — the initState loadWardrobe() call is
+     deferred with WidgetsBinding.instance.addPostFrameCallback (with a
+     mounted check), so the first notification can never fire mid-build.
+
+VERIFICATION:
+  - flutter analyze: No issues found (after edits and after test files).
+  - flutter test --dart-define=API_BASE_URL=http://localhost:3001:
+    ALL 69 TESTS PASS (66 existing + 3 new).
+  - test/non_clothing_gate_test.dart (NEW): drives the REAL app path
+    AppState.stagePhoto -> POST /wardrobe/upload -> POST /ai/analyze-clothing
+    against the live :3001 backend. bottle.jpg and chair.jpg must throw
+    ApiException(status 422, message contains "clothing") — PASS; a real
+    garment (blazer_navy_hanger.jpg …) must stage with
+    source 'clothing-vision', analysis.success true — PASS. Test uploads are
+    removed afterwards so backend/storage ends exactly where it started.
+  - test/wardrobe_build_phase_test.dart (NEW): mounts an AppState listener,
+    pushes WardrobeScreen on top (the topology that triggered the bug) and
+    asserts the load completes (loadWardrobe is not aborted mid-build). With
+    the OLD code this test FAILS with the exact reported error
+    "setState() or markNeedsBuild() called during build." (verified by
+    temporarily reverting the fix); with the fix it PASSES.
+  - node backend/scripts/vision-selftest.js: 71 images, 59 clothing,
+    12 rejected, 0 failure(s). Backend unchanged.
+  - Storage and db.json net unchanged: wardrobe rows back to the session
+    baseline of 25 (12 demo + 7 pre-existing live + 6 session-8 rows,
+    including w_0bf530679838 which was NOT deleted), storage back to 18 files.
+    The only db.json movement this session was aiUsage audit entries appended
+    by tests (informational) and 5 archived 'Contract Test Tee' rows created
+    by the pre-existing backend_contract_test (soft-delete design) which were
+    removed again to restore the baseline.
+
+KNOWN PRE-EXISTING / OUT OF SCOPE
+  - backend/contract test /ai/chat/stream assertion "user said they never wear
+    sneakers" is data-dependent and flaky (passed on re-run, in isolation and
+    in the final full run). Unrelated to this session's client-only changes.
+  - The save route POST /wardrobe/items still stores client default tags when
+    the client re-sends a rejected image; the client fix makes that path
+    unreachable in the app (a rejected photo never reaches _Phase.ready/Save).
+
+================================================================================
+SESSION 9 CLOSING BLOCK
+================================================================================
+  SESSION_9_RESULT:            SUCCESS   (both required fixes in, all green)
+  TARGET_DEVICE:               Windows (flutter test VM; live :3001 backends)
+                                Flutter code is platform-neutral.
+  NON_CLOTHING_REJECTION:      PASS   (bottle + chair rejected at the app layer;
+                                backend already rejected them — the client no
+                                longer swallows the 422 into White/Tops)
+  CLOTHING_CLASSIFICATION:     PASS   (real garment stages as clothing-vision;
+                                selftest 71 images, 59 clothing, 12 rejected,
+                                0 failure)
+  RUNTIME_EXCEPTION:           FIXED  (loadWardrobe deferred post-frame in
+                                wardrobe_screen + wardrobe_insights_screen;
+                                regression test fails on the old code with the
+                                exact reported message, passes with the fix)
+  FILES_CHANGED:               7      lib/data/app_state.dart,
+                                lib/core/api/api_config.dart,
+                                lib/core/api/api_client.dart,
+                                lib/core/api/smartwardrobe_api.dart,
+                                lib/features/wardrobe/add_clothing_screen.dart,
+                                lib/features/wardrobe/wardrobe_screen.dart,
+                                lib/features/insights/wardrobe_insights_screen.dart
+  FILES_CREATED:               2      test/non_clothing_gate_test.dart,
+                                test/wardrobe_build_phase_test.dart
+  FILES_DELETED:               0      (throwaway probe test removed again)
+  MODEL_DOWNLOADS:             0      No model, threshold, gate or architecture
+                                change. Backend (server.js, clothing-vision,
+                                prompts.js) untouched. :3001 server not
+                                restarted (all fixes are client-side).
+  PORT_3001: UP   PORT_8000: UP   PORT_8010: DOWN
+  DB_CHECK:                    OK     db.json 25 wardrobe rows (baseline),
+                                storage 18 files (baseline). session-8 rows
+                                incl. the saved chair are preserved.
+  NEXT_VERIFICATION:           Session 8's camera/manual app test on a device
+                                or Chrome against the running :3001 backend —
+                                a rejected bottle/chair must now show the
+                                non-clothing message with retry, and Wardrobe
+                                opens without the build-phase exception.
+================================================================================
+SESSION_9_COMPLETE
+================================================================================
+
+================================================================================
+SESSION 10 — TEAM GITHUB READY SETUP (models stay OUT of git; repo reproducible)
+================================================================================
+
+OBJECTIVE (from the brief): keep model weights out of GitHub, make a fresh
+clone able to obtain the SAME models + runtime config via documented setup, so
+the current pipeline behaves identically for teammates. No commit, no push.
+
+ACTUAL MODELS (verified from code, not assumed): exactly two local ONNX models,
+both loaded by @huggingface/transformers v4.3.0 from backend/.model-cache:
+  1. Marqo/marqo-fashionCLIP   (dtype q8; clothing gate + all attributes)
+     loader backend/src/clothing-vision/encoder.js (from_pretrained x4)
+  2. Xenova/all-MiniLM-L6-v2   (dtype q8; semantic retrieval)
+     loader backend/src/retrieval.js (pipeline feature-extraction)
+The torch stack from older report sections (U2Net/rembg, yolos-fashionpedia,
+wargon-classifier, C:\Users\dell caches, D:\testAi\testai) belongs to the
+SEPARATE FastAPI :8000 project and is NOT referenced by this repo's code.
+ai-service/main.py is a no-model heuristic stub. lib/ has no on-device model.
+Remote LLM (Gemini / Groq / OpenRouter / OpenAI) is key-based, no artifact.
+
+MODEL CACHE: backend/.model-cache = 11 files, 267,957,979 B (~255.5 MB).
+NOW IGNORED from git (.gitignore:65 "/backend/.model-cache/"), verified by
+`git check-ignore -v` for the dir and representative weight files.
+
+REVISION DETERMINATION (deliberately no guessing): transformers.js v4 stores a
+flat cache (org/repo/files) that does not record the source commit SHA. Local
+SHA256 of cached files does NOT equal the Hub API blobId returned for current
+'main' (quantized + tokenizer files appear to be transformers.js-produced at
+download time, not byte-for-byte Hub blobs), so the exact original commit is
+NOT provable from cache metadata. Therefore NO revision was hard-coded. The
+cached file SIZES match current 'main' exactly for every required artifact
+(87,301,119 / 64,358,586 / 2,224,109 / 22,972,370 / 90,387,606 / 711,661 B),
+which is consistent with the cache having come from the currently-published
+revisions. Documented in README with current 'main' SHAs at audit time:
+  Marqo/marqo-fashionCLIP   main = 44f4c655124ed71e90cbf528d82f508d69d8a81b
+  Xenova/all-MiniLM-L6-v2   main = 751bff37182d3f1213fa05d7196b954e230abad9
+Remaining reproducibility note: pin `revision` in the two loaders if the Hub
+moves and the team wants a lockstep revision; until then it is default 'main'
+(i.e. the same resolution the tested cache uses).
+
+DETERMINISTIC SETUP (new, verified on this machine, no re-download):
+  backend/scripts/setup-models.js  — reuses the app's OWN loaders to fetch
+  exactly what runtime loads into backend/.model-cache; writes only inside the
+  cache dir; never overwrites present files; never deletes anything; no API
+  keys; verifies required files (existence + size) and reports SHA256 prefixes.
+  wired as `npm run setup:models`. This also covers MiniLM's cache location
+  determinism: retrieval.js now sets env.cacheDir to backend/.model-cache
+  explicitly (before, MiniLM could fall back to the package-default cache dir
+  if encoder had not initialized first) — a pure deterministic-download config
+  change, no behaviour difference with the audited cache.
+
+DOCS / CONFIG UPDATED:
+  .gitignore                + rule for /backend/.model-cache/
+  README.md                 + "Team setup (fresh clone)" A-E (clone / models /
+                            backend / flutter / API URL incl. emulator 10.0.2.2
+                            and LAN IP guidance — no personal IP committed);
+                            model table + reproducibility note; fixed stale
+                            `npm run embeddings:install` reference (module no
+                            longer defines that script).
+  backend/README.md         + local AI model section + reproducibility note +
+                            corrected client port (10.0.2.2:3001) + selftest row
+  backend/.env.example      + CLOTHING_VISION / EMBEDDINGS / setup-models
+                            documentation; placeholders only
+  backend/package.json      + "setup:models" script
+
+VERIFICATION (this machine, backend :3001 running):
+  flutter analyze                           No issues found
+  flutter test --dart-define=API_BASE_URL=http://localhost:3001
+                                            All 69 tests passed
+  node backend/scripts/vision-selftest.js  71 images: 59 clothing, 12 rejected,
+                                            0 failures
+  node backend/scripts/setup-models.js     idempotent success, cache unchanged
+                                            (11 files; no downloads)
+  git check-ignore -v backend/.model-cache → .gitignore:65 (weights excluded)
+  Model weights NOT staged; backend/.env, backend/data, backend/storage ignored
+
+DB / STORAGE integrity: the flutter test run includes backend_contract_test
+which persists rows; its artefacts were removed again to restore the audited
+baseline — db.json wardrobe back to 25 rows (17 active incl. session-8 chair
+w_0bf530679838 + 7 pre-existing soft-deleted rows), storage back to 18 files.
+aiUsage audit entries appended by tests remain (informational only).
+
+GIT: NO commit, NO push (per instruction). Safe project files STAGED for team
+review only; details in the SESSION_10_RESULT block below.
+
+SESSION_10_RESULT:
+  TEAM_READY:                    YES — clone + `npm install` + `npm run setup:models`
+                                 reproduces the exact pipeline (verified locally)
+  MODEL_WEIGHTS_IN_GIT:          NO — /backend/.model-cache/ ignored (.gitignore:65)
+  MODEL_WEIGHTS_IGNORED:         YES — git check-ignore matched for dir + weights
+  MODEL_SETUP_METHOD:            node scripts/setup-models.js (npm run setup:models)
+                                 reuses app loaders; backend/.model-cache; idempotent
+  MODEL_1:                       Marqo/marqo-fashionCLIP (q8, 512-dim)
+  MODEL_2:                       Xenova/all-MiniLM-L6-v2 (q8, 384-dim)
+  MODEL_REVISIONS:               default 'main' (unpinned — no SHA hard-coded:
+                                 cache does not record the commit; see notes)
+  MODEL_CACHE_PATH:              backend/.model-cache/ (gitignored, app & setup share
+                                 this same dir; retrieval.js cacheDir now explicit)
+  AUTO_DOWNLOAD_BEHAVIOR:        transformers.js downloads missing files at first
+                                 load into backend/.model-cache; present files are
+                                 never re-downloaded/overwritten; EMBEDDINGS=off /
+                                 CLOTHING_VISION=off are the only way to "switch off"
+                                 (documented), no silent model swap
+  MODEL_SETUP_VERIFIED:          YES — script exit 0, all 11 files present with
+                                 expected sizes, cache untouched (no downloads)
+  FLUTTER_SETUP:                 flutter pub get && flutter run (+ dart-define for
+                                 10.0.2.2 emulator or LAN IP)
+  NODE_SETUP:                    cd backend && npm install && npm start (:3001)
+  ENV_SETUP:                     copy backend/.env.example → backend/.env; optional
+                                 LLM keys; core clothing analysis NEEDS NO KEY
+  README_UPDATED:                YES — root README + backend README (A-E + repro note)
+  NON_CLOTHING_TEST:             PASS (gate test: bottle/chair → 422 throw;
+                                 selftest 12 rejects incl. chair margin 0.004)
+  CLOTHING_TEST:                 PASS (selftest 59 clothing; gate test garment → ready)
+  SAVE_UPDATE_DELETE_TEST:       PASS (backend_contract_test within full 69-test run;
+                                 db.js restored to baseline afterwards)
+  FLUTTER_ANALYZE:               PASS (No issues found)
+  FLUTTER_TEST:                  PASS (69/69)
+  BACKEND_SELFTEST:              PASS (71 images, 0 failures)
+  SECRETS_PROTECTED:             YES — *.env, backend/.env ignored; none staged
+  UNSAFE_FILES_FOUND:            NONE staged (weights, .env, db.json, storage all excluded)
+  FILES_CHANGED:                 7  (.gitignore, README.md, backend/package.json,
+                                 backend/src/retrieval.js, backend/.env.example,
+                                 backend/README.md, OPENCODE_HANDOFF_REPORT.txt)
+  FILES_CREATED:                 1  (backend/scripts/setup-models.js)
+                                 (plus previously-untracked-but-safe staged files:
+                                 backend/src/clothing-vision/, backend/scripts/,
+                                 backend/test/, test/*.dart, report) — staged, not committed
+  FILES_DELETED:                 0
+  DATABASE_CHANGED:              NO — restored to baseline 25 rows / 18 files
+  MODEL_DOWNLOADS_DURING_THIS_AUDIT: 0
+  GIT_COMMIT:                    NO
+  GIT_PUSH:                      NO
+SESSION_10_COMPLETE
+================================================================================

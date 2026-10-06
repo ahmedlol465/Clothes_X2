@@ -99,24 +99,66 @@ The 65 photographs were pulled from the Figma prototype's CDN at full
 resolution and renamed to semantic names (`assets/images/`). Fonts live in
 `assets/fonts/`.
 
-## Run
+## Team setup (fresh clone)
 
 ```bash
-# 1. Backend API (new — implements spec §8, persists to backend/data/db.json)
+# A. Clone
+git clone <repo-url>
+cd <repo>
+
+# B. Local AI models (one-time; ~255 MB, NOT committed to git)
 cd backend
 npm install
-npm start          # → http://localhost:3001  (endpoint index at GET /docs)
+npm run setup:models        # downloads Marqo/marqo-fashionCLIP + all-MiniLM-L6-v2
+                            # into backend/.model-cache (exists → skipped, never overwritten)
 
-# 2. Flutter app (in a second terminal, from the repo root)
+# C. Node backend (the app talks to this on :3001)
+npm start                   # → http://localhost:3001  (endpoint index at GET /docs)
+
+# D. Flutter app (second terminal, from the repo root)
 flutter pub get
-flutter run        # physical device? add --dart-define=API_BASE_URL=http://<your-lan-ip>:3001
+flutter run
+
+# E. API URL
+#   Chrome / desktop / iOS sim        → localhost:3001 (default)
+#   Android emulator                 → flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3001
+#   Physical Android device (same Wi-Fi) → use YOUR PC's LAN IP, do NOT commit it:
+#     flutter run --dart-define=API_BASE_URL=http://<your-pc-lan-ip>:3001
 ```
 
-### AI Stylist (all optional)
+### The AI models behind `npm run setup:models`
+
+The Express runtime performs clothing analysis **locally** with
+[transformers.js](https://huggingface.co/docs/transformers.js) (ONNX), so no
+API key is needed for the core pipeline:
+
+| Model | Purpose | Loaded by |
+| --- | --- | --- |
+| `Marqo/marqo-fashionCLIP` (dtype `q8`) | clothing / non-clothing + all attributes | `backend/src/clothing-vision/encoder.js` |
+| `Xenova/all-MiniLM-L6-v2` (dtype `q8`) | semantic wardrobe retrieval | `backend/src/retrieval.js` |
+
+Files are cached in `backend/.model-cache/` — the same directory the server
+reads at runtime, and the only directory ever touched. Weights are **excluded
+from git** (`/backend/.model-cache/` in `.gitignore`). Harmless to re-run:
+existing files are never re-downloaded or overwritten.
+
+> **Model reproducibility note.** Both models are resolved from the Hugging Face
+> Hub at their default `main` revision (exactly what the audited, tested cache
+> uses). transformers.js stores a flat cache that does not record the original
+> commit SHA, so we deliberately do **not** guess and hard-code one; if the Hub
+> revision ever advances, pin it explicitly later in
+> `backend/src/clothing-vision/prompts.js` (`MODEL.revision`) and
+> `backend/src/retrieval.js` (`EMBED_MODEL` options). Current `main` SHAs at the
+> time of writing: `Marqo/marqo-fashionCLIP` → `44f4c655124ed71e90cbf528d82f508d69d8a81b`,
+> `Xenova/all-MiniLM-L6-v2` → `751bff37182d3f1213fa05d7196b954e230abad9`.
+
+### AI Stylist (all optional, keyless core)
 
 The stylist needs **no key**: it answers from a rule engine with 11-factor
 scoring, conversation memory, remixes and style learning, and it reads live
 weather from Open-Meteo keylessly. `GET /ai/capabilities` shows what is on.
+**Clothing analysis itself never requires a key** — it is the local ONNX
+pipeline above.
 
 ```bash
 # backend/.env — copy from backend/.env.example
@@ -124,14 +166,11 @@ GEMINI_API_KEY=…    # free, no card: https://aistudio.google.com/apikey
                     # or GROQ_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY
 ```
 
-Add the key to unlock streamed replies, vision ("match a photo of an outfit
-to your wardrobe") and semantic retrieval. For real vector retrieval:
-
-```bash
-cd backend && npm run embeddings:install   # MiniLM, downloads once
-```
-
-See `backend/README.md` for the full capability table.
+Add a key to unlock streamed chat replies, LLM vision ("match a photo of an
+outfit to your wardrobe") and semantic retrieval (already on with MiniLM).
+Without a key these specific capabilities degrade as documented in
+`backend/README.md` — the local clothing analysis and wardrobe CRUD are
+unaffected.
 
 ### Test Add Clothes from your phone (same Wi-Fi)
 1. Find your PC's LAN IP (`ipconfig` → IPv4, e.g. `192.168.1.5`).

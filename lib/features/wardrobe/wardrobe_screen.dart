@@ -34,7 +34,14 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
   void initState() {
     super.initState();
     _search.addListener(_onSearch);
-    _state.loadWardrobe();
+    // Defer the first load until after the first frame: loadWardrobe()
+    // notifies listeners synchronously and initState runs during the build
+    // phase, which would make an already-mounted ListenableBuilder (on a
+    // screen below this one, or a sibling tab) request a build mid-build
+    // (setState/markNeedsBuild called during build).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _state.loadWardrobe();
+    });
   }
 
   @override

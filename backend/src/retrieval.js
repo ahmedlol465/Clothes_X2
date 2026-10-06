@@ -11,13 +11,15 @@
  *
  *   Stage 2 (the LLM): pick from that shortlist.
  *
- * Scoring uses local sentence embeddings from `@xenova/transformers` when they
- * are installed AND the model loads. Both are optional: if the dependency is
- * missing, the model fails to download, or EMBEDDINGS=off, we fall back to a
+ * Scoring uses local sentence embeddings from `@huggingface/transformers` when
+ * they are installed AND the model loads. Both are optional: if the dependency
+ * is missing, the model fails to download, or EMBEDDINGS=off, we fall back to a
  * scored lexical matcher that needs nothing at all. Callers never have to care
  * which one is active — `status()` reports it.
  */
 'use strict';
+
+const path = require('path');
 
 const tax = require('./taxonomy');
 
@@ -69,18 +71,22 @@ async function init() {
   }
   try {
     // Optional dependency — a missing package must never break the server.
-    const { pipeline, env } = require('@xenova/transformers');
+    const { pipeline, env } = require('@huggingface/transformers');
     if (env?.backends?.onnx?.wasm) {
       env.backends.onnx.wasm.numThreads = 1;
     }
+    // Deterministic cache location, so MiniLM is always fetched from the same
+    // place as the clothing model (backend/.model-cache) regardless of which
+    // module initialised transformers.js first. Mirrors encoder.js.
+    env.cacheDir = path.join(__dirname, '..', '.model-cache');
     state.pipeline = await pipeline('feature-extraction', EMBED_MODEL, {
-      quantized: true,
+      dtype: 'q8',
     });
     state.ready = true;
   } catch (e) {
     state.ready = false;
     state.error = e.code === 'MODULE_NOT_FOUND'
-      ? '@xenova/transformers not installed'
+      ? '@huggingface/transformers not installed'
       : String(e.message || e).slice(0, 160);
   }
   return state.ready;
