@@ -475,7 +475,14 @@ class _StatusLine extends StatelessWidget {
         size: 20,
         color: AppColors.danger,
       );
-      text = 'Analysis failed — tap a photo to retry.';
+      String? firstError;
+      for (final p in photos) {
+        if (p.phase == _Phase.error && (p.error?.isNotEmpty ?? false)) {
+          firstError = p.error;
+          break;
+        }
+      }
+      text = firstError ?? 'Analysis failed — tap a photo to retry.';
     } else if (ready > 0) {
       final vision =
           photos.any((p) => p.phase == _Phase.ready && p.source != 'heuristic');
@@ -487,6 +494,9 @@ class _StatusLine extends StatelessWidget {
       text = vision
           ? 'AI vision analysis complete — review the tags.'
           : 'Analysis complete (offline heuristics) — review the tags.';
+      if (errors > 0) {
+        text += ' $errors photo${errors == 1 ? '' : 's'} rejected.';
+      }
     } else {
       return const SizedBox.shrink();
     }
