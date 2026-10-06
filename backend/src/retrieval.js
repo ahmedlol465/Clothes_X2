@@ -19,6 +19,8 @@
  */
 'use strict';
 
+const path = require('path');
+
 const tax = require('./taxonomy');
 
 const EMBED_MODEL = 'Xenova/all-MiniLM-L6-v2';
@@ -89,6 +91,10 @@ async function init() {
       if (env?.backends?.onnx?.wasm) {
         env.backends.onnx.wasm.numThreads = 1;
       }
+      // Deterministic cache location, so MiniLM is always fetched from the same
+      // place as the clothing model (backend/.model-cache) regardless of which
+      // module initialised transformers.js first. Mirrors encoder.js.
+      if (env) env.cacheDir = path.join(__dirname, '..', '.model-cache');
       state.pipeline = await pipeline('feature-extraction', EMBED_MODEL, runtime.options);
       state.ready = true;
       state.runtime = runtime.name;

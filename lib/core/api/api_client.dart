@@ -36,8 +36,12 @@ class ApiClient {
   Future<dynamic> get(String path, [Map<String, String>? query]) =>
       _send('GET', path, query: query);
 
-  Future<dynamic> post(String path, [Map<String, dynamic>? body]) =>
-      _send('POST', path, body: body);
+  Future<dynamic> post(
+    String path, [
+    Map<String, dynamic>? body,
+    Duration? timeout,
+  ]) =>
+      _send('POST', path, body: body, timeout: timeout);
 
   Future<dynamic> patch(String path, [Map<String, dynamic>? body]) =>
       _send('PATCH', path, body: body);

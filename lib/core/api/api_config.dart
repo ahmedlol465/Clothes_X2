@@ -40,6 +40,11 @@ abstract final class ApiConfig {
   /// expires, so a real hang still surfaces promptly.
   static const Duration aiTimeout = Duration(seconds: 45);
 
+  /// Style/vision analyzes can take up to ~30s on a cold model load. The gate
+  /// verdict must not be dropped on the shared 8s budget, or a rejected photo
+  /// would fall back to heuristic tags and be saved as clothing.
+  static const Duration analyzeTimeout = Duration(seconds: 60);
+
   /// Uploads carry photo bytes — allow a full minute.
   static const Duration uploadTimeout = Duration(seconds: 60);
 }
