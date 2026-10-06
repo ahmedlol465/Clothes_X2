@@ -9,13 +9,37 @@ Flutter mock data so the UI looks identical on first run).
 ```bash
 cd backend
 npm install
+npm run setup:models   # one-time: download AI models into .model-cache (see below)
 npm start
 # → http://localhost:3001  (endpoint index at GET /docs)
 ```
 
-The Flutter app auto-connects (Android emulator: `10.0.2.2:3000`,
-desktop/iOS: `localhost:3000`). If the backend is down, the app falls back
+The Flutter app auto-connects (Android emulator: `10.0.2.2:3001`,
+desktop/iOS/Chrome: `localhost:3001`). If the backend is down, the app falls back
 to bundled mock data and shows an "Offline demo" badge.
+
+## Local AI models (backend/.model-cache)
+
+The Express runtime analyzes garment photos **locally** with transformers.js
+(ONNX, q8), so no API key is required for clothing analysis:
+
+| Model | Purpose | Loader |
+| --- | --- | --- |
+| `Marqo/marqo-fashionCLIP` | clothing/non-clothing gate + all attributes (512-dim) | `src/clothing-vision/encoder.js` |
+| `Xenova/all-MiniLM-L6-v2` | semantic retrieval (384-dim) | `src/retrieval.js` |
+
+Both load lazily from `backend/.model-cache` (set explicitly by both loaders).
+Weights are ignored by git; on a fresh clone run `npm run setup:models` (reuses
+the app's own loaders, so it fetches exactly what the server loads, downloads
+only missing files, and never overwrites an existing cache).
+
+> **Model reproducibility note.** Models resolve from the Hugging Face Hub
+> default `main` revision. The flat transformers.js cache does not record the
+> original commit SHA, so none is hard-coded (no guessing). To lock a revision
+> later, add `revision` to the `from_pretrained`/`pipeline` options in the two
+> loaders. Current `main` SHAs seen during setup: `Marqo/marqo-fashionCLIP` →
+> `44f4c655124ed71e90cbf528d82f508d69d8a81b`, `Xenova/all-MiniLM-L6-v2` →
+> `751bff37182d3f1213fa05d7196b954e230abad9`.
 
 ## API map (spec §8)
 
@@ -51,7 +75,7 @@ enabled and how to turn the rest on.
 | Live weather | nothing (Open-Meteo) | seasonal estimate |
 | Streaming replies | an LLM key | whole reply in one `delta` |
 | Photo → outfit matching | LLM key **with vision** | plan derived from the filename |
-| Semantic retrieval | `npm run embeddings:install` | lexical scorer |
+| Semantic retrieval | MiniLM q8 (via `npm run setup:models`) | lexical scorer |
 
 Free keys, no card required:
 

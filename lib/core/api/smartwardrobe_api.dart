@@ -1,4 +1,5 @@
 import 'api_client.dart';
+import 'api_config.dart';
 import 'dart:convert';
 
 /// Typed wrapper over every backend module (§8 API Overview).
@@ -149,10 +150,14 @@ class SmartWardrobeApi {
   // ------------------------------------------------------------- 8.4 AI
   Future<Map<String, dynamic>> analyzeClothing(
     Map<String, dynamic> input,
-  ) async =>
-      Map<String, dynamic>.from(
-        await _client.post('/ai/analyze-clothing', input),
-      );
+  ) async {
+    final res = await _client.post(
+      '/ai/analyze-clothing',
+      input,
+      ApiConfig.analyzeTimeout,
+    );
+    return Map<String, dynamic>.from(res);
+  }
 
   /// Analysis of a real photo: pass the stored [imageUrl] from
   /// [uploadWardrobePhotos] (server reads the pixels off disk for vision),

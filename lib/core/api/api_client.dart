@@ -36,8 +36,12 @@ class ApiClient {
   Future<dynamic> get(String path, [Map<String, String>? query]) =>
       _send('GET', path, query: query);
 
-  Future<dynamic> post(String path, [Map<String, dynamic>? body]) =>
-      _send('POST', path, body: body);
+  Future<dynamic> post(
+    String path, [
+    Map<String, dynamic>? body,
+    Duration? timeout,
+  ]) =>
+      _send('POST', path, body: body, timeout: timeout);
 
   Future<dynamic> patch(String path, [Map<String, dynamic>? body]) =>
       _send('PATCH', path, body: body);
@@ -185,6 +189,7 @@ class ApiClient {
     String path, {
     Map<String, String>? query,
     Map<String, dynamic>? body,
+    Duration? timeout,
   }) async {
     final uri = Uri.parse('${ApiConfig.baseUrl}$path')
         .replace(queryParameters: query);
@@ -193,7 +198,7 @@ class ApiClient {
         ..headers.addAll(_headers);
       if (body != null) request.body = jsonEncode(body);
       final streamed =
-          await _http.send(request).timeout(ApiConfig.timeout);
+          await _http.send(request).timeout(timeout ?? ApiConfig.timeout);
       final res = await http.Response.fromStream(streamed);
       final decoded = res.body.isEmpty ? {} : jsonDecode(res.body);
       if (res.statusCode >= 400) {
