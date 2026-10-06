@@ -57,7 +57,11 @@ class _HomeScreenState extends State<HomeScreen> {
             const _Greeting(),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-              child: _WeatherPill(weather: _state.weather),
+              child: _WeatherPill(
+                weather: _state.weather,
+                online: _state.backendOnline,
+                onRetry: _state.loadToday,
+              ),
             ),
             const SizedBox(height: Insets.xl),
 
@@ -154,6 +158,14 @@ class _HomeScreenState extends State<HomeScreen> {
 class _Greeting extends StatelessWidget {
   const _Greeting();
 
+  static String _greetingFor(DateTime now) {
+    final hour = now.hour;
+    if (hour >= 5 && hour < 12) return 'Good morning,';
+    if (hour >= 12 && hour < 17) return 'Good afternoon,';
+    if (hour >= 17 && hour < 22) return 'Good evening,';
+    return 'Good night,';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -170,7 +182,7 @@ class _Greeting extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Good morning,', style: AppText.caption),
+                Text(_greetingFor(DateTime.now()), style: AppText.caption),
                 const SizedBox(height: 2),
                 Text.rich(
                   TextSpan(
@@ -199,47 +211,68 @@ class _Greeting extends StatelessWidget {
 }
 
 /// Warm forecast strip under the greeting (live via GET /weather/current).
+///
+/// Honest about its state: live conditions show the city, a seasonal estimate
+/// is marked approximate, and a failed load says so with a tap-to-retry
+/// instead of faking a sunny 28°C.
 class _WeatherPill extends StatelessWidget {
-  const _WeatherPill({this.weather});
+  const _WeatherPill({this.weather, required this.online, this.onRetry});
 
   final Map<String, dynamic>? weather;
+  final bool online;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
-    final summary = weather?['summary']?.toString() ?? 'Sunny • 28°C';
+    final summary = weather?['summary']?.toString();
     final city = weather?['city']?.toString();
-    final title =
-        city == null || city.isEmpty || summary.contains(city) ? summary : '$summary • $city';
-    return Container(
-      padding: const EdgeInsets.all(Insets.lg),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: Radii.cardRadius,
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        children: [
-          const SwIconView(
-            SwIcon.sun,
-            size: 30,
-            color: AppColors.sun,
-            strokeWidth: 1.6,
-          ),
-          const SizedBox(width: Insets.lg),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: AppText.cardTitle),
-                const SizedBox(height: 2),
-                Text(
-                  _advice(weather),
-                  style: AppText.caption,
-                ),
-              ],
+    final isEstimate = weather?['source'] == 'estimate';
+    // No data at all: never invent conditions — say so and offer a retry.
+    final title = summary == null
+        ? 'Weather unavailable'
+        : (city == null || city.isEmpty || summary.contains(city)
+            ? summary
+            : '$summary • $city');
+    final subtitle = summary == null
+        ? (online
+            ? 'Could not load conditions — tap to retry'
+            : 'Backend offline — tap to retry')
+        : isEstimate
+            ? '${_advice(weather)} • approximate'
+            : _advice(weather);
+    return GestureDetector(
+      onTap: summary == null ? onRetry : null,
+      child: Container(
+        padding: const EdgeInsets.all(Insets.lg),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: Radii.cardRadius,
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(
+          children: [
+            const SwIconView(
+              SwIcon.sun,
+              size: 30,
+              color: AppColors.sun,
+              strokeWidth: 1.6,
             ),
-          ),
-        ],
+            const SizedBox(width: Insets.lg),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: AppText.cardTitle),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: AppText.caption,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

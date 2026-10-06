@@ -401,18 +401,27 @@ class SmartWardrobeApi {
 
   // ------------------------------------------------------------ misc
   /// Live weather. Pass phone GPS [lat]/[lon] to report where the user
-  /// actually stands (the backend skips geocoding then); otherwise a [city]
-  /// name is geocoded server-side. Defaults to Cairo.
+  /// actually stands (the backend reverse-geocodes the city name then);
+  /// otherwise a [city] name is geocoded server-side. Omit both and the
+  /// backend defaults to Cairo.
   ///
   /// Unwraps the Express `{weather: …}` envelope so callers always see the
   /// weather object itself — reading `summary` off the raw envelope is what
   /// used to pin the Home pill to its fallback text.
+  ///
+  /// [city] is only sent when explicitly provided: always sending the
+  /// `'Cairo'` default alongside GPS coordinates made the backend prefer the
+  /// hint over the reverse-geocoded name, so every user saw "Cairo" no matter
+  /// where they stood.
   Future<Map<String, dynamic>> weather({
-    String city = 'Cairo',
+    String? city,
     double? lat,
     double? lon,
   }) async {
-    final query = <String, String>{'city': city};
+    final query = <String, String>{};
+    if (city != null && city.trim().isNotEmpty) {
+      query['city'] = city.trim();
+    }
     if (lat != null && lon != null) {
       query['lat'] = '$lat';
       query['lon'] = '$lon';

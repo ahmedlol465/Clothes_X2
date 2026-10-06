@@ -112,13 +112,17 @@ function shape(raw) {
 /**
  * Resolve a target to coordinates. Accepts a city name (geocoded) or
  * `{ lat, lon, city? }` from phone GPS — coordinates skip geocoding entirely,
- * so the forecast is for where the user actually stands.
+ * so the forecast is for where the user actually stands. When coordinates are
+ * present the display name is reverse-geocoded first: a stale `city` hint
+ * (e.g. a client-side default) must never mask where the user really is.
  */
 async function coordsFor(target) {
   const coords = readCoords(target);
   if (coords) {
-    const hint = typeof target === 'object' && target !== null ? target.city : undefined;
-    const city = hint || (await reverseGeocode(coords.latitude, coords.longitude)) || 'Current location';
+    const hint = typeof target === 'object' && target !== null && typeof target.city === 'string' && target.city.trim()
+      ? target.city.trim()
+      : undefined;
+    const city = (await reverseGeocode(coords.latitude, coords.longitude)) || hint || 'Current location';
     return { latitude: coords.latitude, longitude: coords.longitude, city };
   }
   const city = typeof target === 'string' && target ? target : 'Cairo';
@@ -239,8 +243,14 @@ function currentWeather(city = 'Cairo') {
  * phone GPS and skip geocoding; the optional `city` is only a display hint.
  */
 async function resolve(target) {
-  const wanted = target && typeof target === 'object' ? target.city || process.env.WEATHER_CITY || 'Cairo' : (target || process.env.WEATHER_CITY || 'Cairo');
   const coords = readCoords(target);
+  const hint = target && typeof target === 'object' && typeof target.city === 'string' && target.city.trim()
+    ? target.city.trim()
+    : undefined;
+  const cityName = target && typeof target === 'object' ? hint : (target || undefined);
+  // GPS without a hint has no city to fall back to — label it honestly instead
+  // of pinning every offline user to the default city.
+  const wanted = cityName || process.env.WEATHER_CITY || (coords ? 'Current location' : 'Cairo');
   const key = coords
     ? `${coords.latitude.toFixed(2)},${coords.longitude.toFixed(2)}`
     : normalize(wanted);

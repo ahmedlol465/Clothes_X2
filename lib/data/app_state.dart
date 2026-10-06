@@ -687,8 +687,13 @@ class AppState extends ChangeNotifier {
 
   /// Today's pick + live weather for Home (§8.5 + GET /weather/current).
   /// Weather prefers phone GPS so it reports where the user actually stands,
-  /// and falls back to the default city when location is unavailable.
+  /// and falls back to the backend default when location is unavailable.
+  ///
+  /// The two loads are independent: a failing outfit call must never pin the
+  /// weather pill to its fallback text, and a failing weather call must never
+  /// hide today's pick.
   Future<void> loadToday({String occasion = 'casual'}) async {
+    var outfitsOk = false;
     try {
       final outfits =
           await api.recommendedOutfits(occasion: occasion, count: 1);
@@ -697,15 +702,24 @@ class AppState extends ChangeNotifier {
           Map<String, dynamic>.from(outfits.first as Map),
         );
       }
-      weather = await _loadLiveWeather();
+      outfitsOk = true;
+    } catch (e) {
+      _markOffline(e);
+    }
+    try {
+      final live = await _loadLiveWeather();
+      if (live != null) weather = live;
       _markOnline();
       notifyListeners();
     } catch (e) {
       _markOffline(e);
+      if (outfitsOk) notifyListeners();
     }
   }
 
-  /// GPS-first weather: coordinates when available, default city otherwise.
+  /// GPS-first weather with IP fallback: precise coordinates when available,
+  /// city-level IP location when GPS is denied (common on Chrome/web), and the
+  /// backend default city otherwise.
   /// Returns null only when the backend itself is unreachable.
   Future<Map<String, dynamic>?> _loadLiveWeather() async {
     try {
@@ -714,7 +728,19 @@ class AppState extends ChangeNotifier {
         return await api.weather(lat: coords.lat, lon: coords.lon);
       }
     } catch (_) {
-      // GPS failed — fall through to the default city below.
+      // GPS failed — fall through to the IP lookup below.
+    }
+    try {
+      final ip = await ipCoords();
+      if (ip != null) {
+        return await api.weather(
+          city: ip.city,
+          lat: ip.lat,
+          lon: ip.lon,
+        );
+      }
+    } catch (_) {
+      // IP lookup failed — fall through to the default city below.
     }
     return api.weather();
   }

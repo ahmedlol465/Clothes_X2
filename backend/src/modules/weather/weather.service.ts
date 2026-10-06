@@ -158,14 +158,17 @@ export class WeatherService {
 
   /**
    * Resolve a target to coordinates. GPS coordinates skip geocoding entirely,
-   * so the forecast is for where the user actually stands.
+   * so the forecast is for where the user actually stands. The display name
+   * is reverse-geocoded first so a stale client-side `city` hint can never
+   * mask the real location.
    */
   private async coordsFor(target: WeatherTarget) {
     const coords = WeatherService.readCoords(target);
     if (coords) {
+      const hint = target.city?.trim() || undefined;
       const city =
-        target.city?.trim() ||
         (await this.reverseGeocode(coords.latitude, coords.longitude)) ||
+        hint ||
         'Current location';
       return { ...coords, city };
     }
