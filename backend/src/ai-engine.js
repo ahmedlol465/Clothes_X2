@@ -209,18 +209,44 @@ function generateOutfits(wardrobe = [], opts = {}) {
   // otherwise a 90 can appear above a 91 and the ranking looks broken.
   ranked.sort((a, b) => b.match - a.match);
 
-  return ranked.map((c, idx) => toOutfit(c, occasion, idx));
+  return ranked.map((c) => toOutfit(c, occasion));
 }
 
-function toOutfit(c, occasion, idx) {
+/**
+ * Stable, content-derived id for a generated outfit (§ Phase 1).
+ *
+ * The same set of garments always yields the same id, so a rating attached to a
+ * Home recommendation still resolves to the same logical outfit after a refresh
+ * or restart — the old `gen-${Date.now()}-${idx}` changed on every request, so a
+ * rating could never be re-associated. It is derived only from the (sorted)
+ * item ids, never from the clock or the position in the list, so it is exact:
+ * identical ids ⇒ identical garments, and no two different outfits share a hash
+ * short of a collision. FNV-1a, pure JS, no dependencies.
+ */
+function stableItemHash(itemIds = []) {
+  const key = itemIds.map(String).slice().sort().join('|');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i += 1) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+
+function toOutfit(c, occasion) {
+  const itemIds = c.pieces.map((p) => p.id);
   return {
-    id: `gen-${Date.now()}-${idx}`,
+    id: `gen-${stableItemHash(itemIds)}`,
     name: outfitName(c.pieces, occasion),
     occasion,
     match: c.match,
+    // Generator-only outfits have no separate ranking pass: both scores are
+    // the 11-factor compatibility, which is also what the breakdown explains.
+    compatibilityScore: c.match,
+    rankingScore: c.match,
     breakdown: c.breakdown,
     explanation: scoring.explain(c.pieces, { occasion }, c),
-    itemIds: c.pieces.map((p) => p.id),
+    itemIds,
     pieces: c.pieces.map((p) => p.name),
     items: c.pieces,
     image: c.pieces[0]?.image,

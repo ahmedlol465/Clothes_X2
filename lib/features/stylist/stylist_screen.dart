@@ -488,7 +488,7 @@ class _OutfitSuggestionState extends State<_OutfitSuggestion> {
                       ),
                     ),
                     const SizedBox(width: Insets.sm),
-                    SwMatchBadge(match: outfit.match),
+                    SwMatchBadge(match: outfit.displayMatch),
                   ],
                 ),
               ),

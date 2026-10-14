@@ -1,0 +1,131 @@
+========================================================================
+PHASE 3 — OUTFIT RATING (UI + PERSISTENCE, NO LEARNING)
+========================================================================
+Scope: let a signed-in user give an outfit a 1–5 star rating, persist it on
+the backend, and show the saved value again when the outfit is reopened.
+Explicitly OUT of scope: learning. A rating must NOT move StyleMemory,
+compatibility, ranking or any recommendation. (That is Phase 4.)
+
+------------------------------------------------------------------------
+1. DESIGN DECISION
+------------------------------------------------------------------------
+The only existing rating path was `POST /outfits/:id/feedback`, which LEARNS
+(it calls history.applyFeedback -> memoryStore.record). Reusing it as-is would
+violate "persistence without learning", and adding a flag to it would mean
+editing the learning path the Phase 2 suite exercises.
+
+Chosen: Plan A — a NEW, persistence-only pair of endpoints that reuse the
+existing `db.feedback` storage and its helpers, and never touch learning:
+
+    POST /outfits/:id/rating   body { rating: 1..5 }  -> { ok, outfitId, rating }
+    GET  /outfits/:id/rating                          -> { outfitId, rating|null }
+
+The existing /feedback and /favorite routes are untouched.
+
+------------------------------------------------------------------------
+2. BACKEND CHANGES
+------------------------------------------------------------------------
+backend/src/recommendation-history.js
+  - New "outfit ratings" section (persistence only):
+      RATING_SOURCE = 'outfit_rating'
+      isValidRating(value)  -> true only for a whole JSON number 1..5
+      ratingEventId(...)    -> stable id `fb_rating_<hash(user,outfit)>`
+                               (NOT day-scoped, so one row per user+outfit)
+      saveRating(db, ...)   -> insert, or update the one existing row in place
+      readRating(db, ...)   -> the user's current rating, or null
+  - Reuses feedbackRows/findFeedback/isoAt/hashOf. Never calls
+    memoryStore.record. Exported new names; module header documents the add.
+
+backend/server.js
+  - POST /outfits/:id/rating: validates via history.isValidRating; 400 on
+    anything that is not an integer 1..5; saves under the bearer user; persist().
+  - GET  /outfits/:id/rating: returns the bearer user's saved rating or null.
+  - Both placed with the other §8.5 outfit routes; last segments are distinct
+    so they never collide with GET/POST /outfits/:id*.
+
+------------------------------------------------------------------------
+3. FLUTTER CHANGES
+------------------------------------------------------------------------
+lib/core/icons/sw_icon.dart
+  - Added SwIcon.star (outline) and SwIcon.starFill (filled) glyphs.
+
+lib/core/api/smartwardrobe_api.dart
+  - outfitRating(id) -> int?  (GET)
+  - rateOutfit(id, rating) -> int  (POST)
+
+lib/data/app_state.dart
+  - outfitRatings: Map<outfitId,int> (public), _ratingInFlight: Set
+  - ratingFor(id), ratingSaving(id)
+  - loadOutfitRating(id)  -> GET, populates/clears the map
+  - submitRating(id, r)   -> range-guards, blocks a duplicate in-flight save,
+                             POST, updates the map, returns success
+  - _resetUserScopedState() clears both (logout does not leak ratings)
+
+lib/features/outfits/perfect_match_screen.dart  (the shared outfit details
+screen, opened from Home, the recommendation rail, Saved, Favorites, History)
+  - initState loads the saved rating for widget.outfit.id.
+  - New _RatingBar (SwCard): title, hint/"Your rating: N out of 5.", a row of
+    five _Star buttons, and a spinner while a save is in flight.
+  - _Star: filled vs outlined + primary vs tertiary colour; Semantics
+    (button, selected, "Rate N out of 5"); disabled during a save.
+  - On tap: submitRating, then a snack bar ("saved" / "could not save").
+  - Only rendered when the outfit has a non-empty id (history demo rows with
+    no id hide the control).
+
+------------------------------------------------------------------------
+4. CONSTRAINTS HONORED
+------------------------------------------------------------------------
+- SCORE_WEIGHTS, compatibility/ranking formulas, the match alias: unchanged.
+- No learning: ratings never reach memoryStore; verified by tests G and H.
+- No scoring/retrieval/profile/freshness change; no new data collection
+  (reuses db.feedback), no migration, no duplicate feedback system.
+- User-scoped: rows keyed by bearer userId; verified by test D.
+- Persisted server-side (restart-safe): verified by test F + live smoke test.
+
+------------------------------------------------------------------------
+5. TESTS
+------------------------------------------------------------------------
+Backend (node --test, from backend/):
+  - NEW backend/test/outfit-rating.test.js — 10 tests (A–J):
+      A 1 & 5 star persist+read; B validation rejects 0/6/float/string/bool/
+      null; C re-rate updates one row; D user-scoped; E gen-… id valid;
+      F survives JSON round-trip; G no StyleMemory learning; H ranking/
+      compatibility unchanged; I malformed db tolerated; J feedback row shape.
+  - Full backend suite: 57/57 pass (was 47; +10). No regressions.
+
+Flutter:
+  - NEW test/outfit_rating_test.dart — 3 widget tests, all pass:
+      unrated -> 5 empty stars + prompt; seeded rating -> 4 filled + "4 out of
+      5"; tap offline -> failure snack bar and no local state change.
+  - `flutter analyze`: No issues found.
+  - Full `flutter test`: 77 passed. 2 failures are PRE-EXISTING and
+    environmental: test/non_clothing_gate_test.dart probes a live backend at
+    localhost:3001 (which is running here) but the app base URL resolves to
+    the Android-emulator host 10.0.2.2 under flutter_test's default Android
+    target, so the upload is "unreachable". Unrelated to Phase 3 (that test,
+    api_config.dart and stagePhoto were not touched).
+
+Live HTTP smoke test (throwaway copy of the backend on port 3019, temp db —
+the real backend/data/db.json was NOT modified; confirmed no outfit_rating
+rows were written to it):
+    POST /outfits/o1/rating {rating:5}   -> 200 {"ok":true,...rating:5}
+    GET  /outfits/o1/rating              -> 200 {"rating":5}
+    POST /outfits/o1/rating {rating:2}   -> 200 (in place; GET -> 2; one row)
+    POST rating 0 / 6 / "5" / 4.5 / {}   -> 400 (all)
+    POST /outfits/gen-123-0/rating       -> 200 (generated id accepted)
+    GET  /outfits/never_rated/rating     -> 200 {"rating":null}
+
+------------------------------------------------------------------------
+6. FILES TOUCHED (Phase 3 only)
+------------------------------------------------------------------------
+  backend/server.js                              (+2 routes)
+  backend/src/recommendation-history.js          (+ rating helpers)
+  backend/test/outfit-rating.test.js             (new)
+  lib/core/icons/sw_icon.dart                    (+ star/starFill)
+  lib/core/api/smartwardrobe_api.dart            (+ 2 methods)
+  lib/data/app_state.dart                        (+ rating state/methods/reset)
+  lib/features/outfits/perfect_match_screen.dart (+ _RatingBar/_Star + load)
+  test/outfit_rating_test.dart                   (new)
+
+(Other modified files shown by git are from earlier phases, not this one.)
+========================================================================

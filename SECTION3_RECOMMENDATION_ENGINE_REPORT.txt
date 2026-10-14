@@ -1,0 +1,228 @@
+=== SECTION 3: RECOMMENDATION ENGINE CORE ===
+
+Section: Recommendation/Personalization (deterministic ranking core)
+Audit Date: Wed Oct 07 2026
+Repository: D:\Clothes_X2
+
+Followed from: AUDIT_REPORT_SECTION1.txt, SECTION2_DATA_EVENTS_REPORT.txt (both untouched)
+PRIMARY RUNTIME IDENTIFIED (from §1/§2): Express backend/server.js + src/store.js (NOT NestJS)
+
+SCOPE OF THIS SECTION (as executed)
+-----------------------------------
+- Implement the personalization/ranking pipeline ONLY, as a new module.
+- Reuse existing retrieval.js, scoring.js, ai-engine.js, style-memory.js,
+  taxonomy.js, weather, profile, wardrobe and the existing recommendation flow.
+- Preserve the existing GET /outfits/recommended response contract exactly.
+- No Flutter UI changes, no API redesign, no new infrastructure, no Section 4.
+
+--------------------------------------------------------------------------------
+1. FILE CHANGES (complete list)
+-------------------------------
+NEW   backend/src/recommendation-engine.js      (740 lines incl. header docs)
+NEW   backend/test/recommendation-engine.test.js (dependency-free node:test suite)
+MOD   backend/server.js                         (+36 / -5): require + endpoint wiring
+MOD   backend/src/scoring.js                    (+5): additive exports only
+NEW   SECTION3_RECOMMENDATION_ENGINE_REPORT.txt (this file)
+
+backend/src/scoring.js diff is purely additive: `completeness` and
+`COMPLETENESS_CAP` were added to module.exports so the engine can reuse the
+existing completeness ceiling instead of duplicating its magic numbers.
+No scoring behaviour changed. retrieval.js, ai-engine.js, style-memory.js,
+taxonomy.js, store.js and the NestJS tree were NOT modified.
+
+backend/data/db.json is created at first server boot by the existing store
+seed (runtime data, git-ignored) — not a source change.
+
+--------------------------------------------------------------------------------
+2. WHAT WAS IMPLEMENTED
+-----------------------
+Module: backend/src/recommendation-engine.js
+Entry point:  recommend(wardrobe, opts) -> { outfits, meta }   (async)
+
+opts: { occasion, weather:{tempC,...}, count, styleProfile, memory, month,
+        focus, anchorItemId, excludeIds }
+outputs: the same Outfit objects the endpoint always returned (itemIds, items,
+        pieces, name, match, explanation, breakdown, occasion, ...) plus a new
+        internal `meta` object that the endpoint deliberately does NOT expose.
+
+Pipeline (all stages deterministic, no Math.random anywhere):
+
+  1. HARD CONSTRAINTS  applyHardConstraints()
+     H1 archived items                 -> dropped
+     H2 opts.excludeIds                -> dropped
+     H3 invalid items (no id, or no
+        name and no category)          -> dropped
+     H4 styleProfile.avoidedColors     -> dropped (per-required-slot relaxation)
+     H5 StyleMemory "never wear X"     -> dropped via memoryStore.isAvoided
+     H6 unknown-category items never fill a required slot (inherited: existing
+        tax.slotOf / beam search in ai-engine.js)
+     H7 same garment once per outfit   (inherited from generateOutfits)
+     Relaxation (reported, never silent): if dropping avoided colours would
+     empty a required slot (top/bottom/shoes), the dropped items of THAT slot
+     are restored; if nothing survives, fall back to the full pool.
+     meta.constraints = { archived, excluded, invalid, avoidedColor,
+                          memoryAvoided, relaxedSlots, relaxedToFullPool }
+
+  2. CANDIDATE GENERATION (reused, not rewritten)
+     ai.generateOutfits(pool, { count: MAX_CANDIDATES = 8, ... }) — the existing
+     beam generator. Its output is treated as a candidate set, not as the order.
+
+  3. RETRIEVAL SIGNAL (reused)
+     retrieval.rank() once per request -> { itemId: score, max }.
+     Adds no model loading: warmup() already runs at server start and vectors
+     are fingerprint-cached; without node_modules the transformers require
+     fails inside the existing try/catch and the lexical fallback is used.
+
+  4. SCORING  scoreCandidate() -> 0..100 engine score
+     component          weight  range   source
+     compatibility        0.45   0-100  scoring.js 11-factor match (delegated)
+     retrieval_relevance  0.20   0-100  item retrieval score / pool best x100
+     profile_match        0.15   0-100  hit-rate of favoriteColors/preferredStyles
+     freshness            0.10   0-100  timesWorn + lastWornLabel rotation signal
+     learned_affinity     0.10   0-100  StyleMemory itemAffinity
+     (weights sum to 1.0; exported as SCORE_WEIGHTS)
+     Each component has a `hasSignal` gate; when a signal is absent its weight
+     is renormalised across the remaining components, so an empty profile does
+     not receive a flattering constant.
+     Hard ceiling reused from scoring.js: score is multiplied by the existing
+     completeness cap (1 piece -> <=62, 0 required slots -> <=40) so an
+     incomplete outfit can never outrank a complete one.
+     Weights are documented in-file as INITIAL HEURISTICS — there is no
+     evaluation dataset in this repository; they are exported for one-place
+     retuning in a later section.
+
+  5. DIVERSITY SELECTION  selectDiverse()
+     Greedy, strict >, deterministic: effective = score - 14 x similarity where
+     similarity = 0.5*itemOverlap + 0.25*colourFamilyOverlap + 0.25*styleOverlap
+     against outfits already selected. Prevents "same outfit, one shade
+     different" results.
+
+  6. EXPLORATION  applyExploration()
+     Deterministic, seeded by FNV-1a stableHash(occasion|tempC|count|month|focus).
+     Eligible: not already selected, score >= max(55, best-10), similarity < 0.5
+     to every selected outfit; swaps the worst selected entry only when the pick
+     scores higher. Never touches hard constraints. meta.exploration records
+     { applied, reason, in, out, seed }.
+
+  7. FINISH  finish()
+     outfit.match := engine score (list order and displayed % can never
+     disagree), explanation rebuilt through scoring.explain() from the same
+     breakdown, so the "why" text quotes the number the user sees.
+
+meta (weights, components, pool counts, constraints, candidates, exploration,
+activeComponents) is internal: the endpoint returns only outfits/weather/occasion.
+
+--------------------------------------------------------------------------------
+3. EXISTING FLOW / API COMPATIBILITY
+-------------------------------------
+GET /outfits/recommended (server.js:1249) — contract UNCHANGED:
+  request : ?occasion=&tempC=&count=   (identical)
+  response: { outfits, weather, occasion }  (identical, same key order)
+
+Before: handler called ai.generateOutfits(db.wardrobe.filter(!archived), ...)
+After : handler calls engine.recommend(db.wardrobe, {..., styleProfile:
+        req.user.styleProfile, memory: memoryStore.read(db, req.user.id)})
+        — the engine owns wardrobe filtering now (archived, excluded, invalid,
+        avoided), which is where those rules belong.
+        The old generateOutfits call is kept inside a catch as a fallback: if
+        any personalisation signal throws, the endpoint degrades to the previous
+        behaviour instead of 500-ing the Home screen.
+
+Flutter consumer lib/core/api/smartwardrobe_api.dart:328 reads res['outfits'] —
+untouched and satisfied. No other endpoint, route or entity was changed.
+No NestJS, no database schema, no new dependency (engine uses only modules that
+are already required by server.js).
+
+--------------------------------------------------------------------------------
+4. TESTS EXECUTED AND RESULTS
+-----------------------------
+File: backend/test/recommendation-engine.test.js
+Runner: node:test + node:assert/strict — deliberately dependency-free, because
+backend/node_modules is absent in this checkout (npm install would pull the
+whole NestJS/sharp/transformers tree) so `npm test`/jest cannot run here.
+Command (from backend/):  node --test test/recommendation-engine.test.js
+
+Result: 8 tests, 8 pass, 0 fail (run twice, identical).
+
+  A ok  valid profile + wardrobe -> complete outfits (Top+Bottom+Shoes filled,
+                                   match 0-100, pieces/breakdown/explanation
+                                   present, meta.returned matches)
+  B ok  archived item never appears; meta.constraints.archived === 1
+  C ok  favouriteColors ['Navy'] ranks the navy piece first, ['Orange'] ranks
+        the orange piece first, and the two orderings differ — explicit
+        preference changes the ranking
+  D ok  avoidedColors beats favoriteColors: an item that is both favourite and
+        avoided never appears; meta.constraints.avoidedColor >= 1; and when the
+        exclusion would empty the top slot it is relaxed (relaxedSlots includes
+        'top') and recommendations still exist
+  E ok  weather: tempC 6 -> warm piece first, tempC 32 -> light piece first
+        (same wardrobe, 2 candidates each, both returned);
+        context: occasion 'formal dinner' ranks the all-formal look first
+        (fTop + fBot + fShoe) and the leading item is formality >= 3
+  F ok  3 recommendations are pairwise distinct outfits, and they rotate across
+        at least 2 different tops AND 2 different bottoms
+  G ok  empty wardrobe -> [] with meta.reason 'empty_wardrobe';
+        all-archived -> []; missing styleProfile/weather still works;
+        single-item wardrobe -> match <= 62 (completeness ceiling holds)
+  H ok  identical inputs produce identical itemIds/match/name/explanation/
+        breakdown, identical meta.exploration and identical meta.candidates
+        (run twice in the same process)
+
+--------------------------------------------------------------------------------
+5. RUNTIME CHECKS (Express, real store)
+---------------------------------------
+backend/node_modules is absent, so the required runtime packages (express,
+cors, multer, dotenv) were installed into a THROWAWAY directory outside the
+repo and exposed via NODE_PATH — the repository was not modified and no
+dependency was added to package.json.
+
+Per the runtime rule, the server was always started in the background and
+explicitly stopped in the same command (never left running):
+
+  check 1 (pid 3732, port 3301, EMBEDDINGS=off):
+    GET /outfits/recommended?occasion=casual&tempC=24&count=3
+      keys    : outfits, weather, occasion
+      weather : {"tempC":24,"condition":"partly cloudy"}
+      occasion: casual
+      outfits : 3
+        match=72 Effortless Everyday  Oxford Cotton Shirt + Beige Chinos +
+                                     Minimalist Sneakers + Silk Scarf
+        match=71 Effortless Everyday  ... + Minimalist Leather Belt
+        match=68 Clean Tailoring      ... + Leather Loafers + belt
+      -> server pid 3732 terminated
+
+  check 2 (pid 6712, port 3301):
+    tempC=6  vs tempC=33  -> different item sets (weather changes ranking)
+    archived leak check  -> 0 (db has no archived items; unit test B covers the
+                              archived case explicitly)
+    repeat of the same request over HTTP -> identical match sequence (deterministic)
+    response keys -> exactly outfits, weather, occasion
+      -> server pid 6712 terminated
+
+  Syntax/gate checks:  node --check server.js        -> OK
+                       module load of the engine      -> OK
+                       engine + ai fallback path      -> OK (fallback never
+                                                         triggered, no errors)
+
+--------------------------------------------------------------------------------
+6. KNOWN LIMITATIONS (documented, not hidden)
+----------------------------------------------
+- Score weights are initial heuristics, not empirically tuned: the repository
+  has no evaluation dataset. They are exported (SCORE_WEIGHTS) for a later
+  evaluation pass.
+- meta is intentionally not exposed over HTTP in this section; exposing it is
+  an API change and therefore out of scope here.
+- Jest (npm test) could not be run: backend/node_modules is absent. The new
+  suite uses node:test so it runs with zero installs.
+- The engine never writes anything: no recommendation history, no feedback
+  capture (Section 2 recorded those entities as not wired in the Express
+  runtime; writing them would be an API/storage change).
+- NestJS (src/**.ts) path untouched — §1/§2 named Express as the primary
+  runtime.
+
+--------------------------------------------------------------------------------
+7. SECTION 4
+------------
+NOT STARTED. No files from Section 4 exist; no scope beyond ranking was added.
+
+=== END OF SECTION 3 ===
