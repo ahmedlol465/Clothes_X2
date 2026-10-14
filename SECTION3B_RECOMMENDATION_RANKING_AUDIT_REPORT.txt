@@ -1,0 +1,195 @@
+================================================================================
+SECTION 3B — RECOMMENDATION RANKING AUDIT & REPAIR
+================================================================================
+Scope: make the best outfits appear first from meaningful, reliable signals,
+without touching the Phase 1 score contract, the compatibility formula, the
+learning architecture, or any user data.
+
+Status: COMPLETE. Backend 47/47 tests pass (16 new). db.json untouched.
+
+
+1. ROOT CAUSES OF THE RANKING DEFECTS
+--------------------------------------------------------------------------------
+Audit method: read every component of `src/recommendation-engine.js`, traced the
+inputs each component reads (`scoring.js`, `style-memory.js`, `retrieval.js`,
+`ai-engine.js`, `server.js`), and ran an offline diagnostic over the bundled
+base wardrobe to observe the actual component values.
+
+B — retrieval_relevance was scoring the occasion, not a request.
+  `recommend()` called `buildRetrievalMap(pool, focus || occasion, ...)`. The
+  Home path sends no focus, so the query became the occasion default 'casual'.
+  `retrieval.rank('casual', ...)` gives a lexical 0.8 to any piece whose style
+  contains "casual" (including "Smart Casual") and adds an occasion-context
+  bonus. At weight 0.20 this was a tautological restatement of
+  style_compatibility/occasion_fit — a large weight that could not discriminate
+  between outfits that all had to satisfy the same occasion.
+
+C — profile_match charged pieces for preferences the user never declared.
+  `profileMatchSignal()` always added `total += 2` per piece (one colour check,
+  one style check) even when only favouriteColors OR only preferredStyles was
+  declared. A colours-only profile was therefore capped at 50% no matter how
+  well the outfit matched; empirically it ranged 25–50 for the classic
+  White+Casual profile instead of 0–100.
+
+D — learned_affinity was compressed toward a neutral 50.
+  `itemAffinity()` always averaged four sub-signals (colour, style, fabric,
+  formality) and defaulted each missing one to 0.5. A single strong opinion
+  (e.g. navy 0.9) was diluted by three 0.5s. `learnedAffinitySignal()` then
+  averaged `itemAffinity` over *every* item in the outfit, including pieces the
+  memory had no opinion about, pinning the component near 50 (observed 53–55)
+  regardless of the opinion strength. A stored global formality lean
+  (`occasions.formal`) additionally made `hasOpinionFor` return true for every
+  item, activating a near-constant component everywhere.
+
+E — freshness double-counted wear volume and penalised basics.
+  `freshnessOf()` = 0.6*recency(lastWornLabel) + 0.4*volume(timesWorn).
+  `timesWorn` is already the input to `scoring.recent_usage`, so a heavily-worn
+  piece lost points twice. Because shoes and belts are worn all the time, they
+  dragged the whole outfit's freshness down (observed a near-constant 64 across
+  a fresh base wardrobe).
+
+Non-defects confirmed (deliberately unchanged): the compatibility component and
+its 11-factor formula; the 0–100 component scale; the `activeWeight || 1`
+renormalisation and the divide-by-zero guards; the diversity and deterministic
+exploration passes; and the documented profile/learned "amplification" overlap
+with compatibility.personal_preference.
+
+
+2. FILES CHANGED
+--------------------------------------------------------------------------------
+backend/src/recommendation-engine.js
+  - buildRetrievalMap is now only called when a real query exists; add
+    `opts.retrievalQuery`; `meta.retrieval` is 'ok' | 'unavailable' |
+    'not_requested'.
+  - profileMatchSignal: dimension-aware denominator.
+  - freshnessOf / freshnessSignal: recency-only, averaged over core slots.
+  - learnedAffinitySignal: averages only pieces that carry an opinion.
+  - Header + COMPONENT_MEANING text updated to match.
+
+backend/src/style-memory.js
+  - itemAffinity: evidence-only averaging (neutral 0.5 when no evidence).
+  - New exported-in-module helpers hasColorOpinion / hasFormalityOpinion;
+    behavior of colorPreference / formalityAffinity / hasOpinionFor unchanged.
+
+backend/test/ranking-audit.test.js  (new)
+  - 16 focused tests (see section 5).
+
+Not changed: scoring.js (compatibility formula untouched), retrieval.js (kept
+intact; still used by the stylist chat at server.js:742), ai-engine.js,
+server.js, recommendation-history.js, the Flutter client, and db.json.
+
+
+3. BEFORE / AFTER BEHAVIOUR
+--------------------------------------------------------------------------------
+B  Before: retrieval_relevance applied on every Home request at weight 0.20
+           with query = 'casual'.
+   After:  not requested → component drops out, weights renormalise over
+           compatibility/freshness/profile/learned. A caller passing `focus` or
+           `retrievalQuery` still gets real retrieval relevance.
+   meta.retrieval: 'unavailable' → 'ok' | 'not_requested'.
+
+C  Before: colours-only profile capped at 50 (empirical 25–50).
+   After:  judged on the declared dimension(s); a fully-matching colours-only
+           outfit reaches 100. A partial match is (hits / declared-checks).
+
+D  Before: strength signal diluted to ~50–55.
+   After:  a 0.9 navy opinion on a navy piece reports 90, and the components
+           weight renormalises because un-opinionated pieces no longer drag it.
+   A formality lean now varies per piece (rewards the dressier piece) instead
+   of pinning a constant.
+
+E  Before: freshness ≈ 64 constant (volume + recency, basics included).
+   After:  pure last-worn recency over top/bottom/outerwear only; shoe/belt
+           wear no longer moves the signal (test E3 asserts exactly this).
+
+
+4. WEIGHTS & NORMALISATION STRATEGY
+--------------------------------------------------------------------------------
+The SCORE_WEIGHTS table is intentionally UNCHANGED
+  compatibility 0.45, retrieval_relevance 0.20, profile_match 0.15,
+  freshness 0.10, learned_affinity 0.10
+(feedback-learning.test.js Test J pins this table, and the task forbids blind
+weight replacement). The fixes change what each component MEASURES, not its
+share — so the ordering signal gets cleaner without arbitrary retuning.
+
+Normalisation: unchanged and re-verified. Components with no evidence set
+hasSignal:false; `activeWeight` sums only the applied weights (|| 1 guard); each
+reported weight is SCORE_WEIGHTS[key]/activeWeight; the applied weights are
+asserted to sum to 1 (new test N1), with no NaN. The completeness ceiling from
+scoring.js still caps incomplete outfits.
+
+
+5. TEST OUTPUT (actual)
+--------------------------------------------------------------------------------
+Command (from backend/):
+  node --test test/recommendation-engine.test.js test/feedback-learning.test.js \
+                test/scoring.test.js test/style-memory.test.js \
+                test/ranking-audit.test.js
+
+  # tests 47
+  # pass 47
+  # fail 0
+
+Breakdown: recommendation-engine 10, feedback-learning 11, scoring 3,
+style-memory 7, ranking-audit 16.
+
+New ranking-audit coverage:
+  B1 automatic path does not request retrieval
+  B2 an explicit request query activates retrieval
+  B3 empty / zero-scored retrieval map is not a signal
+  C1 colours-only profile can reach 100
+  C2 styles-only profile can reach 100
+  C3 profile_match silent with no declared preferences
+  C4 partial match scored over declared dimensions, not doubled
+  D1 learned_affinity averages only pieces carrying an opinion
+  D2 learned_affinity neutral when nothing applies
+  D3 itemAffinity evidence-only; neutral with no evidence
+  D4 a formality lean varies per item instead of pinning a constant
+  E1 freshness reads recency only, not timesWorn
+  E2 freshness neutral when the label is missing
+  E3 freshness averaged over core slots; basics do not penalise it
+  N1 applied component weights renormalise to 1 with no NaN
+  N2 ranking best-first and the Phase 1 score contract holds on the query path
+
+Flutter: not run — no Dart/client change was made in this phase.
+
+
+6. RISKS, LIMITATIONS & FOLLOW-UPS
+--------------------------------------------------------------------------------
+- meta.retrieval semantics changed ('unavailable' → 'ok'/'unavailable'/
+  'not_requested'). Any consumer reading it should treat 'not_requested' as
+  "no query", not as a failure. No in-repo consumer reads it.
+- The /outfits/recommended endpoint has no search/query parameter, so on the
+  automatic Home path retrieval is now correctly excluded. Retrieval is
+  preserved for real requests: the stylist chat still calls retrieval.rank()
+  directly (server.js:742), and any caller can pass `focus`/`retrievalQuery` to
+  the engine. Re-enabling retrieval for an explicitly chosen (non-default)
+  occasion would need the client to send a query/flag — out of scope here.
+- Learned-affinity style matching still reads `styles[item.style]`, while chat
+  may store garment nouns (e.g. "sneakers") that never equal a style label.
+  The audit flagged this; fixing it would change the learning surface and was
+  left out of scope per the task constraints. Ratings (the primary signal) and
+  colour/fabric opinions flow correctly.
+- A temporary opt-in diagnostic block (opts.diagnostic === true) still exists in
+  the engine; it is read-only and off by default. It was left in place to keep
+  this diff minimal.
+- The historical reports RECOMMENDATION_ENGINE_EXPLANATION.txt (~lines 267, 960)
+  still describe `match` as the engine score; they predate Phase 1 and were not
+  edited.
+
+
+7. PHASE 1 SCORE CONTRACT CONFIRMATION
+--------------------------------------------------------------------------------
+Preserved end-to-end:
+  - compatibilityScore is the displayed 11-factor match. Test J (engine) and new
+    test N2 both recompute scoring.scoreOutfit(items, ...) and assert equality.
+  - rankingScore remains the internal ordering value; N2 asserts the returned
+    list is best-first by rankingScore.
+  - match is a backward-compatible alias of compatibilityScore (finish() in
+    recommendation-engine.js). Asserted by Test J and N2.
+  - The compatibility formula and SCORE_WEIGHTS are untouched.
+
+User data: `git status` shows backend/data/db.json unmodified — no preferences,
+recommendation history, wear events, or StyleMemory were reset or rewritten.
+The temporary audit script in the OS temp directory was deleted.
+================================================================================

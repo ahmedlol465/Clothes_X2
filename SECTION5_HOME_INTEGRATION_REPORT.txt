@@ -1,0 +1,297 @@
+=== SECTION 5: HOME ⇄ RECOMMENDATION ENGINE INTEGRATION ===
+
+Section: Home screen integration (personalised outfit recommendations)
+Audit/Implementation Date: Wed Oct 07 2026
+Repository: D:\Clothes_X2
+
+Followed from (all four READ first, none modified):
+  AUDIT_REPORT_SECTION1.txt
+  SECTION2_DATA_EVENTS_REPORT.txt
+  SECTION3_RECOMMENDATION_ENGINE_REPORT.txt
+  SECTION4_FEEDBACK_LEARNING_REPORT.txt
+PRIMARY RUNTIME IDENTIFIED (A1/A2/A3): Express backend/server.js + src/... (NOT the NestJS tree)
+Flutter side: lib/ (package:smartwardrobe)
+
+SCOPE OF THIS SECTION
+  Home must show the outfits produced by GET /outfits/recommended, in the
+  states the screen owes the user (loading / empty / error / success), using
+  the backend engine as the single source of truth. No ranking, no weather
+  logic, no StyleMemory logic and no ranking UI were added to Flutter; the
+  backend contract was not changed; nothing was committed.
+
+================================================================================
+1. HOME SCREEN AUDIT (STEP 1 — performed before any modification)
+================================================================================
+
+1.1 WHAT ALREADY EXISTED (and was kept)
+  - AppState.loadToday() already called GET /outfits/recommended, but with
+    count=1 and it kept ONLY outfits.first as "todayOutfit"; the rest of the
+    ranked list was thrown away on the client.
+  - Only caller of loadToday(): lib/features/home/home_screen.dart:41
+    (initState). Home was therefore already the consumer of the endpoint.
+  - HomeScreen was wrapped in ListenableBuilder(listenable: AppState.instance)
+    and rendered a hero _SelectionCard, a _WeatherPill and a
+    RecentlyAddedRail. There was NO "recommended" section at all: the
+    personalised list existed only as a single hero image.
+  - Existing shared UI reused later in this section: SwSectionHeader,
+    SwCard, SwIconBadge, SwButton, SwOutlineButton, SwPhoto, SwMatchBadge,
+    OutfitCard (features/outfits/outfits_screen.dart:173) and
+    PerfectMatchScreen (the outfit detail route every other surface opens).
+
+1.2 WHAT WAS WRONG / MISSING
+  a) initState called loadToday() + loadWardrobe() SYNCHRONOUSLY.
+     loadToday() notifies listeners before its first await; initState runs
+     during the build phase, so a mounted ListenableBuilder would be asked to
+     build mid-build ("markNeedsBuild() called during build" — the exact
+     hazard documented in test/wardrobe_build_phase_test.dart).
+  b) No in-flight guard: every rebuild/tab return could start a second
+     recommendation request.
+  c) No loading, empty or error representation for recommendations — a failed
+     request left the hero on bundled mock data with no explanation.
+  d) GET /weather/current answers `{ "weather": { ... } }`; the state stored
+     the WHOLE envelope, so `_WeatherPill` read weather['summary'] -> null and
+     always fell back to the hard-coded "Sunny · 28°C", and any tempC read
+     from weather['tempC'] would have been null as well.
+  e) The ranked list was never displayed anywhere on Home.
+
+1.3 WHAT WAS FOUND ON THE BACKEND (read only, unchanged)
+  GET /outfits/recommended  (backend/server.js:1256)
+    query: occasion (default 'casual'), tempC (default '24'), count (default 3)
+    200 -> { outfits, weather, occasion }          (keys exactly, in that order)
+    outfit -> { id, name, occasion, match, breakdown, explanation, itemIds,
+                pieces, items, image }             (NO `favorite` key)
+    `id` = "gen-<timestamp>-<index>" and therefore differs per request, while
+    name / match / breakdown / order are stable for identical query params.
+  Contract left byte-identical; this section made NO backend edit.
+
+================================================================================
+2. FILE CHANGES (complete list)
+================================================================================
+
+MODIFIED
+  lib/data/app_state.dart                        +85 / -9
+      35-65   new recommendation state block (5 members) + docs
+      301-309 _resetUserScopedState() also clears the four fields
+      697-755 loadToday() rewritten (guard, weather-first, count=4,
+              full list stored, error capture, finally settle)
+  lib/features/home/home_screen.dart             +194 / -5
+      41-53   initState defers both loads with addPostFrameCallback
+      101-124 new "Recommended for You" section in the build tree
+      470-584 _RecommendationRail  (loading / error / empty / success)
+      586-626 _RecommendationSkeleton (neutral placeholder rail)
+
+CREATED
+  test/home_recommendation_test.dart             206 lines, 5 widget tests
+
+NOT MODIFIED (verified)
+  backend/**                        — no contract change, no endpoint change
+  lib/data/models.dart              — Outfit.fromJson already maps every field
+  lib/core/api/smartwardrobe_api.dart — recommendedOutfits() and weather()
+                                       reused as-is (no duplicate client)
+  lib/core/api/api_client.dart, lib/features/outfits/outfits_screen.dart,
+  lib/features/outfits/perfect_match_screen.dart
+
+  git diff --numstat for this section:
+      85   9  lib/data/app_state.dart
+      194  5  lib/features/home/home_screen.dart
+  (+ new test file; the other modified/untracked files listed by `git status`
+   — backend/server.js, backend/src/scoring.js, backend/src/store.js, the
+   recommendation-engine/history sources and the §3/§4 reports — predate this
+   section and were untouched here.)
+
+================================================================================
+3. WHAT WAS IMPLEMENTED
+================================================================================
+
+3.1 STATE (lib/data/app_state.dart:35-65)
+  List<Outfit> recommendedOutfits = const [];   // engine order, never mock-seeded
+  bool  recommendationsLoading   = false;       // in-flight + guard
+  bool  recommendationsSettled   = false;       // requested at least once
+  String? recommendationsError   = null;        // real API message for retry
+  static const int _homeRecommendationCount = 4;
+  Count rationale: index 0 = "Today's AI Selection" hero, 1..3 = the rail.
+  The rail renders the response AS RETURNED — no Flutter-side filtering,
+  slicing or re-ranking, and the top pick is intentionally duplicated as the
+  hero (same as before, only now it is the first of the same list).
+
+3.2 loadToday() (lib/data/app_state.dart:709-755)
+  1. `if (recommendationsLoading) return;`  -> no duplicate requests from
+     rebuilds / tab switches / double taps.
+  2. Sets loading + clears error + notifies synchronously (so the very first
+     frame after the deferred call is already the skeleton).
+  3. Weather FIRST, in its own try/catch: `GET /weather/current` -> unwrapped
+     `{weather:{...}}` -> the inner object is stored, so the pill shows the
+     real summary and tempC is the live value. A weather failure can no longer
+     suppress the recommendation request (it falls back to tempC=24, the
+     endpoint's own default).
+  4. ONE `api.recommendedOutfits(occasion: occasion, tempC: <live or 24>,
+     count: 4)`; every element is mapped with Outfit.fromJson and stored in
+     order; todayOutfit = recommendedOutfits.first (so hero and rail can never
+     disagree); empty response keeps the previous hero instead of blanking it.
+  5. catch -> recommendationsError = ApiException.message (e.g.
+     "Backend timed out." / "Request failed (400)") while KEEPING whatever real
+     outfits are already on screen; never falls back to MockData.
+  6. finally -> loading=false, settled=true, notifyListeners().
+  7. Logout (_resetUserScopedState, :301) clears all four fields, so a second
+     user never sees the first user's recommendations.
+
+3.3 HOME UI (lib/features/home/home_screen.dart)
+  initState (:41-53): both loads moved into
+  `WidgetsBinding.instance.addPostFrameCallback` with a `mounted` guard — the
+  documented fix for the build-phase notification (same pattern as
+  wardrobe_screen.dart).
+  Section (:101-124): SwSectionHeader("Recommended for You") inserted between
+  the hero card and Quick Actions, then _RecommendationRail with the four
+  states, each carrying a ValueKey so behaviour is assertable:
+    home_rec_skeleton  outfits.isEmpty && (loading || !settled)  -> 3 neutral
+                        placeholder cards with a small spinner
+    home_rec_error     empty + error  -> "Couldn't load recommendations",
+                        the REAL API message, [Retry] -> loadToday()
+    home_rec_empty     empty, settled, no error -> "No recommendations yet"
+                        + [Refresh] -> loadToday(); never mock outfits
+    home_rec_rail      success -> horizontal ListView of the shared
+                        OutfitCard (width 160 / rail height 216), each tap
+                        opens the existing PerfectMatchScreen(outfit:)
+  Rendering order is deliberate: skeleton wins over error while in flight, so
+  the section cannot flash an error during the request it is waiting on.
+
+3.4 WEATHER ENVELOPE FIX
+  loadToday now unwraps `{weather:{...}}` before storing. This is the only
+  behaviour change outside the recommendation fields: `_WeatherPill` starts
+  showing the live summary instead of its hard-coded placeholder, and the
+  tempC handed to the engine is the real one. No widget was edited for this —
+  only the data AppState stores.
+
+================================================================================
+4. API / CONTRACT COMPLIANCE
+================================================================================
+  Reused, not duplicated: SmartWardrobeApi.recommendedOutfits() (line 323) and
+  SmartWardrobeApi.weather() (line 403). No second HTTP client, no new path.
+  Endpoint: GET /outfits/recommended?occasion=casual&tempC=<live>&count=4
+  Response: { outfits, weather, occasion } — unchanged, verified live (§6).
+  Field mapping (backend -> Outfit.fromJson), verified against a real payload:
+    id, name, image, occasion, match, pieces, itemIds, breakdown, explanation
+    -> all present and consumed.
+    `favorite` is absent from the response and Outfit.fromJson sets
+    `favorite: json['favorite'] == true` -> false, which is correct for a
+    brand-new recommendation.
+    `items[]` is served by the backend but not mapped by the Flutter Outfit
+    model (the card renders the top-level `image`); the widget-test fixture
+    omits it and says so inline.
+  No backend file was modified in this section.
+
+================================================================================
+5. TESTS EXECUTED AND RESULTS
+================================================================================
+
+  dart analyze lib test                          -> No issues found!
+  flutter test                                   -> 70 passed, 4 skipped
+                                                    (baseline was 65 passed /
+                                                     4 skipped; +5 new tests,
+                                                     0 regressions)
+  node --test test/recommendation-engine.test.js -> 8/8 pass  (backend)
+  node --test test/feedback-learning.test.js     -> 11/11 pass (backend)
+  Runtime contract check (§6)                    -> 8 PASS / 0 FAIL
+
+  New: test/home_recommendation_test.dart (5 widget tests, all offline)
+   T1 "skeleton rail while the recommendation request is in flight"
+      freezes loadToday via the guard, asserts the section header, the
+      skeleton key, zero OutfitCards, and that nothing has settled yet.
+   T2 "loadToday refuses to start a second in-flight request"
+      calls loadToday() while loading==true and asserts it returns without
+      touching settled / error / outfits (the no-duplicate-request rule).
+   T3 "failed request shows the API error and a working Retry"
+      lets the deferred load settle against flutter_test's mock client (400),
+      asserts the error card, the REAL error string, Retry present and
+      pressable, outfits still empty (no mock fallback), then taps Retry and
+      asserts no exception.
+   T4 "engine outfits render in order and open PerfectMatchScreen"
+      seeds the two live-backend outfits (fixtures below), asserts exactly 2
+      OutfitCards with the endpoint's own names while the hero still shows
+      MockData, taps a card and asserts PerfectMatchScreen is pushed.
+   T5 "empty answer shows the empty card, never demo outfits"
+      settles the request the way loadToday's finally block does and asserts
+      the empty card + Refresh, zero OutfitCards and an empty
+      recommendedOutfits (the direct "no fake outfit displayed" check).
+  Note: flutter_test's mock HTTP can only answer 400, so the SUCCESS state is
+  seeded from a real backend payload rather than fetched in-test; the live
+  fetch path is covered by §6 instead.
+
+================================================================================
+6. RUNTIME CHECKS (real Express backend, real store, started and stopped)
+================================================================================
+
+  Deps: backend/node_modules is absent (documented by §3/§4), so express,
+  cors, multer and dotenv were installed into a THROWAWAY directory outside
+  the repository and exposed with NODE_PATH. The repo was not modified.
+  Server: EXPRESS_PORT=3311 EMBEDDINGS=off, spawned in the background, all
+  requests hit http://127.0.0.1:3311, then SIGTERM + SIGKILL and the port was
+  confirmed closed afterwards. Nothing is left running.
+
+  PASS  server started in the background on port 3311
+  PASS  GET /weather/current -> tempC=24 (Home passes this to the engine)
+  PASS  GET /outfits/recommended -> keys exactly [outfits, weather, occasion]
+  PASS  outfits array returned: 4
+  PASS  every outfit carries the fields the Flutter Outfit model maps
+        (id, name, image, occasion, match, pieces, itemIds, breakdown,
+         explanation)
+  PASS  identical repeat request -> identical name/match/breakdown order
+        (ids are timestamped)
+  PASS  count=1 hero request returns the same first outfit as count=4
+  PASS  pre-§5 request (?occasion=casual, default count) still returns 3
+        outfits
+  8 PASS / 0 FAIL
+
+  Captured payload (used as the widget-test fixtures): first look
+  "Effortless Everyday" match 72 (Oxford Cotton Shirt + Beige Chinos +
+  Minimalist Sneakers + Silk Scarf, breakdown with 11 engine factors), second
+  look same name match 71; both with image
+  assets/images/item_shirt_white_soft.jpg.
+
+================================================================================
+7. KNOWN LIMITATIONS (documented, not hidden)
+================================================================================
+- The success path of loadToday() is not exercised by a widget test: flutter_test
+  cannot return a 200, and injecting an HTTP stub would mean changing
+  lib/core/api (out of scope). The live path is covered by §6 and the
+  rendering path by T4 with a byte-real payload.
+- The weather-envelope unwrap (§3.4) has no automated test for the same
+  reason; its input shape is verified live in §6
+  (`{"weather":{"tempC":24,...}}`), and the fallback (tempC=24) is unchanged.
+- Hero and rail show the same top outfit by design; there is no
+  "hide duplicated item" rule because that would be client-side ranking.
+- `_homeRecommendationCount = 4` is a constant; there is no pull-to-refresh or
+  occasion switcher on Home yet (the endpoint already accepts occasion).
+- `Image.asset` has no error fallback in SwPhoto (pre-existing, shared with the
+  Outfits screen); backend image paths are all `assets/images/...` and
+  pubspec.yaml declares assets/images/, so they resolve in the app and in
+  tests.
+- Home still triggers loadWardrobe() on mount (unchanged behaviour). Its
+  ApiClient 8 s timeout timer must be drained in widget tests — see
+  drainTimeouts() in the new test file.
+
+================================================================================
+8. WHAT SECTION 6 SHOULD PICK UP (handoff, NOT started here)
+================================================================================
+- Occasion / weather aware refresh of the same request (the client already
+  sends occasion and tempC; only the UI trigger is missing).
+- Promote the rail to other surfaces (Outfits screen, planner) using the SAME
+  AppState fields — do not add a second client call.
+- Persist recommendation impressions/clicks (Section 2 recorded these as
+  missing; Section 4 recorded that history is still not written) when a
+  section is explicitly tasked with storage.
+- Optional: make the recommendation count configurable per surface.
+
+================================================================================
+9. EXPLICIT STATEMENT
+================================================================================
+NO ranking, scoring, diversity, weather-modelling or StyleMemory logic was
+implemented in Flutter in this section; the order shown on Home is exactly the
+order the backend engine returned. NO backend file, API contract, endpoint or
+test from Sections 3/4 was modified. NO git commit, no branch, no push was
+made — `git status` still shows this section's report plus the pre-existing
+untracked §1-§4 material. Section 6 was NOT started: no Section 6 file exists.
+The audit findings in §1 come from reading the repository, and the results in
+§5/§6 come from commands actually executed on this machine.
+
+=== END OF SECTION 5 ===
