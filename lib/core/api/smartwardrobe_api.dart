@@ -337,19 +337,52 @@ class SmartWardrobeApi {
     String name,
     List<String> itemIds, {
     String occasion = 'Casual',
-  }) async =>
-      Map<String, dynamic>.from(
-        await _client.post('/outfits', {
-          'name': name,
-          'itemIds': itemIds,
-          'occasion': occasion,
-        }),
-      );
+    int? compatibilityScore,
+    List<Map<String, dynamic>>? breakdown,
+    String? explanation,
+    String? sourceOutfitId,
+  }) async {
+    final body = <String, dynamic>{
+      'name': name,
+      'itemIds': itemIds,
+      'occasion': occasion,
+      // When saving an existing recommendation, hand the backend the score, the
+      // 11-factor report and the explanation the user was shown, plus the source
+      // id whose rating should follow the new record. Omitted for a manual
+      // outfit so the backend scores the actual selected pieces itself.
+      'compatibilityScore': ?compatibilityScore,
+      if (breakdown != null && breakdown.isNotEmpty) 'breakdown': breakdown,
+      if (explanation != null && explanation.isNotEmpty) 'explanation': explanation,
+      if (sourceOutfitId != null && sourceOutfitId.isNotEmpty)
+        'sourceOutfitId': sourceOutfitId,
+    };
+    return Map<String, dynamic>.from(await _client.post('/outfits', body));
+  }
 
   Future<Map<String, dynamic>> toggleFavorite(String outfitId) async =>
       Map<String, dynamic>.from(
         await _client.post('/outfits/$outfitId/favorite'),
       );
+
+  /// The signed-in user's saved rating for an outfit, or null when unrated
+  /// (`GET /outfits/:id/rating`, §8.5). The backend stores it and learns from it
+  /// (replace semantics), so it can change future recommendations.
+  Future<int?> outfitRating(String outfitId) async {
+    final res = await _client.get('/outfits/$outfitId/rating');
+    final rating = (res as Map)['rating'];
+    return rating is num ? rating.toInt() : null;
+  }
+
+  /// Saves a 1–5 star rating for an outfit (`POST /outfits/:id/rating`) and
+  /// returns the value the backend stored. The backend rejects anything that
+  /// is not an integer 1–5 with a 400, surfaced as [ApiException].
+  Future<int> rateOutfit(String outfitId, int rating) async {
+    final res = await _client.post('/outfits/$outfitId/rating', {
+      'rating': rating,
+    });
+    final saved = (res as Map)['rating'];
+    return saved is num ? saved.toInt() : rating;
+  }
 
   Future<void> outfitFeedback(
     String outfitId, {
@@ -362,12 +395,38 @@ class SmartWardrobeApi {
     });
   }
 
+  /// The signed-in user's saved outfits (`GET /outfits/saved`, §8.5).
+  ///
+  /// The list is per-user and derived server-side from saved *relationships*,
+  /// so it never exposes outfits another account saved. [favorite] is applied
+  /// client-side when given (the saved endpoint has no favourite filter): this
+  /// keeps the existing call signature for callers and test fakes while the
+  /// underlying source becomes the user's own saves rather than every record.
   Future<List<dynamic>> outfits({bool? favorite}) async {
-    final res = await _client.get(
-      '/outfits',
-      favorite == null ? null : {'favorite': '$favorite'},
-    );
-    return List<dynamic>.from((res as Map)['outfits'] as List);
+    final res = await _client.get('/outfits/saved');
+    final all = List<dynamic>.from((res as Map)['outfits'] as List);
+    if (favorite == null) return all;
+    return [
+      for (final o in all)
+        if (o is Map && (o['favorite'] == true) == favorite) o,
+    ];
+  }
+
+  /// Saves a persisted outfit for the signed-in user
+  /// (`POST /outfits/:id/save`, §8.5). Idempotent: saving twice keeps a single
+  /// relationship. The outfit must already exist as a record — a generated
+  /// recommendation is persisted first through [createOutfit]. Returns the
+  /// outfit record the backend echoed back.
+  Future<Map<String, dynamic>> saveOutfit(String outfitId) async =>
+      Map<String, dynamic>.from(
+        await _client.post('/outfits/$outfitId/save'),
+      );
+
+  /// Removes the signed-in user's saved relationship to an outfit
+  /// (`DELETE /outfits/:id/save`, §8.5). Idempotent and non-destructive: the
+  /// outfit record itself, its ratings and feedback are left untouched.
+  Future<void> unsaveOutfit(String outfitId) async {
+    await _client.delete('/outfits/$outfitId/save');
   }
 
   // ---------------------------------------------------------- 8.6 Planner

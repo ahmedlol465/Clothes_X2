@@ -28,27 +28,21 @@ class PerfectMatchScreen extends StatefulWidget {
 
 class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
   List<MatchFactor>? _factors;
-  List<ClothingItem>? _pieces;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
+    final id = widget.outfit?.id;
+    if (id != null && id.isNotEmpty) {
+      AppState.instance.loadOutfitRating(id);
+    }
     _resolve();
   }
 
   Future<void> _resolve() async {
     final outfit = widget.outfit;
     if (outfit == null) return;
-    // Resolve piece images from the live wardrobe.
-    final ids = outfit.itemIds ?? const <String>[];
-    if (ids.isNotEmpty) {
-      final wardrobe = AppState.instance.wardrobe;
-      final found = [
-        for (final id in ids)
-          ...wardrobe.where((w) => w.id == id),
-      ];
-      if (found.isNotEmpty && mounted) setState(() => _pieces = found);
-    }
     // Prefer the weights the engine reported with the outfit; only call the
     // compatibility endpoint when the outfit arrived without a breakdown.
     if (outfit.factors != null && outfit.factors!.isNotEmpty) {
@@ -64,6 +58,7 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
       }
       return;
     }
+    final ids = outfit.itemIds ?? const <String>[];
     if (ids.length >= 2) {
       final compat = await AppState.instance.compatibility(ids);
       if (!mounted) return;
@@ -80,27 +75,134 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
     }
   }
 
+  /// Saves the displayed look and reports the real outcome. Reuses
+  /// [AppState.createOutfit], which refreshes [AppState.savedOutfits] on
+  /// success, so the Saved grid updates without a manual reload. A look with
+  /// no items is refused instead of being reported as saved, and the button
+  /// is disabled while a save is in flight.
+  ///
+  /// The recommendation's own compatibility score, breakdown and explanation
+  /// are handed to the backend so the saved record keeps exactly what the user
+  /// saw, and its id travels as [sourceOutfitId] so any rating the user already
+  /// gave the recommendation follows the saved record.
+  Future<void> _save() async {
+    final outfit = widget.outfit;
+    final ids = outfit?.itemIds ?? const <String>[];
+    if (outfit == null || ids.isEmpty) {
+      _notify('This look has no items to save.');
+      return;
+    }
+    final factors = _factors ?? outfit.factors ?? const <MatchFactor>[];
+    final breakdown = factors.isEmpty
+        ? (outfit.breakdown == null || outfit.breakdown!.isEmpty
+            ? null
+            : [
+                for (final row in outfit.breakdown!)
+                  {
+                    'label': row.label,
+                    'value': row.value,
+                  },
+              ])
+        : [for (final f in factors) f.toJson()];
+    setState(() => _saving = true);
+    final result = await AppState.instance.createOutfit(
+      name: outfit.name,
+      itemIds: ids,
+      occasion: outfit.occasion,
+      compatibilityScore: outfit.compatibilityScore ?? outfit.match,
+      breakdown: breakdown,
+      explanation: outfit.explanation,
+      sourceOutfitId: outfit.id.isEmpty ? null : outfit.id,
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    switch (result) {
+      case SaveOutfitResult.saved:
+        _notify('Outfit saved.');
+      case SaveOutfitResult.duplicate:
+        _notify('Outfit already saved.');
+      case SaveOutfitResult.failed:
+        _notify(
+          AppState.instance.lastError ?? 'Backend offline — try again shortly.',
+        );
+    }
+  }
+
+  void _notify(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// The flatlay shown at the top of the card.
+  ///
+  /// With no [widget.outfit] this is the bundled demo flatlay. With a real
+  /// outfit the pieces are resolved live from [AppState.wardrobe] by
+  /// [Outfit.itemIds] and re-resolved whenever that wardrobe changes, so a
+  /// saved look never shows bundled demo garments. When nothing resolves, an
+  /// honest "pieces unavailable" state is shown instead of pretending.
+  Widget _flatlay(BuildContext context) {
+    final outfit = widget.outfit;
+    if (outfit == null) {
+      return _PieceGrid(
+        key: const ValueKey('perfect_match_piece_grid'),
+        images: [for (final p in MockData.perfectMatchPieces) p.image],
+      );
+    }
+    return ListenableBuilder(
+      listenable: AppState.instance,
+      builder: (context, _) {
+        final ids = outfit.itemIds ?? const <String>[];
+        final wardrobe = AppState.instance.wardrobe;
+        final resolved = [
+          for (final id in ids)
+            ...wardrobe.where((w) => w.id == id),
+        ];
+        if (resolved.isNotEmpty) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _PieceGrid(
+                key: const ValueKey('perfect_match_piece_grid'),
+                images: [for (final p in resolved) p.image],
+              ),
+              if (resolved.length < ids.length) ...[
+                const SizedBox(height: Insets.sm),
+                Text(
+                  '${resolved.length} of ${ids.length} pieces found in your wardrobe.',
+                  style: AppText.caption,
+                ),
+              ],
+            ],
+          );
+        }
+        return _MissingPieces(
+          key: const ValueKey('perfect_match_missing_pieces'),
+          names: outfit.pieces,
+          itemCount: ids.length,
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final outfit = widget.outfit;
-    final breakdown = _factors ??
-        outfit?.factors ??
-        (outfit == null
-            ? [
-                for (final row in MockData.matchBreakdown)
-                  MatchFactor(label: row.label, value: row.value),
-              ]
-            : null) ??
-        [
-          for (final row in MockData.matchBreakdown)
-            MatchFactor(label: row.label, value: row.value),
-        ];
+    // With no outfit the screen is the bundled demo flatlay; with a real outfit
+    // the breakdown is only ever what the engine or the outfit itself reported,
+    // never [MockData], so a saved look cannot borrow demo scores.
+    final demo = outfit == null;
+    final breakdown = demo
+        ? [
+            for (final row in MockData.matchBreakdown)
+              MatchFactor(label: row.label, value: row.value),
+          ]
+        : (_factors ?? outfit.factors ?? const <MatchFactor>[]);
     // Factors the engine had no evidence for are dropped and renormalised
     // away; showing them as ordinary scores would overstate the confidence.
     final applied = breakdown.where((f) => f.applied).toList();
     final skipped = breakdown.where((f) => !f.applied).toList();
-    final pieces = _pieces ?? MockData.perfectMatchPieces;
-    final match = outfit?.match ?? 92;
+    final match = outfit?.displayMatch ?? 92;
     final why = outfit?.explanation ??
         'These pieces work well together because the neutral '
             'colors create a balanced look and the casual style '
@@ -128,11 +230,7 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
                         style: AppText.overline,
                       ),
                       const SizedBox(height: Insets.md),
-                      _PieceGrid(
-                        images: [
-                          for (final p in pieces) p.image,
-                        ],
-                      ),
+                      _flatlay(context),
                     ],
                   ),
                 ),
@@ -160,6 +258,11 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (applied.isEmpty && skipped.isEmpty)
+                        Text(
+                          'No breakdown is available for this outfit yet.',
+                          style: AppText.caption,
+                        ),
                       for (var i = 0; i < applied.length; i++) ...[
                         _ScoreBar(
                           label: applied[i].label,
@@ -199,33 +302,15 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
                   title: 'WHY THIS OUTFIT?',
                   message: why,
                 ),
+                if (outfit != null && outfit.id.isNotEmpty) ...[
+                  const SizedBox(height: Insets.lg),
+                  _RatingBar(outfitId: outfit.id),
+                ],
                 const SizedBox(height: Insets.xl),
                 SwButton(
                   label: 'Save Outfit',
-                  onTap: () async {
-                    final ok = outfit?.itemIds?.isNotEmpty == true
-                        ? await AppState.instance.api
-                            .createOutfit(
-                              outfit!.name,
-                              outfit.itemIds!,
-                              occasion: outfit.occasion,
-                            )
-                            .then((_) => true)
-                            .catchError((_) => false)
-                        : true;
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context)
-                      ..hideCurrentSnackBar()
-                      ..showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            ok
-                                ? 'Outfit saved.'
-                                : 'Backend offline — try again shortly.',
-                          ),
-                        ),
-                      );
-                  },
+                  busy: _saving,
+                  onTap: _save,
                 ),
                 const SizedBox(height: Insets.md),
                 SwOutlineButton(
@@ -245,9 +330,131 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
   }
 }
 
-/// Two by two grid of the garments in the recommendation.
+/// The 1–5 star rating control for a backend outfit (§8.5
+/// `POST/GET /outfits/:id/rating`).
+///
+/// A tap saves the value server-side and the backend learns from it (replace
+/// semantics) so future recommendations reflect the current opinion. The saved
+/// value is reloaded when the screen opens, so the selection survives a
+/// reopen. Saves are disabled while one is in flight (no duplicate requests),
+/// and the outcome is reported with a snack bar.
+class _RatingBar extends StatelessWidget {
+  const _RatingBar({required this.outfitId});
+
+  final String outfitId;
+
+  Future<void> _rate(BuildContext context, int star) async {
+    final error = await AppState.instance.submitRating(outfitId, star);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            error == null
+                ? 'Thanks — your rating was saved.'
+                : 'Could not save rating: $error',
+          ),
+        ),
+      );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: AppState.instance,
+      builder: (context, _) {
+        final state = AppState.instance;
+        final saved = state.ratingFor(outfitId) ?? 0;
+        // While a save is in flight, show the tapped value so the star reads as
+        // selected immediately; it reverts to [saved] if the request fails.
+        final pending = state.ratingPending(outfitId);
+        final selected = pending ?? saved;
+        final saving = state.ratingSaving(outfitId);
+        return SwCard(
+          padding: const EdgeInsets.all(Insets.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('Rate this look', style: AppText.cardTitle),
+                  ),
+                  if (saving)
+                    const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                selected == 0
+                    ? 'How well does this outfit match your style?'
+                    : 'Your rating: $selected out of 5.',
+                style: AppText.caption,
+              ),
+              const SizedBox(height: Insets.md),
+              Row(
+                children: [
+                  for (var star = 1; star <= 5; star++)
+                    _Star(
+                      star: star,
+                      filled: star <= selected,
+                      enabled: !saving,
+                      onTap: () => _rate(context, star),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// One tappable star in the rating row. Selected stars use the filled glyph
+/// and the primary colour; the rest are outlined, so the choice reads at a
+/// glance.
+class _Star extends StatelessWidget {
+  const _Star({
+    required this.star,
+    required this.filled,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final int star;
+  final bool filled;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: filled,
+      label: 'Rate $star out of 5',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: SwIconView(
+            filled ? SwIcon.starFill : SwIcon.star,
+            size: 30,
+            color: filled ? AppColors.primary : AppColors.textTertiary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PieceGrid extends StatelessWidget {
-  const _PieceGrid({required this.images});
+  const _PieceGrid({super.key, required this.images});
 
   final List<String> images;
 
@@ -266,6 +473,52 @@ class _PieceGrid extends StatelessWidget {
       itemBuilder: (context, i) {
         return SwProductImage(image: images[i], radius: Radii.md);
       },
+    );
+  }
+}
+
+/// Honest fallback when a real outfit's pieces cannot be resolved from the
+/// wardrobe (e.g. the items were deleted). Lists the recorded piece names so
+/// the look is still identifiable, but never substitutes demo garments.
+class _MissingPieces extends StatelessWidget {
+  const _MissingPieces({
+    super.key,
+    required this.names,
+    required this.itemCount,
+  });
+
+  final List<String> names;
+  final int itemCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Insets.lg),
+      child: Column(
+        children: [
+          const SwIconBadge(icon: SwIcon.shirt, circle: true, size: 44),
+          const SizedBox(height: Insets.md),
+          Text('Pieces not available', style: AppText.cardTitle),
+          const SizedBox(height: Insets.xs),
+          Text(
+            itemCount == 0
+                ? 'This look has no recorded items, so its pieces cannot be '
+                    'shown.'
+                : "We couldn't find this look's pieces in your wardrobe. They "
+                    'may have been removed.',
+            textAlign: TextAlign.center,
+            style: AppText.caption,
+          ),
+          if (names.isNotEmpty) ...[
+            const SizedBox(height: Insets.md),
+            Text(
+              names.join('  •  '),
+              textAlign: TextAlign.center,
+              style: AppText.caption,
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

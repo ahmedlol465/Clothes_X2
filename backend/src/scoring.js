@@ -444,4 +444,9 @@ module.exports = {
   normaliseWeights,
   BASE_WEIGHTS,
   FACTOR_LABELS,
+  // Re-exported for the recommendation engine (§3). The completeness gate is a
+  // property of "what counts as an outfit", not of the 11-factor model, so it
+  // is shared rather than re-derived: one table, one meaning, two callers.
+  completeness,
+  COMPLETENESS_CAP,
 };

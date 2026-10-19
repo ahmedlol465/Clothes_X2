@@ -3,8 +3,14 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const savedOutfitsStore = require('./saved-outfits');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+// Integration tests point this at a temp directory so they exercise the real
+// HTTP stack without ever reading or writing backend/data/db.json. Dev and
+// production leave the variable unset and keep the original path.
+const DATA_DIR = process.env.SMARTWARDROBE_DATA_DIR
+  ? path.resolve(process.env.SMARTWARDROBE_DATA_DIR)
+  : path.join(__dirname, '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 function uid(prefix = 'id') {
@@ -33,6 +39,14 @@ function seed() {
     { id: 'o3', name: 'Weekend Chillout', image: 'assets/images/flatlay_denim_knit.jpg', occasion: 'Leisure', match: 95, pieces: ['Denim', 'Knit', 'Loafers'], itemIds: ['w2', 'w3', 'w8'], favorite: true, createdAt: new Date().toISOString() },
     { id: 'o4', name: 'Date Night Elite', image: 'assets/images/outfit_date_night_elite.jpg', occasion: 'Elegant', match: 88, pieces: ['Black Shirt', 'Tailored Trousers'], itemIds: ['w1', 'w9'], favorite: true, createdAt: new Date().toISOString() },
   ];
+  // The demo user's saved-outfit relationships (§8.5). Built through the same
+  // module the API uses, so the seed ids match a later re-save exactly and a
+  // fresh database shows the same four saved outfits the demo always had.
+  const savedOutfitDraft = {};
+  for (const outfit of outfits) {
+    savedOutfitsStore.save(savedOutfitDraft, { userId: 'u_demo', outfitId: outfit.id });
+  }
+  const savedOutfits = savedOutfitDraft.savedOutfits;
   return {
     users: [
       {
@@ -53,8 +67,18 @@ function seed() {
     sessions: [],
     wardrobe,
     outfits,
+    // Per-user saved-outfit relationships (§8.5): `{ id, userId, outfitId,
+    // createdAt }`. Kept separate from `outfits` so unsaving removes only the
+    // relationship, never the shared outfit record. Created for new databases;
+    // saved-outfits.js creates it on demand for existing db.json files.
+    savedOutfits,
     wearEvents: [],
     feedback: [],
+    // §4: what each user was actually shown by GET /outfits/recommended
+    // (compact rows: user, time, context, outfit id, item ids). Created for
+    // new databases; recommendation-history.js creates it on demand for
+    // existing db.json files, so no migration is needed.
+    recommendationHistory: [],
     styleMemory: [
       { userId: 'u_demo', preference: 'neutral_colors', value: 0.91, confidence: 0.87, source: 'outfit_feedback', updatedAt: new Date().toISOString() },
     ],

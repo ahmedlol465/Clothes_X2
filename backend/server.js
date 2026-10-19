@@ -24,6 +24,9 @@ const llm = require('./src/llm');
 const scoring = require('./src/scoring');
 const memoryStore = require('./src/style-memory');
 const retrieval = require('./src/retrieval');
+const engine = require('./src/recommendation-engine');
+const history = require('./src/recommendation-history');
+const savedOutfits = require('./src/saved-outfits');
 const weatherService = require('./src/weather');
 const vision = require('./src/vision');
 const tax = require('./src/taxonomy');
@@ -54,7 +57,13 @@ const optionalAuth = (req, _res, next) => {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   const session = token && db.sessions.find((s) => s.token === token);
-  req.user = (session && db.users.find((u) => u.id === session.userId)) || db.users[0] || null;
+  const sessionUser = session ? db.users.find((u) => u.id === session.userId) : null;
+  // Reads stay open, but an anonymous caller must never be mistaken for a real
+  // account. `req.user` keeps the legacy db.users[0] fallback for response
+  // shaping, while `req.authUserId` is set ONLY for a verified session, so
+  // endpoints that write per-user data cannot attribute it to db.users[0].
+  req.user = sessionUser || db.users[0] || null;
+  req.authUserId = sessionUser ? sessionUser.id : null;
   next();
 };
 function publicUser(u) {
@@ -1232,32 +1241,231 @@ app.get('/ai/capabilities', optionalAuth, async (req, res) => {
 });
 
 // ================================================================ 8.5 Outfits
-app.get('/outfits/recommended', optionalAuth, (req, res) => {
+/**
+ * Recommended outfits (§3 Recommendation Engine).
+ *
+ * Same request/response contract as before — `{ outfits, weather, occasion }`
+ * with `outfits` in the existing Outfit shape — but the ranking now goes
+ * through `src/recommendation-engine.js`: hard constraints → existing
+ * generation/retrieval → centralised personalised score → diversity →
+ * exploration. The engine owns wardrobe filtering (archived included), so the
+ * raw `db.wardrobe` is handed over.
+ *
+ * If any optional personalisation signal fails, the endpoint falls back to the
+ * previous direct `generateOutfits` call rather than failing the Home screen.
+ *
+ * §4: whatever comes back is remembered in db.recommendationHistory (compact
+ * user/time/context/itemIds rows) so later feedback can be attributed to the
+ * garments the user was actually shown. The write is best-effort and wrapped:
+ * a failing store can never break the recommendation flow, and the response
+ * stays byte-identical in shape to §3.
+ */
+app.get('/outfits/recommended', optionalAuth, async (req, res) => {
   const { occasion = 'casual', tempC = '24', count = '3' } = req.query;
   const weather = { tempC: Number(tempC), condition: Number(tempC) >= 26 ? 'sunny' : 'partly cloudy' };
-  const outfits = ai.generateOutfits(db.wardrobe.filter((i) => !i.archived), {
-    occasion, weather, styleProfile: req.user?.styleProfile || {}, count: Number(count),
-  });
-  res.json({ outfits, weather, occasion });
+  const remember = (outfits) => {
+    try {
+      const written = history.recordShown(db, {
+        userId: req.user?.id || null,
+        occasion,
+        tempC: weather.tempC,
+        source: 'GET /outfits/recommended',
+        outfits,
+      });
+      if (written.length) persist();
+    } catch (e) {
+      console.error('[recommend] history write skipped:', e.message);
+    }
+  };
+  try {
+    const { outfits } = await engine.recommend(db.wardrobe, {
+      occasion,
+      weather,
+      count: Number(count),
+      styleProfile: req.user?.styleProfile || {},
+      memory: memoryStore.read(db, req.user?.id),
+    });
+    remember(outfits);
+    return res.json({ outfits, weather, occasion });
+  } catch (e) {
+    console.error('[recommend] engine failed, falling back to generateOutfits:', e.message);
+    const outfits = ai.generateOutfits(db.wardrobe.filter((i) => !i.archived), {
+      occasion, weather, styleProfile: req.user?.styleProfile || {}, count: Number(count),
+    });
+    remember(outfits);
+    res.json({ outfits, weather, occasion });
+  }
 });
+
+/**
+ * The compatibility score a caller may hand us when saving an existing
+ * recommendation. A recommendation already carries the 11-factor score the user
+ * was shown, so re-scoring it from the same items with different inputs (the old
+ * hardcoded `tempC: 24`, no StyleMemory) could publish a different number under
+ * the same look. Returns a whole 0..100 number, null when absent, or NaN when
+ * present but malformed (the caller then rejects the request).
+ */
+function suppliedCompatibilityScore(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+    return Number.NaN;
+  }
+  return Math.round(value);
+}
+
+/**
+ * Sanitise a supplied 11-factor breakdown so only the documented fields survive.
+ * Anything malformed is dropped; each surviving row keeps the shape the Flutter
+ * `MatchFactor` model reads. Arbitrary client keys are never trusted through.
+ */
+function sanitizeBreakdown(value) {
+  if (!Array.isArray(value)) return null;
+  const rows = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const label = str(raw.label, 80);
+    const val = Number(raw.value);
+    if (!label || !Number.isFinite(val)) continue;
+    const row = {
+      key: str(raw.key, 60) || label.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+      label,
+      value: Math.min(100, Math.max(0, Math.round(val))),
+      applied: raw.applied !== false,
+    };
+    if (Number.isFinite(Number(raw.weight))) {
+      row.weight = Math.min(1, Math.max(0, Number(raw.weight)));
+    }
+    if (Number.isFinite(Number(raw.contribution))) {
+      row.contribution = Number(raw.contribution);
+    }
+    rows.push(row);
+    if (rows.length >= 16) break;
+  }
+  return rows.length ? rows : null;
+}
+
+/** A bounded, non-empty explanation string, or null. */
+function sanitizeExplanation(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim().slice(0, 1000);
+  return text || null;
+}
 
 app.post('/outfits', optionalAuth, (req, res) => {
   const b = req.body || {};
   if (!b.name || !b.itemIds?.length) return res.status(400).json({ error: 'name and itemIds are required.' });
   const items = b.itemIds.map((id) => db.wardrobe.find((i) => i.id === id)).filter(Boolean);
-  const compat = ai.calculateCompatibility(items.length >= 2 ? items : db.wardrobe.slice(0, 3), {
-    occasion: b.occasion || 'casual', weather: { tempC: 24 }, styleProfile: req.user?.styleProfile,
-  });
+  // The old route scored a one-item outfit against the first three wardrobe
+  // entries whenever it had fewer than two pieces, so a scarf could carry an
+  // unrelated look's score. Only ever score the pieces actually submitted.
+  if (!items.length) {
+    return res.status(400).json({ error: 'None of those items are in your wardrobe.' });
+  }
+
+  const supplied = suppliedCompatibilityScore(b.compatibilityScore);
+  if (Number.isNaN(supplied)) {
+    return res.status(400).json({ error: 'compatibilityScore must be a number between 0 and 100.' });
+  }
+
+  const occasion = b.occasion || 'casual';
+  const context = {
+    occasion,
+    weather: { tempC: 24 },
+    styleProfile: req.user?.styleProfile,
+    memory: memoryStore.read(db, req.user?.id),
+  };
+
+  let score;
+  let breakdown;
+  if (supplied != null) {
+    // A recommendation already carries the score and report the user was shown;
+    // persist exactly those rather than re-deriving a different number.
+    score = supplied;
+    breakdown = sanitizeBreakdown(b.breakdown) || [];
+  } else {
+    // Manual creation with no supplied score: a safe, consistent calculation
+    // over the actual selected pieces (never `rankingScore`).
+    const compat = ai.calculateCompatibility(items, context);
+    score = compat.match;
+    breakdown = compat.breakdown;
+  }
+
+  const explanation = sanitizeExplanation(b.explanation)
+    || scoring.explain(items, { occasion, weather: context.weather }, { breakdown, match: score });
+
   const outfit = {
     id: store.uid('o'), name: b.name, occasion: b.occasion || 'Casual',
     image: b.image || items[0]?.image || 'assets/images/outfit_flatlay_beige.jpg',
-    match: compat.match, breakdown: compat.breakdown,
+    // `match` is the legacy alias of the one user-facing compatibility score;
+    // `rankingScore` is deliberately never read here or stored.
+    match: score, compatibilityScore: score, breakdown, explanation,
     pieces: items.map((i) => i.name), itemIds: items.map((i) => i.id),
     favorite: false, createdAt: now(),
   };
   db.outfits.unshift(outfit);
+  // Creating an outfit saves it for its creator, so it shows in their Saved
+  // list on the very first read. The relationship is per-user; the record
+  // itself stays shared and is what an unsave later leaves behind. Only a
+  // verified session (req.authUserId) owns the save: optionalAuth falls back
+  // to db.users[0] for anonymous callers, so attributing on req.user?.id would
+  // hand an anonymous create to an arbitrary account. Anonymous creates still
+  // return the record but save nothing.
+  if (req.authUserId) savedOutfits.save(db, { userId: req.authUserId, outfitId: outfit.id });
+  // The rating the user gave the source recommendation follows the saved look,
+  // persistence-only (no re-learning) and idempotent. Anonymous creates carry no
+  // user, so there is nothing to transfer and none is attempted.
+  if (req.authUserId && b.sourceOutfitId) {
+    history.transferRating(db, {
+      userId: req.authUserId,
+      fromOutfitId: b.sourceOutfitId,
+      toOutfitId: outfit.id,
+    });
+  }
   persist();
   res.status(201).json({ outfit });
+});
+
+/**
+ * The signed-in user's saved outfits (§8.5).
+ *
+ * Derived from db.savedOutfits, so it is strictly per-user — an outfit saved by
+ * someone else is not returned unless this user saved it too. `auth` (not
+ * optionalAuth) is required so the fallback to db.users[0] can never leak one
+ * visitor's saves to another. Registered before GET /outfits/:id so the literal
+ * "saved" is never captured as an :id.
+ */
+app.get('/outfits/saved', auth, (req, res) => {
+  res.json({ outfits: savedOutfits.listOutfits(db, req.user.id) });
+});
+
+/**
+ * Save an outfit for the signed-in user (§8.5).
+ *
+ * Idempotent: saving twice keeps a single relationship. The outfit must already
+ * exist as a record — a generated recommendation is persisted first through
+ * POST /outfits. An unsave later removes only the relationship, never the
+ * record.
+ */
+app.post('/outfits/:id/save', auth, (req, res) => {
+  const outfit = db.outfits.find((o) => o.id === req.params.id);
+  if (!outfit) return res.status(404).json({ error: 'Outfit not found.' });
+  const result = savedOutfits.save(db, { userId: req.user.id, outfitId: outfit.id });
+  if (result && result.created) persist();
+  res.json({ saved: true, outfit });
+});
+
+/**
+ * Remove the signed-in user's saved relationship to an outfit (§8.5).
+ *
+ * Idempotent and non-destructive: only the relationship row is removed. The
+ * outfit record, its ratings, feedback and recommendation history are left
+ * untouched. No 404 when the record is already gone — an unsave must still be
+ * able to clean up a stale relationship; an unknown id is simply a no-op.
+ */
+app.delete('/outfits/:id/save', auth, (req, res) => {
+  const result = savedOutfits.unsave(db, { userId: req.user.id, outfitId: req.params.id });
+  if (result.removed > 0) persist();
+  res.json({ saved: false, removed: result.removed });
 });
 
 app.get('/outfits/:id', optionalAuth, (req, res) => {
@@ -1276,42 +1484,90 @@ app.patch('/outfits/:id', optionalAuth, (req, res) => {
 
 app.delete('/outfits/:id', optionalAuth, (req, res) => {
   db.outfits = db.outfits.filter((o) => o.id !== req.params.id);
+  // Drop dangling saved relationships for the removed record (all users), so
+  // db.savedOutfits cannot accumulate references to outfits that no longer
+  // exist. The reverse never happens: unsaving leaves the record in place.
+  savedOutfits.purgeOutfit(db, req.params.id);
   persist();
   res.json({ ok: true });
 });
 
+/**
+ * Toggle favourite (§4 feedback).
+ *
+ * A false→true transition is a real positive signal, so it is learned through
+ * the existing StyleMemory path with the same strength as a 5-star rating
+ * (scale documented in src/recommendation-history.js). Un-favouriting records
+ * nothing: toggling off is ambiguous (undo vs. dislike) and inventing a
+ * negative signal there would be guesswork — a dedicated rejection action is a
+ * future integration point. The event is idempotent per user/outfit/UTC-day,
+ * so a double tap cannot double-learn, and any learning failure is logged and
+ * swallowed: the toggle itself still works.
+ *
+ * Response contract unchanged: { outfit }.
+ */
 app.post('/outfits/:id/favorite', optionalAuth, (req, res) => {
   const outfit = db.outfits.find((o) => o.id === req.params.id);
   if (!outfit) return res.status(404).json({ error: 'Outfit not found.' });
+  const userId = req.user?.id || null;
   outfit.favorite = !outfit.favorite;
+  if (outfit.favorite) {
+    try {
+      const result = history.applyFeedback(db, {
+        type: 'favorite',
+        source: 'outfit_favorite',
+        userId,
+        outfitId: req.params.id,
+        rating: 5,
+        comment: '',
+        itemIds: outfit.itemIds,
+      });
+      if (result.learnError) console.error('[favorite] learning skipped:', result.learnError);
+    } catch (e) {
+      console.error('[favorite] feedback skipped:', e.message);
+    }
+  }
   persist();
   res.json({ outfit });
 });
 
+/**
+ * Rate an outfit (§4 feedback).
+ *
+ * Same request/response contract as before — { ok, learned } — with one
+ * additive `duplicate` flag. What changed underneath:
+ *   • the event gets a stable id (user + outfit + payload + UTC day), so a
+ *     retried request reports duplicate instead of learning the signal again;
+ *   • item attribution falls back to db.recommendationHistory when the outfit
+ *     is a generated recommendation (gen-… ids are never saved to db.outfits),
+ *     so rating a recommendation finally moves the preferences of the
+ *     garments it contained;
+ *   • learning goes through the same memoryStore.record path as §9 always
+ *     did — no second learning mechanism, and explicit profile fields
+ *     (favoriteColors / preferredStyles / avoidedColors / sizes / fit) are
+ *     never touched.
+ */
 app.post('/outfits/:id/feedback', optionalAuth, (req, res) => {
   const { rating = 5, comment = '' } = req.body || {};
+  const userId = req.user?.id || null;
   const outfit = db.outfits.find((o) => o.id === req.params.id);
-  db.feedback.push({
-    outfitId: req.params.id, rating, comment, at: now(),
-    userId: req.user?.id || null,
-  });
 
-  // Learning loop (§9). The old version nudged one hardcoded
-  // `neutral_colors` row by ±0.01 that nothing ever read back. Now the
-  // rating is attributed to the actual garments in the outfit, and those
-  // preference scores feed straight into future ranking via factorWeights().
-  const items = (outfit?.itemIds || [])
-    .map((id) => db.wardrobe.find((i) => i.id === id))
-    .filter(Boolean);
-  const memory = memoryStore.record(db, req.user?.id || 'anonymous', {
-    rating: Number(rating),
-    items,
-    message: comment || null,
+  const result = history.applyFeedback(db, {
+    type: 'rating',
+    source: 'outfit_feedback',
+    userId,
+    outfitId: req.params.id,
+    rating,
+    comment,
+    itemIds: outfit?.itemIds,
   });
-  persist();
+  if (result.learnError) console.error('[feedback] learning skipped:', result.learnError);
+  if (!result.duplicate) persist();
 
+  const memory = result.memory;
   res.json({
     ok: true,
+    duplicate: result.duplicate,
     learned: {
       confidence: memoryStore.confidence(memory),
       ratings: memory.totals.ratings,
@@ -1324,6 +1580,49 @@ app.post('/outfits/:id/feedback', optionalAuth, (req, res) => {
       notes: memory.facts.slice(0, 3).map((f) => f.text),
     },
   });
+});
+
+/**
+ * Save a 1–5 star rating for an outfit (§4 feedback, Phase 1).
+ *
+ * The rating is stored (one row per user/outfit, replaced in place) AND learned
+ * into the user's StyleMemory with REPLACE semantics, so the next
+ * `GET /outfits/recommended` reflects it through the engine's `learned_affinity`
+ * component and the generator's per-garment affinity. Changing a rating swaps
+ * its contribution instead of adding to it (see
+ * `src/recommendation-history.js` → `saveRating`).
+ *
+ * Saved outfits and generated recommendations are both valid targets (`gen-…`
+ * ids are never persisted to db.outfits, but the user can still rate them; the
+ * garments are recovered from db.recommendationHistory).
+ *
+ * AUTHENTICATION: this endpoint requires a real bearer session (`auth`), not
+ * `optionalAuth`. Learning is written under the caller's account, and
+ * `optionalAuth` falls back to `db.users[0]` for anonymous callers — which would
+ * attribute one visitor's rating (and learned preferences) to another user.
+ * Requiring a token keeps learning strictly per-user. The app is auth-gated
+ * (splash → login), so it always carries a token here. (The broader
+ * `optionalAuth` fallback on non-learning routes is a separate, pre-existing
+ * concern and is left untouched.)
+ */
+app.post('/outfits/:id/rating', auth, (req, res) => {
+  const outfitId = req.params.id;
+  const rating = (req.body || {}).rating;
+  if (!history.isValidRating(rating)) {
+    return res.status(400).json({ error: 'Rating must be an integer from 1 to 5.' });
+  }
+  const userId = req.user.id;
+  const outfit = db.outfits.find((o) => o.id === outfitId);
+  const saved = history.saveRating(db, { userId, outfitId, rating, itemIds: outfit?.itemIds });
+  persist();
+  res.json({ ok: true, outfitId, rating: saved.row.rating, learned: saved.learned });
+});
+
+/** The current user's saved rating for an outfit, or null (§4 feedback, Phase 1). */
+app.get('/outfits/:id/rating', auth, (req, res) => {
+  const userId = req.user.id;
+  const rating = history.readRating(db, { userId, outfitId: req.params.id });
+  res.json({ outfitId: req.params.id, rating });
 });
 
 app.get('/outfits', optionalAuth, (req, res) => {
@@ -1481,8 +1780,9 @@ app.get('/docs', (_req, res) => res.json({
     'POST /ai/chat', 'POST /ai/chat/stream (SSE)', 'POST /ai/match-outfit',
     'POST /ai/remix', 'GET /ai/style-dna', 'GET /ai/conversations',
     'DELETE /ai/conversations', 'GET /ai/capabilities',
-    'GET /outfits/recommended', 'POST /outfits', 'GET /outfits/:id', 'PATCH /outfits/:id',
-    'DELETE /outfits/:id', 'POST /outfits/:id/favorite', 'POST /outfits/:id/feedback',
+    'GET /outfits/recommended', 'POST /outfits', 'GET /outfits/saved', 'GET /outfits/:id',
+    'PATCH /outfits/:id', 'DELETE /outfits/:id', 'POST /outfits/:id/save', 'DELETE /outfits/:id/save',
+    'POST /outfits/:id/favorite', 'POST /outfits/:id/feedback',
     'GET /events', 'POST /events', 'PATCH /events/:id', 'DELETE /events/:id',
     'GET /planner/weekly', 'POST /planner/weekly', 'POST /travel/packing-list',
     'GET /shop/recommended', 'POST /shop/before-you-buy', 'GET /shop/wishlist', 'POST /shop/wishlist',
@@ -1497,28 +1797,36 @@ function groupBy(rows, key) {
   return out;
 }
 
-const server = app.listen(PORT, () =>
-  console.log(
-    `SmartWardrobe backend listening on http://localhost:${PORT}  (docs: /docs)`,
-  ),
-);
+// Only bind a port when run directly (`node server.js`, i.e. `npm start`). When
+// the module is imported — e.g. by an integration test that wants the real
+// Express app against an isolated store — `app` is exported and nothing is
+// listened on or warmed up, so requiring it has no side effects.
+if (require.main === module) {
+  const server = app.listen(PORT, () =>
+    console.log(
+      `SmartWardrobe backend listening on http://localhost:${PORT}  (docs: /docs)`,
+    ),
+  );
 
-// Preload the local embedding model in the background so the first stylist
-// request is not the slow one. Purely optional — if it fails, retrieval falls
-// back to lexical scoring and the server is unaffected.
-retrieval.warmup().then((ok) => {
-  if (ok) console.log('[ai] local embeddings ready');
-  else console.log('[ai] embeddings unavailable — using lexical retrieval');
-});
-server.on('error', (err) => {
-  if (err && err.code === 'EADDRINUSE') {
-    console.error(
-      `\nPort ${PORT} is already in use — another copy of the backend is already running.\n` +
-        `You do NOT need to start it again: open http://localhost:${PORT}/docs to use it.\n` +
-        `To run your own copy, stop the other one first, e.g.:\n` +
-        `  netstat -ano | findstr :${PORT}\n  taskkill /PID <number> /F\n`,
-    );
-    process.exit(1);
-  }
-  throw err;
-});
+  // Preload the local embedding model in the background so the first stylist
+  // request is not the slow one. Purely optional — if it fails, retrieval falls
+  // back to lexical scoring and the server is unaffected.
+  retrieval.warmup().then((ok) => {
+    if (ok) console.log('[ai] local embeddings ready');
+    else console.log('[ai] embeddings unavailable — using lexical retrieval');
+  });
+  server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+      console.error(
+        `\nPort ${PORT} is already in use — another copy of the backend is already running.\n` +
+          `You do NOT need to start it again: open http://localhost:${PORT}/docs to use it.\n` +
+          `To run your own copy, stop the other one first, e.g.:\n` +
+          `  netstat -ano | findstr :${PORT}\n  taskkill /PID <number> /F\n`,
+      );
+      process.exit(1);
+    }
+    throw err;
+  });
+}
+
+module.exports = app;

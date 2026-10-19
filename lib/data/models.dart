@@ -129,6 +129,18 @@ class MatchFactor {
 
   /// Matches the legacy `(label, value)` shape used by the mock data.
   ({String label, int value}) get row => (label: label, value: value);
+
+  /// The backend shape `POST /outfits` accepts for a persisted breakdown, so a
+  /// saved recommendation keeps the exact report the user was shown instead of
+  /// the backend re-deriving a different one.
+  Map<String, dynamic> toJson() => {
+        'key': key,
+        'label': label,
+        'value': value,
+        'weight': weight,
+        'applied': applied,
+        'contribution': contribution,
+      };
 }
 
 /// A saved or AI generated outfit.
@@ -141,6 +153,8 @@ class Outfit {
     required this.occasion,
     required this.match,
     required this.pieces,
+    this.compatibilityScore,
+    this.rankingScore,
     this.summary,
     this.itemIds,
     this.breakdown,
@@ -158,7 +172,21 @@ class Outfit {
   final String name;
   final String image;
   final String occasion;
+
+  /// Backend legacy field. On recommended looks it is a backward-compatible
+  /// alias of [compatibilityScore]; on old/local outfits it is the score.
   final int match;
+
+  /// The explained 11-factor compatibility score the UI should display.
+  /// Null on old/local outfits, where [match] is the compatibility itself.
+  final int? compatibilityScore;
+
+  /// The engine's internal ordering score for recommended looks. It may differ
+  /// from [match]/[compatibilityScore] and must never label the Match %.
+  final int? rankingScore;
+
+  /// The number that labels the outfit as a compatibility percentage.
+  int get displayMatch => compatibilityScore ?? match;
 
   /// Names of the garments combined into this outfit.
   final List<String> pieces;
@@ -196,6 +224,8 @@ class Outfit {
         image: '${json['image'] ?? 'assets/images/outfit_flatlay_beige.jpg'}',
         occasion: '${json['occasion'] ?? 'Casual'}',
         match: (json['match'] as num?)?.toInt() ?? 85,
+        compatibilityScore: (json['compatibilityScore'] as num?)?.toInt(),
+        rankingScore: (json['rankingScore'] as num?)?.toInt(),
         pieces: [
           for (final p in (json['pieces'] as List? ?? const [])) '$p',
         ],

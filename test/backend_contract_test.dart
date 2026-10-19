@@ -193,6 +193,60 @@ void main() {
     await call('DELETE', '/ai/conversations', token: token);
   }, timeout: suiteTimeout);
 
+  /// Regression for the Phase 3 "Could not save rating" failure: the app saves a
+  /// star rating with `POST /outfits/:id/rating` and reads it back with `GET`.
+  /// A backend started before these routes existed answers 404, which is exactly
+  /// what the app reported, so this fails loudly against a stale process and
+  /// passes against a current one. It uses a synthetic outfit id so no real
+  /// outfit's rating is disturbed.
+  test('backend contract: outfit rating saves and reads back', () async {
+    try {
+      await call('GET', '/health');
+    } on SocketException {
+      markTestSkipped('Backend not running at $base (run backend/npm start).');
+      return;
+    } on TimeoutException {
+      markTestSkipped('Backend timed out at $base.');
+      return;
+    }
+
+    final login = await call('POST', '/auth/login', body: {
+      'email': 'karim@fashiontech.com',
+      'password': 'wardrobe2024',
+    }) as Map<String, dynamic>;
+    final token = login['accessToken'] as String;
+
+    const probe = 'contract-rating-probe';
+    final before = await call('GET', '/outfits/$probe/rating', token: token)
+        as Map<String, dynamic>;
+    expect(before['outfitId'], probe);
+    expect(before['rating'], anyOf(isNull, isA<int>()));
+
+    final saved = await call(
+      'POST',
+      '/outfits/$probe/rating',
+      body: {'rating': 4},
+      token: token,
+    ) as Map<String, dynamic>;
+    expect(saved['rating'], 4);
+
+    final read = await call('GET', '/outfits/$probe/rating', token: token)
+        as Map<String, dynamic>;
+    expect(read['rating'], 4, reason: 'a saved rating must read back');
+
+    final updated = await call(
+      'POST',
+      '/outfits/$probe/rating',
+      body: {'rating': 2},
+      token: token,
+    ) as Map<String, dynamic>;
+    expect(updated['rating'], 2);
+
+    final reread = await call('GET', '/outfits/$probe/rating', token: token)
+        as Map<String, dynamic>;
+    expect(reread['rating'], 2, reason: 're-rating must update in place');
+  }, timeout: suiteTimeout);
+
   /// Streaming is the path the stylist screen actually uses, so it needs its
   /// own coverage: real `delta` events, and a `done` event whose reply is
   /// exactly the deltas joined back together.

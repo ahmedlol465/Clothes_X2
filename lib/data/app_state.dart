@@ -8,6 +8,18 @@ import '../core/api/smartwardrobe_api.dart';
 import 'mock_data.dart';
 import 'models.dart';
 
+/// Outcome of [AppState.createOutfit].
+enum SaveOutfitResult {
+  /// A new outfit was persisted and [AppState.savedOutfits] refreshed.
+  saved,
+
+  /// An identical outfit was already saved; nothing was posted.
+  duplicate,
+
+  /// The backend rejected the save or was unreachable.
+  failed,
+}
+
 /// Central data store: every screen reads backend data through here and
 /// falls back to [MockData] when the backend is unreachable (offline demo).
 ///
@@ -18,7 +30,18 @@ class AppState extends ChangeNotifier {
   static final AppState instance = AppState._();
 
   final ApiClient _client = ApiClient();
-  late final SmartWardrobeApi api = SmartWardrobeApi(_client);
+
+  /// The real backend client. Lazy so an injected [apiOverride] is used
+  /// instead when one is set (tests).
+  late final SmartWardrobeApi _defaultApi = SmartWardrobeApi(_client);
+
+  /// Test-only replacement for [api]. Production code never sets this; a test
+  /// assigns it before driving a flow and clears it in `tearDown`.
+  @visibleForTesting
+  SmartWardrobeApi? apiOverride;
+
+  /// The backend API for the current process (real, unless overridden).
+  SmartWardrobeApi get api => apiOverride ?? _defaultApi;
 
   /// True once a backend call has succeeded at least once.
   bool backendOnline = false;
@@ -28,9 +51,77 @@ class AppState extends ChangeNotifier {
   List<ClothingItem> wardrobe = [...MockData.wardrobe];
   List<String> wardrobeFilters = [...MockData.wardrobeFilters];
 
-  List<Outfit> savedOutfits = [...MockData.savedOutfits];
+  /// The signed-in user's saved outfits (`GET /outfits`), in the order the
+  /// backend returned them. Empty until the first successful response — never
+  /// seeded from [MockData], so the Saved grid can only ever show real records
+  /// rather than demo data presented as the user's own.
+  List<Outfit> savedOutfits = const [];
+
+  /// True while a [loadOutfits] request is in flight, so the Saved grid can
+  /// show a loading state instead of flashing an empty one on a slow network.
+  bool outfitsLoading = false;
+
+  /// True once [loadOutfits] has settled at least once, successfully or not.
+  ///
+  /// Distinguishes "nothing requested yet" (first frame) from "the backend
+  /// answered with an empty list", so the section shows a skeleton instead of
+  /// briefly flashing an empty state.
+  bool outfitsSettled = false;
+
+  /// Failure message of the last [loadOutfits] request, surfaced so the Saved
+  /// grid can offer a retry instead of silently keeping stale or demo data.
+  String? outfitsError;
+
   Outfit todayOutfit = MockData.todaySelection;
   Map<String, dynamic>? weather;
+
+  // ------------------------------------------------------ outfit ratings (§8.5)
+  //
+  // The user's 1–5 star opinion of an outfit, persisted server-side so it
+  // survives a reopen. Saving a rating also teaches the backend's StyleMemory
+  // (with replace semantics), so the next recommendation reflects it. Keyed by
+  // outfit id; an outfit with no entry has not been rated yet.
+  final Map<String, int> outfitRatings = {};
+
+  /// Ids with a rating save in flight, so a double tap cannot duplicate it.
+  final Set<String> _ratingInFlight = {};
+
+  /// The just-tapped value being shown while its save is in flight, keyed by
+  /// outfit id. Lets the control read as selected immediately and fall back to
+  /// the last saved value if the request fails.
+  final Map<String, int> _ratingPending = {};
+
+  // ------------------------------------------------- home recommendations
+  //
+  // Everything below is owned by `GET /outfits/recommended` (§8.5) and ranked
+  // by the backend's recommendation engine. Home renders it as-is: no ranking,
+  // filtering, scoring or weather logic lives on this side.
+
+  /// The ranked outfits from `GET /outfits/recommended`, stored in exactly the
+  /// order the backend returned them. Empty until the first successful
+  /// response — never seeded from [MockData], so the Home recommendation rail
+  /// can only ever show outfits the engine actually produced.
+  List<Outfit> recommendedOutfits = const [];
+
+  /// True while the Home recommendation request is in flight. Doubles as the
+  /// in-flight guard: [loadToday] refuses to start a second request while one
+  /// is running, so tab rebuilds and double taps cannot duplicate it.
+  bool recommendationsLoading = false;
+
+  /// True once [loadToday] has settled at least once, successfully or not.
+  ///
+  /// Distinguishes "nothing has been requested yet" (first frame) from "the
+  /// backend answered with an empty list", so the section shows a skeleton
+  /// instead of flashing an empty state.
+  bool recommendationsSettled = false;
+
+  /// Failure message of the Home recommendation request, surfaced so Home can
+  /// offer a retry instead of silently keeping stale or demo data on screen.
+  String? recommendationsError;
+
+  /// How many outfits Home requests in one call: the first one powers
+  /// "Today's AI Selection", the whole list powers the recommendation rail.
+  static const int _homeRecommendationCount = 4;
 
   // ------------------------------------------------------- planner (§8.6)
   List<Map<String, dynamic>> planWeek = [
@@ -268,9 +359,19 @@ class AppState extends ChangeNotifier {
   /// sees the previous account's wardrobe, outfits or learned style.
   void _resetUserScopedState() {
     wardrobe = [...MockData.wardrobe];
-    savedOutfits = [...MockData.savedOutfits];
+    savedOutfits = const [];
+    outfitsLoading = false;
+    outfitsSettled = false;
+    outfitsError = null;
     todayOutfit = MockData.todaySelection;
     weather = null;
+    recommendedOutfits = const [];
+    recommendationsLoading = false;
+    recommendationsSettled = false;
+    recommendationsError = null;
+    outfitRatings.clear();
+    _ratingInFlight.clear();
+    _ratingPending.clear();
     shopPicks = [...MockData.shoppingPicks];
     styleDnaSummary = null;
     styleDnaConfidence = 0;
@@ -642,37 +743,232 @@ class AppState extends ChangeNotifier {
   }
 
   // -------------------------------------------------------- outfits (§8.5)
-  Future<void> loadOutfits() async {
+  /// Refreshes [savedOutfits] from `GET /outfits/saved`.
+  ///
+  /// On success the list is replaced with exactly what the backend returned —
+  /// including an empty list, which clears stale entries so a collection the
+  /// backend no longer has is not still shown as the user's saved outfits. On
+  /// failure the previous list is kept and [outfitsError] is set, so callers
+  /// can tell "the server has nothing" from "we could not ask".
+  ///
+  /// [outfitsLoading] is true for the duration and [outfitsSettled] is set once
+  /// the request finishes, whichever way it goes, so the Saved grid can show a
+  /// loading state then an empty/error state without guessing.
+  Future<bool> loadOutfits() async {
+    outfitsLoading = true;
+    outfitsError = null;
+    notifyListeners();
     try {
       final res = await api.outfits();
-      if (res.isNotEmpty) {
-        savedOutfits = [
-          for (final j in res)
-            Outfit.fromJson(Map<String, dynamic>.from(j as Map)),
-        ];
-      }
+      savedOutfits = [
+        for (final j in res)
+          Outfit.fromJson(Map<String, dynamic>.from(j as Map)),
+      ];
       _markOnline();
-      notifyListeners();
+      return true;
     } catch (e) {
+      outfitsError = e is ApiException ? e.message : e.toString();
       _markOffline(e);
+      return false;
+    } finally {
+      outfitsLoading = false;
+      outfitsSettled = true;
+      notifyListeners();
     }
   }
 
-  /// Today's pick + live weather for Home (§8.5 + GET /weather/current).
-  Future<void> loadToday({String occasion = 'casual'}) async {
+  /// Identity used to collapse repeated saves: two outfits are "the same save"
+  /// when they share a trimmed [Outfit.name], a case-insensitive trimmed
+  /// [Outfit.occasion] and the exact same ordered [Outfit.itemIds].
+  ///
+  /// The rule is deliberately strict (all three fields, order-sensitive) so it
+  /// can only ever under-merge: two genuinely different outfits are never
+  /// collapsed into one.
+  @visibleForTesting
+  static bool sameOutfit(Outfit a, Outfit b) {
+    if (a.name.trim() != b.name.trim()) return false;
+    if (a.occasion.trim().toLowerCase() != b.occasion.trim().toLowerCase()) {
+      return false;
+    }
+    final x = a.itemIds ?? const <String>[];
+    final y = b.itemIds ?? const <String>[];
+    if (x.length != y.length) return false;
+    for (var i = 0; i < x.length; i++) {
+      if (x[i] != y[i]) return false;
+    }
+    return true;
+  }
+
+  /// Saves a user-created outfit (§8.5 `POST /outfits`) and refreshes
+  /// [savedOutfits] so the new outfit shows up in the Saved grid without
+  /// leaving the screen.
+  ///
+  /// Only explicitly saved outfits land here — AI recommendations stay in
+  /// [recommendedOutfits] until the user presses Save.
+  ///
+  /// When saving a recommendation, [compatibilityScore], [breakdown] and
+  /// [explanation] carry the values the user was shown so the saved record
+  /// keeps the same score and copy rather than the backend re-deriving a
+  /// different one, and [sourceOutfitId] lets the backend transfer the user's
+  /// existing rating onto the new record. A manual outfit passes none of these
+  /// and the backend scores the actual selected pieces.
+  ///
+  /// Repeated saves of the exact same outfit are collapsed: the current list
+  /// is refreshed first, and when [sameOutfit] matches an existing entry the
+  /// POST is skipped and [SaveOutfitResult.duplicate] is returned, so a double
+  /// tap (or re-saving a look already in the grid) cannot mint a second
+  /// identical record. Any failure returns [SaveOutfitResult.failed], with the
+  /// real API message in [lastError].
+  Future<SaveOutfitResult> createOutfit({
+    required String name,
+    required List<String> itemIds,
+    String occasion = 'Casual',
+    int? compatibilityScore,
+    List<Map<String, dynamic>>? breakdown,
+    String? explanation,
+    String? sourceOutfitId,
+  }) async {
+    if (name.trim().isEmpty || itemIds.isEmpty) {
+      lastError = 'An outfit needs a name and at least one item.';
+      return SaveOutfitResult.failed;
+    }
+    final candidate = Outfit(
+      id: '',
+      name: name,
+      image: '',
+      occasion: occasion,
+      match: 0,
+      pieces: const <String>[],
+      itemIds: itemIds,
+    );
+    // Refresh against the server before deciding, so the duplicate check does
+    // not trust a stale cache. When the refresh fails we cannot prove the look
+    // is missing, so we fall through to the POST (which also fails offline).
+    final loaded = await loadOutfits();
+    if (loaded && savedOutfits.any((o) => sameOutfit(o, candidate))) {
+      return SaveOutfitResult.duplicate;
+    }
     try {
-      final outfits =
-          await api.recommendedOutfits(occasion: occasion, count: 1);
-      if (outfits.isNotEmpty) {
-        todayOutfit = Outfit.fromJson(
-          Map<String, dynamic>.from(outfits.first as Map),
-        );
-      }
-      weather = await api.weather();
+      await api.createOutfit(
+        name,
+        itemIds,
+        occasion: occasion,
+        compatibilityScore: compatibilityScore,
+        breakdown: breakdown,
+        explanation: explanation,
+        sourceOutfitId: sourceOutfitId,
+      );
       _markOnline();
-      notifyListeners();
+      await loadOutfits();
+      return SaveOutfitResult.saved;
     } catch (e) {
       _markOffline(e);
+      return SaveOutfitResult.failed;
+    }
+  }
+
+  /// Un-saves [outfit] for the signed-in user (`DELETE /outfits/:id/save`).
+  ///
+  /// Safe by design: the backend removes only the saved relationship, so the
+  /// outfit record, its rating and its feedback all survive — the look can be
+  /// re-saved later. [savedOutfits] is mutated only after the server confirms;
+  /// on failure the list is left untouched and [lastError] carries the reason,
+  /// so the UI can never claim a removal that did not happen.
+  Future<bool> unsaveOutfit(Outfit outfit) async {
+    if (outfit.id.isEmpty) return false;
+    try {
+      await api.unsaveOutfit(outfit.id);
+      _markOnline();
+      savedOutfits = [
+        for (final o in savedOutfits)
+          if (o.id != outfit.id) o,
+      ];
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _markOffline(e);
+      return false;
+    }
+  }
+
+  /// Saves an existing outfit record for the signed-in user
+  /// (`POST /outfits/:id/save`).
+  ///
+  /// Complements [createOutfit]: that one persists a brand-new record, while
+  /// this re-establishes a saved relationship to a record that already exists
+  /// (for example after an unsave). The local grid is updated only once the
+  /// server confirms, mirroring [unsaveOutfit].
+  Future<bool> saveOutfit(Outfit outfit) async {
+    if (outfit.id.isEmpty) return false;
+    try {
+      await api.saveOutfit(outfit.id);
+      _markOnline();
+      if (!savedOutfits.any((o) => o.id == outfit.id)) {
+        savedOutfits = [outfit, ...savedOutfits];
+      }
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _markOffline(e);
+      return false;
+    }
+  }
+
+  /// Today's pick, the Home recommendation rail and live weather
+  /// (§8.5 `GET /outfits/recommended` + `GET /weather/current`).
+  ///
+  /// A single request feeds the whole Home screen: the weather is read first
+  /// so the recommendation call carries the real `tempC` the endpoint expects,
+  /// then the ranked list arrives from one `GET /outfits/recommended` — the
+  /// backend engine owns the order, so [recommendedOutfits] is stored exactly
+  /// as returned and [todayOutfit] is simply its first entry.
+  ///
+  /// Never called concurrently: while [recommendationsLoading] is true a
+  /// second call returns immediately, so a rebuild can only ever be the one
+  /// request this method already runs.
+  Future<void> loadToday({String occasion = 'casual'}) async {
+    if (recommendationsLoading) return;
+    recommendationsLoading = true;
+    recommendationsError = null;
+    notifyListeners();
+
+    // Weather is context, not a dependency: if it fails the recommendation
+    // request below still runs and the endpoint falls back to its own default
+    // temperature, rather than Home losing its outfits to a weather hiccup.
+    try {
+      final res = await api.weather();
+      // `GET /weather/current` answers `{ weather: {...} }`; the screen and the
+      // temperature below both want the inner object (summary, tempC, ...).
+      final inner = res['weather'];
+      weather = inner is Map ? Map<String, dynamic>.from(inner) : res;
+      _markOnline();
+    } catch (e) {
+      _markOffline(e);
+    }
+
+    try {
+      final outfits = await api.recommendedOutfits(
+        occasion: occasion,
+        tempC: ((weather?['tempC'] as num?)?.toDouble()) ?? 24,
+        count: _homeRecommendationCount,
+      );
+      recommendedOutfits = [
+        for (final j in outfits)
+          Outfit.fromJson(Map<String, dynamic>.from(j as Map)),
+      ];
+      if (recommendedOutfits.isNotEmpty) {
+        todayOutfit = recommendedOutfits.first;
+      }
+      _markOnline();
+    } catch (e) {
+      // Keep whatever real outfits are already on screen; only report the
+      // failure so Home can offer a retry.
+      recommendationsError = e is ApiException ? e.message : e.toString();
+      _markOffline(e);
+    } finally {
+      recommendationsLoading = false;
+      recommendationsSettled = true;
+      notifyListeners();
     }
   }
 
@@ -699,6 +995,66 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       _markOffline(e);
       return false;
+    }
+  }
+
+  /// The saved rating for [outfitId], or null when it has not been rated.
+  int? ratingFor(String outfitId) => outfitRatings[outfitId];
+
+  /// True while a rating save for [outfitId] is in flight, so the UI can
+  /// disable the control while the request is outstanding.
+  bool ratingSaving(String outfitId) => _ratingInFlight.contains(outfitId);
+
+  /// The just-tapped value shown for [outfitId] while its save is in flight, or
+  /// null when no save is running. The control falls back to [ratingFor].
+  int? ratingPending(String outfitId) => _ratingPending[outfitId];
+
+  /// Loads the signed-in user's rating for [outfitId] (§8.5), so a reopened
+  /// outfit shows the value that was saved. A null answer means "not rated";
+  /// a failure is swallowed (the control simply shows no selection).
+  Future<void> loadOutfitRating(String outfitId) async {
+    if (outfitId.isEmpty) return;
+    try {
+      final value = await api.outfitRating(outfitId);
+      if (value == null) {
+        outfitRatings.remove(outfitId);
+      } else {
+        outfitRatings[outfitId] = value;
+      }
+      _markOnline();
+      notifyListeners();
+    } catch (e) {
+      _markOffline(e);
+    }
+  }
+
+  /// Saves a 1–5 star rating for [outfitId] (§8.5) and updates local state.
+  ///
+  /// Returns null on success, or a human-readable message on failure so the
+  /// caller can report the real cause instead of a generic one. The tapped
+  /// value is shown immediately via [ratingPending] and reverts to the last
+  /// saved value when the request fails. A duplicate tap while a save is in
+  /// flight is ignored, so concurrent requests cannot race.
+  Future<String?> submitRating(String outfitId, int rating) async {
+    if (outfitId.isEmpty || rating < 1 || rating > 5) {
+      return 'Pick a rating from 1 to 5.';
+    }
+    if (_ratingInFlight.contains(outfitId)) return null;
+    _ratingInFlight.add(outfitId);
+    _ratingPending[outfitId] = rating;
+    notifyListeners();
+    try {
+      final saved = await api.rateOutfit(outfitId, rating);
+      outfitRatings[outfitId] = saved;
+      _markOnline();
+      return null;
+    } catch (e) {
+      _markOffline(e);
+      return e is ApiException ? e.message : (lastError ?? 'Unknown error');
+    } finally {
+      _ratingPending.remove(outfitId);
+      _ratingInFlight.remove(outfitId);
+      notifyListeners();
     }
   }
 

@@ -1,0 +1,151 @@
+﻿=== SECTION 2: DATA / EVENTS FOUNDATION ===
+
+Section: Data/Events Foundation (non-algorithmic)
+Audit Date: Wed Oct 07 2026
+Repository: D:\Clothes_X2
+
+Followed from Section 1 report: AUDIT_REPORT_SECTION1.txt
+PRIMARY RUNTIME IDENTIFIED: Express backend/server.js with file-based store (src/store.js)
+
+1. PRIMARY RUNTIME FLOW
+------------------------
+Primary runtime: Express server.js (not NestJS). Uses src/store.js with file-backed JSON store.
+Store manages in-memory db object: users, sessions, wardrobe, outfits, wearEvents, feedback, styleMemory, conversations, events, weeklyPlan, wishlist, products, aiUsage.
+Data file location: backend/data/db.json (per README) - may not exist yet if not run.
+
+2. USER PROFILE DATA (EXISTING)
+-------------------------------
+Server.js implements:
+- defaultStyleProfile() - returns defaults
+- readStyleProfile(user) - validates/normalizes style profile with vocabularies
+- writeStyleProfile(user, body) - whitelisted updates
+- profilePayload(user) - returns public user + styleProfile
+
+StyleProfile fields (actual): favoriteColors[], preferredStyles[], avoidedColors[], heightCm, weightKg, fitPreference, sizes{top,bottom,shoe}
+Vocabularies: STYLE_COLORS, STYLE_STYLES, STYLE_FITS, STYLE_SIZES defined in server.js
+
+Access in server.js: req.user.styleProfile (attached via auth). Also available via db.users.
+
+CONCLUSION: Profile data structure exists and is normalized. NO second model needed.
+
+3. WARDROBE DATA (EXISTING)
+----------------------------
+Store seed defines wardrobe items with fields: id, name, image, category, color, style, material, season, formality, pattern, brand, timesWorn, lastWornLabel, archived? (items can be archived via soft delete)
+Server.js: db.wardrobe array, items have timesWorn, lastWornLabel. PATCH /wardrobe/items/:id allows updates.
+TypeORM WardrobeItem has additional fields (warmth, layerability, confidence, embeddings, lastWornAt, etc.) - but Express runtime uses simpler structure from store.
+
+Primary runtime fields (actual in server.js/store): id, name, image, category, color, style, material, season, formality, pattern, brand, timesWorn, lastWornLabel, archived (set on delete).
+
+Sufficient for foundation - no changes needed.
+
+4. WEATHER DATA (EXISTING - REUSE)
+-----------------------------------
+src/weather.js fully implemented (Open-Meteo keyless). Consumed in server.js via resolveWeather() and exposed via GET /weather/current. Fields include tempC, condition, feelsLike, humidity, precipitationChance, windKph, isDay, highC, lowC, forecast, tags, source. MUST reuse as-is.
+
+5. WEAR / USAGE HISTORY (EXISTING)
+-----------------------------------
+wearEvents array in store (seed may be empty). WearEvent entity in TypeORM has: id, userId, itemId, outfitId, occasion, location, temperatureC, weatherCondition, calendarEventId, fromPlanner, wornAt.
+Express runtime: timesWorn/lastWornLabel maintained on wardrobe items (logWear via PATCH updates them). No explicit wear_events writes visible in logWear path shown in app_state (client-side). Server's PATCH /wardrobe/items/:id just does Object.assign - so wear logging updates item fields directly.
+
+Canonical source in Express runtime: timesWorn/lastWornAt-ish via lastWornLabel and timesWorn on items. wear_events table exists in schema but not actively used by Express server paths observed. Document as partially wired.
+
+6. RECOMMENDATION HISTORY & FEEDBACK (EXISTING)
+-----------------------------------------------
+Entities exist: Recommendation, RecommendationFeedback, OutfitFeedback. Express server has feedback array in store (seeded empty). No explicit recommendation creation/persistence in /outfits/recommended path - it generates on-the-fly via ai.generateOutfits() and returns. So recommendation history tracking not implemented in Express runtime; entities exist for future use.
+
+Feedback: feedback array in store. OutfitFeedback entity exists; server.js doesn't seem to have explicit feedback endpoints shown. StyleMemory reads from db.feedback? Check style-memory.js.
+
+StyleMemory (style-memory.js): reads db.styleMemory, writes via persist pattern. Consumes feedback in some paths? Let us look up style-memory usage.
+
+7. STYLE MEMORY (EXISTING - DO NOT MODIFY)
+-------------------------------------------
+backend/src/style-memory.js exists. Must not be modified. It tracks learned preferences; we must ensure we don't merge explicit profile with inferred preferences.
+
+8. WARDROBE MUTATION EVENTS (EXISTING PATHS)
+---------------------------------------------
+Mutations: POST /wardrobe/items (create), PATCH /wardrobe/items/:id (update), DELETE /wardrobe/items/:id (soft delete sets archived). These are existing paths. No event hooks exist. For foundation, we only document - adding hooks would be minimal extension but not strictly necessary for data access contract. Following "do not implement recommendation cache invalidation yet", we skip adding event hooks now. Just document existing paths.
+
+9. PROFILE MUTATION EVENTS (EXISTING PATHS)
+--------------------------------------------
+PATCH /users/me, PATCH /users/me/style-profile exist. Documented.
+
+10. EXPRESS VS NESTJS DIFFERENCES
+----------------------------------
+- Express (server.js): file-based JSON store, no TypeORM, runs as primary runtime per README. Recommendation endpoints like /outfits/recommended implemented here.
+- NestJS: TypeORM entities, full schema including Recommendation/RecommendationFeedback/WearEvent properly modeled. But not wired as primary runtime for the existing recommendation flow.
+Authoritative for current runtime: Express + store.js.
+
+11. DATA CONTRACT FOR FUTURE RECOMMENDATION ENGINE
+--------------------------------------------------
+Based on existing architecture, contract is implicit via existing access:
+- User profile: req.user/styleProfile (normalized)
+- Wardrobe: db.wardrobe (filtered by !archived)
+- Weather: resolveWeather() or weather service
+- Wear history: timesWorn/lastWornLabel on items; wearEvents array exists but underutilized
+- Feedback: db.feedback + OutfitFeedback style
+- Recommendation history: Recommendation entities exist but not persisted by Express runtime
+- StyleMemory: memoryStore.read(db, userId)
+- Context: assembled in stylistContext() pattern
+
+No new adapter/service files created - existing patterns sufficient.
+
+12. FILES MODIFIED
+------------------
+NONE. No application source code modified in this section.
+
+13. FILES CREATED
+-----------------
+SECTION2_DATA_EVENTS_REPORT.txt (this report)
+
+14. REUSED COMPONENTS
+---------------------
+- backend/src/store.js (data structure, load/save)
+- backend/server.js auth/profile normalization (readStyleProfile/writeStyleProfile)
+- backend/src/weather.js (weather)
+- backend/src/style-memory.js (learned prefs)
+- backend/src/retrieval.js, scoring.js, ai-engine.js (existing infra - not modified)
+- backend/src/taxonomy.js (utilities)
+
+15. EXTENDED COMPONENTS
+-----------------------
+NONE - no extensions made. Only documentation/inspection.
+
+16. TESTS/CHECKS EXECUTED
+-------------------------
+- Inspected server.js for data access patterns (profile, wardrobe, weather, wear)
+- Inspected store.js for schema
+- Inspected style-memory.js for signals
+- Inspected existing endpoints: /outfits/recommended, /wardrobe/items, profile endpoints
+- Verified git status (only report created)
+- Syntax check not needed as no code changes
+
+17. VERIFICATION RESULTS
+------------------------
+- Backward compatibility: No changes to existing code; /outfits/recommended, wardrobe APIs, profile APIs unchanged
+- No ranking/scoring/recommendation algorithm implemented
+- Primary runtime correctly identified as Express (server.js)
+- Express vs NestJS differences documented
+- Data contracts identified from actual code
+
+18. REMAINING MISSING DATA/INTEGRATION POINTS
+----------------------------------------------
+- Recommendation history (Recommendation entities exist in TypeORM schema but Express runtime doesn't persist to them; future sections may need to decide whether to extend store.js to track recommendations)
+- wear_events in Express runtime not populated on logWear (currently only updates timesWorn/lastWornLabel) - not required for foundation
+- Click/view/open tracking absent (documented as missing per requirements)
+- Event hooks for mutations not present (documented; skip per scope)
+
+19. WHAT SECTION 3 SHOULD DO NEXT
+----------------------------------
+Section 3 should build on this foundation without duplicating data access. Key points:
+- Do NOT replace retrieval.js, scoring.js, ai-engine.js
+- Work with existing Express runtime data model (store.js) unless explicitly needed
+- Leverage styleProfile (explicit) vs StyleMemory (learned) distinction
+- Use retrieval.js for candidate generation - it's the existing retrieval system
+- Respect existing /outfits/recommended contract
+- Focus on recommendation engine logic (scoring/ranking/diversity/exploration) as per later sections, not data plumbing - data plumbing is sufficient here
+
+20. EXPLICIT STATEMENT
+-----------------------
+NO ranking/scoring/recommendation algorithm was implemented in this section. This section only inspected, documented, and verified the data/events foundation using existing repository code. No application source code was modified. The report above is based solely on actual repository inspection.
+
+END OF SECTION 2 REPORT

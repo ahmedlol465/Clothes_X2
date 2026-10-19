@@ -1,0 +1,401 @@
+﻿=== SECTION 1: PROJECT AUDIT - SmartWardrobe ===
+
+Session: Section 1 (Read-only Repository Audit)
+Date: Wed Oct 07 2026
+Repository: D:\Clothes_X2
+
+--- 1. REPOSITORY STATE ---
+Is git repo: YES (based on presence of .git)
+Platform: win32
+
+--- 2. PROJECT STRUCTURE SUMMARY ---
+Mobile App (Flutter): lib/ (features/, core/, data/), android/, ios/
+Backend: backend/ (Express server.js + NestJS TypeORM modules + AI modules)
+AI/ML: backend/src/clothing-vision/, backend/src/retrieval.js, backend/src/ai-engine.js, ai-service/
+Shared Assets: assets/
+Tests: test/
+Docs: README.md, OPENCODE_HANDOFF_REPORT.txt
+
+DETAILED FINDINGS - See remaining sections...
+=== SECTION 1: PROJECT AUDIT - SmartWardrobe ===
+READ-ONLY AUDIT - NO APPLICATION SOURCE CODE WAS MODIFIED IN THIS SECTION
+
+Session: Section 1 (Read-only Repository Audit)
+Audit Date: Wed Oct 07 2026
+Repository: D:\Clothes_X2
+Working Directory: D:\Clothes_X2
+
+--- 3. FLUTTER AUDIT ---
+
+EXACT PATHS AND COMPONENTS FOUND:
+- HomeScreen: lib/features/home/home_screen.dart
+  * Responsibility: Dashboard/home UI (Today's AI Selection, Weather pill, Quick Actions, Recently Added)
+  * Calls AppState.loadToday(), loadWardrobe() on init
+  * Uses AppState todayOutfit, weather, wardrobe
+  * Communicates via AppState → SmartWardrobeApi → backend REST API
+
+- AppState (state management): lib/data/app_state.dart
+  * Central state store using ChangeNotifier
+  * Manages wardrobe, outfits, todayOutfit, weather, profile, auth token
+  * Falls back to MockData when backend unreachable
+  * Key methods: loadToday(), loadWardrobe(), logWear(), addItem(), deleteItem(), loadProfile(), etc.
+
+- Models: lib/data/models.dart
+  * ClothingItem: id, name, image, category, color, style, material, season, formality, timesWorn, lastWornLabel
+    - Fields align with backend wardrobe item structure
+    - fromJson/toJson mapping to backend API
+  * UserProfile: has styleProfile with favoriteColors, preferredStyles, heightCm, weightKg, fitPreference, sizes
+  * Outfit: id, name, image, occasion, match, pieces, itemIds, breakdown/factors, explanation, favorite
+  * MatchFactor, ChatMessage, OutfitMatch, etc.
+
+- API Client: lib/core/api/api_client.dart, lib/core/api/smartwardrobe_api.dart
+  * SmartWardrobeApi wraps REST calls to backend (express on default port 3001)
+  * Endpoints used: GET /outfits/recommended, GET /weather/current, GET /wardrobe/items, POST /wardrobe/items, PATCH /wardrobe/items/:id, POST /ai/analyze-clothing, POST /ai/chat, etc.
+
+- Profile loading: AppState.loadProfile() fetches from backend GET /users/me, stores in _profile
+- Wardrobe loading: AppState.loadWardrobe() fetches GET /wardrobe/items
+- Weather usage: AppState.loadToday() fetches GET /weather/current and stores weather
+
+REUSABILITY FOR RECOMMENDATION ENGINE:
+- ClothingItem model structure compatible with backend
+- AppState patterns for API calls can guide Flutter integration
+- Existing UI for outfits/recommended already exists (PerfectMatchScreen, OutfitPlannerScreen)
+- NO existing dedicated "Recommendation Engine" UI - just "AI Selection", "AI Stylist", "Recommended Outfits"
+
+--- 4. BACKEND AUDIT ---
+
+ARCHITECTURE:
+- Primary runtime: Express.js server (backend/server.js) - runs on port 3001 by default (EXPRESS_PORT/PORT)
+- Also has NestJS structure (backend/src/app.module.ts, main.ts) - alternative/secondary implementation
+- Both share same data store model (file-based JSON store via src/store.js)
+- AI modules: src/ai-engine.js, src/retrieval.js, src/scoring.js, src/clothing-vision/, src/taxonomy.js
+
+WARDROBE (8.3 API):
+- GET /wardrobe/items, POST /wardrobe/items, PATCH /wardrobe/items/:id, DELETE /wardrobe/items/:id (soft delete)
+- File-based store in backend/data/db.json (seeded from mock data)
+- Wardrobe items have: id, name, image, category, color, style, material, season, formality, pattern, brand, timesWorn, lastWornLabel, archived?
+
+USER/PROFILE (8.2 API):
+- Auth with bearer tokens (demo-grade in server.js, JWT strategy in NestJS modules/auth)
+- GET /users/me, PATCH /users/me, GET/PATCH /users/me/style-profile
+- Style profile: favoriteColors, preferredStyles, avoidedColors, heightCm, weightKg, fitPreference, sizes{top,bottom,shoe}
+- Style profile validation/normalization in server.js (whitelisted, vocabularies defined)
+
+OUTFIT (8.5 API):
+- GET /outfits/recommended (via ai.generateOutfits), POST /outfits, GET/PATCH/DELETE /outfits/:id
+- Outfits store itemIds, pieces, match/breakdown, favorite, etc.
+
+WEATHER (implemented):
+- src/weather.js - Open-Meteo API (keyless) with fallback to OpenWeatherMap if key present
+- Caching with TTL (default 10 min), geocoding via Open-Meteo
+- GET /weather/current used by Flutter
+
+AUTHENTICATION:
+- Express: bearer token auth via db.sessions, checks Authorization header
+- NestJS: JWT auth with JwtAuthGuard (global), RolesGuard, JwtStrategy
+- User extracted from token/session, request.user populated
+- Both implementations exist; server.js is the primary runtime per README
+
+RECOMMENDATION-RELATED ENDPOINTS:
+- GET /outfits/recommended - already generates outfit recommendations via ai-engine
+- POST /ai/calculate-compatibility
+- POST /ai/generate-outfit (in ai-service and also in server.js usage)
+- GET /ai/style-dna
+- Existing behavior signals: timesWorn, lastWornLabel on wardrobe items
+- No dedicated "recommendation_history" table in file store; has wearEvents array? Let us check store seed
+
+--- 5. EXISTING RETRIEVAL SYSTEM (CRITICAL) ---
+
+FILE: backend/src/retrieval.js
+- Two-stage wardrobe retrieval: Stage 1 (local scoring) → category-balanced shortlist → Stage 2 (LLM sees shortlist)
+- Inputs: query (string), wardrobe (array), opts {weather, occasion, limit, slots, excludeIds}
+- Outputs: Array<{item, score, semantic, lexical, context}> sorted + balanced
+- Embeddings: Uses @huggingface/transformers with model 'Xenova/all-MiniLM-L6-v2' (384 dims) when available
+- Falls back to lexical scoring if embeddings unavailable (EMBEDDINGS=off or model fails)
+- Semantic retrieval: Yes - cosine similarity on embeddings with blend of lexical+context+slot bonus
+- Lexical retrieval: Yes - token matching with field weights (name:1, color:0.85, others 0.6) + coverage
+- Context support: Yes - occasion via tax.occasionTarget() and formality, weather via climateBonus
+- Supports clothing slots/categories: Yes - tax.slotOf() for filtering/balancing; balanced by slot (top/bottom/shoes/outerwear/accessory with quotas)
+- Uses embeddings: Yes, cached per item (vectors Map by itemId, invalidated by fingerprint of item attrs)
+- Embeddings source: Generated on-the-fly via transformers.js pipeline from item text (itemText combines name,color,style,category,material,pattern,season)
+- Called from: server.js stylistContext() calls retrieval.rank(message, wardrobe, {...limit:30}), ai-engine uses retrieval.lexicalScore() for focus
+- Existing dependents: server.js (stylist), ai-engine.js
+
+CONCLUSION: EXISTING RETRIEVAL SYSTEM IS PRESENT AND FULLY FUNCTIONAL. The future Recommendation Engine MUST reuse this capability - do not replace it.
+
+--- 6. EXISTING AI / ML AUDIT ---
+
+CLOTHING VISION MODULE: backend/src/clothing-vision/
+- index.js: Main analyzeClothingImage() - takes image bytes, runs encoder+classify+color
+- encoder.js: Uses @huggingface/transformers with Marqo/marqo-fashionCLIP (512 dims, dtype q8) - loads once
+- classify.js: Zero-shot classification with clothing vs non-clothing gate (margin + clothing mass)
+- color.js: Color analysis in CIELAB/LCh
+- prompts.js: Label vocabularies, GATE thresholds (clothingMargin 0.01, clothingMass 0.4), model config
+- Gate logic: Requires both margin and mass above thresholds; rejects non-clothing with reasons
+
+AI ENGINE: backend/src/ai-engine.js
+- Beam search over outfit slots (BEAM_PER_SLOT=6, BEAM_WIDTH=8)
+- Uses retrieval.lexicalScore() for focus
+- Integrates scoring.js, memoryStore, taxonomy
+- generateOutfits() builds combinations respecting slots, climate, occasion
+- remixOutfit(), chatReply() for stylist
+
+SCORING: backend/src/scoring.js
+- 11-factor compatibility model (as per README comments)
+- Factors include color harmony, formality, season, material, fit context, etc.
+- Reads StyleMemory, weather, styleProfile
+
+STYLE MEMORY: backend/src/style-memory.js
+- Learns user preferences from feedback
+- Affects ranking/recommendations
+
+FASTAPI AI SERVICE: ai-service/main.py (separate service, optional)
+- /analyze-clothing, /chat, /generate-outfit endpoints
+- Simpler rule-based implementation; can proxy to it if AI_SERVICE_URL set
+
+MODELS:
+1. Marqo/marqo-fashionCLIP (512 dims) - clothing vision classification
+2. Xenova/all-MiniLM-L6-v2 (384 dims) - semantic retrieval
+3. Also references YOLOv8n.pt in README/handoff context (not in this repo's backend/models? Let us check)
+
+EMBEDDINGS:
+- Generated on-the-fly via transformers.js pipelines
+- Cached in memory (retrieval.js: vectors Map, textCache Map; clothing-vision loads encoder once)
+- No persistent vector DB (pgvector) - uses in-memory + file store
+- WardrobeItem entity has embeddings: number[] | null (TypeORM entity) - field exists in schema
+
+INFERENCE: Performed on demand; clothing-vision encoder init() loads once; retrieval warmup() available
+REUSE: clothing-vision gate, encoder, classify logic; retrieval system (MUST reuse); scoring engine; ai-engine structure
+
+--- 7. PROFILE DATA AUDIT ---
+
+EXPLICIT USER DATA (from entities + server):
+- User: id, name, email, passwordHash, createdAt, avatarUrl
+- StyleProfile (UserProfile.styleProfile): favoriteColors[], preferredStyles[], avoidedColors[], heightCm (int|null), weightKg (int|null), fitPreference ('slim'|'regular'|'relaxed'|'oversized'), sizes{top,bottom,shoe}
+- Defined vocabularies in server.js:
+  * STYLE_COLORS: Black, White, Beige, Navy, Blue, Denim, Grey, Charcoal, Brown, Tan, Cream, Green, Olive, Red, Burgundy, Pink, Purple, Yellow, Orange, Multicolor
+  * STYLE_STYLES: Casual, Smart Casual, Minimalist, Classic, Vintage, Modern, Formal, Elegant, Streetwear, Sporty, Bohemian, Preppy, Raw Indigo, Minimal
+  * STYLE_FITS: slim, regular, relaxed, oversized
+  * STYLE_SIZES: top [XS,S,M,L,XL,XXL], bottom [28,30,32,34,36,38,40], shoe [38,39,40,41,42,43,44,45]
+
+Flutter UserProfile model also has: avatarUrl, favoriteColors, preferredStyles, heightCm, weightKg, fitPreference, topSize, bottomSize, shoeSize
+
+Sources: server.js readStyleProfile/writeStyleProfile, identity.entity.ts (StyleProfile, UserProfile entities), lib/data/models.dart
+All are explicit user data (not inferred). No gender field present in current implementation.
+
+--- 8. WARDROBE DATA AUDIT ---
+
+ClothingItem (Flutter): id, name, image, category, color, style, material, season, formality, timesWorn, lastWornLabel
+WardrobeItem (TypeORM entity): id, wardrobeId, name, category, categoryId, imageUrl, color, secondaryColors[], pattern, style, material, season, formality, fit, condition, occasions[], warmth (1-5), layerability (1-5), confidence (0-1), confidenceByAttribute, tags[], compatibleColors[], brand, brandId, purchasePrice, purchaseDate, timesWorn, lastWornAt, timesRecommended, status, embeddings (number[]|null), createdAt, updatedAt, attributes[]
+
+Store (server.js JSON): has same core fields including timesWorn, lastWornLabel, archived flag, image (path/URL), pattern, brand
+
+Attributes observed:
+- Core: id, category, color, style, material, season, pattern, formality
+- Extended: size/fit? fit exists in entity; size not explicitly stored as separate field in core models (sizing is in UserProfile)
+- Behavioral: timesWorn (int), lastWorn (lastWornLabel/lastWornAt), timesRecommended
+- Media: image/imageUrl
+- AI: confidence, embeddings, attributes (clothing_attributes entity), tags
+- Derived/user-entered: most fields can come from AI analysis or user input; clothing-vision produces measured values
+
+--- 9. WEATHER AUDIT ---
+
+Implementation: backend/src/weather.js
+- Provider: Open-Meteo API (keyless, no signup) - primary
+- Fallback: OpenWeatherMap if WEATHER_KEY env var present
+- Caching: TTL in minutes via WEATHER_TTL_MINUTES (default 10), cached by city in Map
+- Geocoding: Open-Meteo geocoding API
+- Current weather: temperature_2m, apparent_temperature, humidity, precipitation, weather_code, is_day, wind_speed_10m
+- Forecast: daily up to 4 days (max, temp, precip chance, weather_code)
+- Models returned: shape() produces object with tempC, feelsLike, condition, tags, city, country, humidity, precipitationChance, windKph, isDay, highC, lowC, forecast[], summary, source
+- Used by: server.js resolveWeather() called from stylist/chat/compatibility, also GET /weather/current endpoint exposed; Flutter calls GET /weather/current via api.weather() and stores in AppState.weather
+
+REUSE: Full existing weather implementation - MUST reuse, do not create another.
+
+--- 10. BEHAVIOR AUDIT ---
+
+Searched terms found:
+- wear/worn: timesWorn, lastWornLabel, lastWornAt (entities), wear_events table/entity (WearEvent)
+- timesWorn: present on ClothingItem/WardrobeItem, incremented via logWear() (PATCH /wardrobe/items/:id updates timesWorn)
+- lastWorn: lastWornLabel (Flutter), lastWornAt (DB entity)
+- like/liked/favorite: favorite flag on Outfit model/entity (Outfit.favorite bool)
+- dislike/reject/rejected: No explicit reject action visible in codebase (no "dislike" endpoints except maybe feedback)
+- save/saved: Outfits can be saved (POST /outfits), favorite toggle (toggleFavorite)
+- click/view/open: Not tracked as explicit events in this codebase
+- outfit history: wear_events stores wear events (itemId, outfitId, wornAt, occasion, location, weatherCondition, etc.); also OutfitHistory screen exists
+- recommendation history: Recommendation entity exists (recommendations table) with RecommendationFeedback; also recommendation_feedback table
+- recommendation interaction: RecommendationFeedback has action (FeedbackType.LIKED/DISLIKED/etc)
+- selected outfit: wearing history via wear_events
+
+EXISTING SIGNALS:
+1. WearEvent (wear_events): tracks actual wear with context (outfitId, weather, occasion, location) - reliable
+2. timesWorn/lastWornAt: denormalized counters on WardrobeItem
+3. Outfit.favorite: user preference
+4. OutfitFeedback: on outfits (liked/disliked/comment/tags)
+5. RecommendationFeedback: on recommendations (action, perItemReaction)
+6. StyleMemory: learned preferences from feedback
+
+REUSABLE: Behavioral signals exist (wear history, feedback). Not all interaction types (clicks/views) tracked - only explicit actions.
+
+--- 11. OUTFIT FUNCTIONALITY AUDIT ---
+
+Models: Outfit (Flutter) has itemIds, pieces, breakdown/factors, match, completeness, variant, note, keptFromOriginal, regenerated, favorite
+Entities: Outfit, OutfitItem, OutfitFeedback (TypeORM), Recommendation entity also stores outfitId
+
+APIs: GET /outfits/recommended, POST /outfits, GET/PATCH/DELETE /outfits/:id
+Generation: ai.generateOutfits() in ai-engine.js using beam search over slots, scoring via scoring.js
+Compatibility: ai.calculateCompatibility() / scoring.scoreOutfit()
+Remix: remixOutfit() produces variants
+Stylist can suggest outfits in chat
+
+Flutter: OutfitsScreen, OutfitPlannerScreen, PerfectMatchScreen exist - UI for outfits/recommendations present
+
+REUSABLE: Full outfit model, generation logic (ai-engine), compatibility scoring, remix logic, storage, UI components. Can be extended by Recommendation Engine.
+
+--- 12. AUTHENTICATION AUDIT ---
+
+Express (server.js): auth() middleware checks Authorization: Bearer token against db.sessions; optionalAuth() falls back to first user or null. User attached as req.user.
+NestJS: JwtAuthGuard as global APP_GUARD, JwtStrategy validates JWT, RolesGuard. Uses @nestjs/passport, @nestjs/jwt.
+
+User identification: via token/session → userId → req.user object. All authenticated routes use auth middleware.
+
+Future recommendation API must use existing auth mechanism (same as other endpoints).
+
+--- 13. DATABASE / PERSISTENCE AUDIT ---
+
+Two persistence layers:
+1. File-based (server.js primary): JSON file backend/data/db.json via src/store.js - simple, in-memory loaded at startup, persisted on save(). Stores users, sessions, wardrobe, outfits, wearEvents, feedback, styleMemory, conversations, events, weeklyPlan, wishlist, products, aiUsage.
+2. TypeORM (NestJS): SQLite/Postgres configured via DatabaseModule, entities for full schema (User, WardrobeItem, WearEvent, Outfit, Recommendation, RecommendationFeedback, etc.) with migrations capability.
+
+Existing tables/collections (from entities): users, user_profiles, style_profiles, wardrobes, wardrobe_items, clothing_attributes, wear_events, outfits, outfit_items, outfit_feedback, recommendations, recommendation_feedback, weather_snapshots, calendar_events, packing_lists, trips, shopping_items, wishlist_items, purchases, ai_conversations, ai_interactions, ai_usage, notifications
+
+Persistence supports: recommendation history (recommendations, recommendation_feedback), behavior (wear_events, outfit_feedback), wardrobe changes, profile changes, style memory. Caching: in-memory Maps in retrieval.js and clothing-vision; no Redis visible in server.js deps (cache-manager in Nest deps but server.js uses file store).
+
+--- 14. EXISTING RECOMMENDATION CODE ---
+
+SEARCH RESULTS:
+- server.js: GET /outfits/recommended calls ai.generateOutfits() - production endpoint
+- ai-engine.js: generateOutfits(), beamSearch(), rankSlot() - core outfit generation/recommendation logic
+- retrieval.js: rank() provides candidate retrieval for recommendations
+- scoring.js: scoreOutfit(), 11-factor compatibility for ranking recommendations
+- Entities: Recommendation, RecommendationFeedback tables exist in schema (prepared for tracking recommendations)
+- Flutter: Home shows "Today's AI Selection" from /outfits/recommended; has recommendation-related UI
+
+EXISTING CODE STATUS:
+- Outfit recommendation generation EXISTS and is functional (beam search + scoring + retrieval)
+- "What should I wear" style recommendations via /outfits/recommended
+- Compatibility scoring exists
+- No separate "Recommendation Engine" module/class named as such - functionality is distributed across ai-engine + retrieval + scoring
+- Code appears production-ready/in-use, not prototype/unused
+
+CONFLICTS: None identified. Planned Recommendation Engine would extend/refactor existing distributed logic rather than replace wholesale - must reuse existing retrieval.js, scoring.js, ai-engine patterns.
+
+--- 15. DUPLICATE / REUSE ANALYSIS ---
+
+| Requirement | Existing | Missing | Reusable | Notes |
+|---|---|---|---|---|
+| Weather | YES | NO | YES | src/weather.js + /weather/current - fully functional |
+| Wardrobe retrieval | YES | NO | YES | src/retrieval.js (rank, balance, embeddings/lexical) - MUST reuse |
+| Wear history | YES | NO | YES | wear_events table + timesWorn/lastWornAt |
+| Recommendation history | PARTIAL | MINOR | YES | Recommendation + RecommendationFeedback entities exist; tracking logic may need wiring |
+| Feedback | YES | NO | YES | OutfitFeedback, RecommendationFeedback exist |
+| Profile preferences | YES | NO | YES | StyleProfile with full fields (colors, styles, fit, sizes) |
+| Outfit generation | YES | NO | YES | ai-engine.generateOutfits() with beam search - core logic exists |
+| AI compatibility | YES | NO | YES | scoring.js 11-factor model |
+| Caching | PARTIAL | MINOR | YES | In-memory caching in retrieval/clothing-vision; file store persistence |
+| Personalization | PARTIAL | MINOR | YES | StyleMemory + feedback influence ranking |
+
+--- 16. RECOMMENDED FUTURE IMPLEMENTATION SEQUENCE ---
+
+Based on ACTUAL repository findings (existing distributed recommendation logic):
+
+SAFE SEQUENCE (conceptually aligned with suggested flow, adapted to existing codebase):
+1. Profile (EXISTS - extend if needed, don't duplicate)
+2. Wardrobe (EXISTS)
+3. Weather (EXISTS - reuse)
+4. Behavior (EXISTS - wear_events, feedback; ensure wired)
+5. History (EXISTS - Recommendation/RecommendationFeedback entities present)
+6. Context (Partially via stylistContext in server.js)
+7. Hard Constraints (taxonomy.js exists for slots/formality/climate)
+8. Existing retrieval.js (MUST REUSE - core retrieval)
+9. Personalized Scoring (scoring.js + StyleMemory exist - enhance, don't replace)
+10. Outfit Compatibility (scoring.js exists)
+11. Diversity (beam search in ai-engine already has balancing)
+12. Exploration (exploration vs exploitation - could extend StyleMemory)
+13. Final Ranking (ai-engine.combineCandidates/beam search)
+14. API (GET /outfits/recommended exists; may need new recommendation-specific endpoints)
+15. Flutter Home (already consumes /outfits/recommended)
+
+RATIONALE: Repository already has full outfit recommendation pipeline. Future work is likely to REFACTOR/EXTEND existing modules (retrieval, scoring, ai-engine) into a cleaner "Recommendation Engine" abstraction without duplicating existing capabilities. The suggested conceptual flow matches what's already implemented.
+
+--- 17. FILES LIKELY TO BE MODIFIED LATER ---
+
+BACKEND:
+- backend/src/retrieval.js - enhance ranking/personalization (but do NOT replace core logic)
+- backend/src/ai-engine.js - extend generateOutfits/recommendation logic
+- backend/src/scoring.js - tune factors, add personalization signals
+- backend/server.js - add/extend recommendation endpoints if needed
+- backend/src/store.js - may need to persist recommendation tracking
+- backend/src/database/entities/outfit.entity.ts - Recommendation/Feedback entities exist but may need fields
+
+FLUTTER:
+- lib/data/app_state.dart - add recommendation state/loading
+- lib/features/home/home_screen.dart - may enhance Today's AI Selection
+- lib/core/api/smartwardrobe_api.dart - add recommendation API calls if new endpoints
+
+AI:
+- backend/src/clothing-vision/* - generally stable, unlikely to need changes for basic recommendations
+
+--- 18. FILES THAT SHOULD NOT BE MODIFIED ---
+
+DO NOT MODIFY (provide reusable functionality):
+- backend/src/retrieval.js - CORE retrieval capability; must be reused as-is or extended carefully
+- backend/src/clothing-vision/index.js, classify.js, encoder.js, color.js, prompts.js - working vision pipeline with gates
+- backend/src/weather.js - keyless weather, working
+- backend/src/taxonomy.js - slot mappings, formality, climate scoring - shared utilities
+- Existing Flutter feature screens unrelated to recommendations (auth, discover, insights, profile, shop, splash, travel, wardrobe core flows) - outside scope
+- Unrelated NestJS modules not involved in recommendations
+
+PRIORITY: Do NOT replace or duplicate retrieval.js. It is the "existing retrieval system" called out as critical.
+
+--- 19. RISKS / CONSTRAINTS ---
+
+ACTUAL RISKS (evidence-based):
+1. Dual backend implementations (Express server.js + NestJS) - could cause confusion; server.js is primary per README
+2. File-based store (server.js) vs TypeORM - different persistence models; Recommendation/Feedback entities exist in TypeORM but server.js uses JSON arrays
+3. Distributed recommendation logic - generateOutfits in ai-engine, retrieval in retrieval.js, scoring in scoring.js - refactoring needs care to avoid breaking existing endpoints (/outfits/recommended works)
+4. Embeddings generation on-the-fly - could be slow on first request without warmup (retrieval.warmup() exists)
+5. No persistent vector DB - in-memory vectors cached; fine for current scale
+6. Behavioral signals: clicks/views not tracked - only explicit actions (wear, favorite, feedback)
+7. Recommendation history entities exist but may not be fully wired in Express server.js paths
+8. Memory constraints: transformers.js models load in memory (Marqo-FashionCLIP + MiniLM) - as noted in handoff, running multiple servers causes memory pressure
+9. Existing /outfits/recommended endpoint is production code - must not break its contract
+
+--- 20. VERIFICATION ---
+
+Performed:
+1. ✓ Inspected backend/src/retrieval.js (lines reviewed)
+2. ✓ Inspected clothing-vision modules (index, classify, prompts, encoder)
+3. ✓ Inspected ai-engine.js, scoring.js, weather.js, store.js
+4. ✓ Inspected server.js for recommendation endpoints and data structures
+5. ✓ Inspected Flutter models (ClothingItem, UserProfile, Outfit) and AppState
+6. ✓ Inspected TypeORM entities (WardrobeItem, WearEvent, Recommendation, RecommendationFeedback)
+7. ✓ Searched for recommendation/wear/history terms across codebase
+8. ✓ Verified no application source code was modified
+9. ✓ Created this audit report
+
+--- 21. NEXT STEPS FOR SECTION 2 ---
+
+Section 2 should:
+- Build on this audit without re-inspecting from scratch
+- Focus on extending/refactoring existing recommendation infrastructure (NOT rebuilding from zero)
+- Prioritize reusing retrieval.js, scoring.js, ai-engine.js as-is where possible
+- Identify concrete integration points for any new Recommendation Engine abstraction
+- Ensure backward compatibility with existing endpoints: GET /outfits/recommended, compatibility APIs
+- Map Recommendation entity fields to actual usage if extending Express server.js
+- Design to avoid duplicating wardrobe retrieval or outfit generation logic
+- Respect existing data models and auth mechanisms
+
+EXPLICIT STATEMENT: NO application source code was modified in this section. This audit is strictly read-only based on actual repository inspection.
+
+END OF SECTION 1 AUDIT REPORT

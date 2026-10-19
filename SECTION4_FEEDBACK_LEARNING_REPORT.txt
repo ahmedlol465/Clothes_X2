@@ -1,0 +1,460 @@
+=== SECTION 4: FEEDBACK, LEARNING & RECOMMENDATION HISTORY ===
+
+Section: Feedback / learning / recommendation-history foundation (data + integration)
+Audit/Implementation Date: Wed Oct 07 2026
+Repository: D:\Clothes_X2
+
+Followed from (all three READ first, none modified):
+  AUDIT_REPORT_SECTION1.txt
+  SECTION2_DATA_EVENTS_REPORT.txt
+  SECTION3_RECOMMENDATION_ENGINE_REPORT.txt
+PRIMARY RUNTIME IDENTIFIED (§1/§2/§3): Express backend/server.js + src/store.js
+                                     + backend/data/db.json  (NOT the NestJS tree)
+
+================================================================================
+1. AUDIT FINDINGS (STEP 1 — performed before any modification)
+================================================================================
+
+Searched for: Recommendation, RecommendationFeedback, OutfitFeedback, feedback,
+favorite, dislike, useful/not useful, recommendation history, impressions, views,
+clicks, StyleMemory, itemAffinity, feedback endpoints, wear events, user events,
+store collections.
+
+1.1 WHAT EXISTS IN THE EXPRESS RUNTIME (backend/server.js)
+  Endpoint / mechanism                       Behaviour found
+  -----------------------------------------  -----------------------------------
+  GET  /outfits/recommended                  §3 engine.recommend() — generates,
+                                             returns, DISCARDS. Nothing written.
+  POST /outfits/:id/feedback                 pushes {outfitId, rating, comment,
+                                             at, userId} into db.feedback, then
+                                             memoryStore.record(db, user,
+                                             {rating, items, message}).
+                                             LEARNING PATH: EXISTS and is real.
+  POST /outfits/:id/favorite                 toggles outfit.favorite and
+                                             persists. Teaches NOTHING.
+  GET  /outfits?favorite=true                reads the flag (consumer only).
+  GET  /admin/dashboard                      reports db.feedback.length.
+  GET  /admin/reports                        returns db.feedback.slice(-50).
+  POST /ai/style-profile                     ai.styleProfileFromWardrobe(wardrobe,
+                                             db.feedback) — uses feedback.length.
+  GET  /ai/style-dna, /ai/capabilities       read StyleMemory (digest/styleDna).
+  PATCH /wardrobe/items/:id                  Flutter logWear() → timesWorn++ and
+                                             lastWornLabel (counters only).
+  GET  /ai/chat, /ai/chat/stream             learnTurn → memoryStore.learnChat.
+
+1.2 WHAT EXISTS ONLY IN TYPEORM / NESTJS (documented, NOT wired)
+  Entities in backend/src/database/entities/:
+    outfit.entity.ts  → Outfit, OutfitItem, OutfitFeedback (outfit_feedback),
+                        Recommendation (recommendations), RecommendationFeedback
+                        (recommendation_feedback)
+    identity.entity.ts → StyleMemory (style_memories), StyleProfile, UserProfile
+    (planner/ai/shopping entities → WearEvent (wear_events) etc.)
+  backend/src/modules/ contains ONLY `auth`. There is no NestJS recommendation
+  or feedback controller, and the Express runtime never loads TypeORM.
+  => inspected, documented, deliberately NOT wired (per the primary-runtime rule).
+
+1.3 WHAT IS PERSISTED IN backend/data/db.json (seed, src/store.js)
+  users, sessions, wardrobe, outfits, wearEvents[], feedback[], styleMemory[]
+  (legacy single row), conversations, events, weeklyPlan, wishlist, products,
+  aiUsage.
+  NOTE (pre-existing quirk, left untouched): the seed writes `styleMemory`
+  (singular) with a legacy {preference,value,confidence} row, while
+  style-memory.js reads `db.styleMemories` (plural). The seeded row is dead
+  data; it does not affect learning and was NOT changed in this section.
+
+1.4 WHAT StyleMemory READS / WRITES
+  read:  db.styleMemories.find(m => m.userId === id)  → upgraded via empty()
+  write: replaces/pushes that row (db.styleMemories)
+  learn: memoryStore.record → learnRating (1-5 stars) / learnChat (text)
+  consume: itemAffinity / factorWeights / feedbackScore / digest / styleDna →
+           scoring.js, ai-engine.js and §3's learned_affinity component.
+
+1.5 WHAT FEEDBACK ENDPOINTS WRITE
+  db.feedback rows (no id, no type, no source, no dedup) + StyleMemory updates.
+  favourite: db.outfits[].favorite only.
+
+1.6-1.8 RECOMMENDATION HISTORY / IMPRESSIONS / DUPLICATE SYSTEMS
+  - Recommendation history: NOT persisted anywhere in Express. Missing.
+  - Impression / view / click events: do not exist in any runtime. Missing.
+  - Duplicate feedback systems: none. Exactly ONE learning path exists
+    (memoryStore). This section REUSED it instead of adding a second one.
+  - Flutter reality check (lib/): SmartWardrobeApi has recommendedOutfits(),
+    outfitFeedback() and toggleFavorite(); AppState has logWear() and
+    toggleFavorite(). Callers today: GET /outfits/recommended (home_screen via
+    AppState.loadToday) and logWear (item_detail_screen). NO screen currently
+    calls outfitFeedback()/toggleFavorite(), and the Outfit History screen's
+    thumbs up/down is a LOCAL TOAST ONLY (outfit_history_screen.dart:133-142) —
+    it never hits the API. Those are documented as future integration points;
+    no fake producer was invented.
+
+1.9 HELPER FUNCTIONS REUSED (not duplicated)
+  memoryStore.record / learnRating / read / confidence / itemAffinity / digest
+  store.uid-ish crypto conventions, store.load/save, server persist(),
+  optionalAuth, console.error logging convention.
+
+================================================================================
+2. EXISTING FEEDBACK / HISTORY INFRASTRUCTURE (summary)
+================================================================================
+  Present : db.feedback + StyleMemory learning + outfit.favorite flag +
+            timesWorn/lastWornLabel wear counters + §3 ranking inputs.
+  Absent  : recommendation history/impressions, idempotent feedback events,
+            favourite→learning link, item attribution for generated outfits,
+            dislike/click/view producers, wear event rows in Express.
+
+================================================================================
+3. WHAT WAS ALREADY PRESENT
+================================================================================
+  - A working, confidence-weighted learning loop (style-memory.js §9).
+  - An explicit rating endpoint with a documented 1-5 scale.
+  - Wear counters that already feed §3's `freshness` component.
+  - An outfit favourite flag already persisted and read by GET /outfits.
+  - TypeORM schemas for Recommendation/RecommendationFeedback (unused).
+  - Admin endpoints reading db.feedback.
+
+================================================================================
+4. WHAT WAS MISSING (and was therefore built)
+================================================================================
+  M1 Recommendation history — nothing recorded what a user was shown, when,
+     with which items and context.
+  M2 Idempotency — a retried POST /outfits/:id/feedback re-learned forever.
+  M3 Favourite signal — a real positive signal that taught nothing.
+  M4 Attribution for generated outfits — gen-<timestamp>-<idx> ids are never
+     saved to db.outfits, so rating a recommendation resolved ZERO garments
+     and moved no preference at all.
+  M5 Interacted marker — history could not say whether the user answered.
+
+================================================================================
+5. EXACT FILES CHANGED
+================================================================================
+  NEW  backend/src/recommendation-history.js           (374 lines)
+       event model + history store + idempotency + learning integration.
+  NEW  backend/test/feedback-learning.test.js          (452 lines)
+       dependency-free node:test suite (A-L).
+  MOD  backend/src/store.js                            (+5 / -0)
+       seed gains `recommendationHistory: []` only. Nothing else touched.
+  MOD  backend/server.js                               (§4 portion ≈ +78 / -16;
+       working-tree total vs HEAD is +114 / -21 because §3's uncommitted
+       changes are in the same file — §3 reported +36 / -5 for its part)
+       1 require line, GET /outfits/recommended history write,
+       POST /outfits/:id/favorite learning, POST /outfits/:id/feedback
+       idempotent learning + history attribution.
+  NEW  SECTION4_FEEDBACK_LEARNING_REPORT.txt           (this file)
+
+  NOT modified: src/recommendation-engine.js, src/scoring.js (§3's additive
+  exports only), src/retrieval.js, src/ai-engine.js, src/style-memory.js,
+  src/taxonomy.js, src/weather.js, NestJS/**, Flutter/**, README, and the §1/§2
+  and §3 reports.
+
+================================================================================
+6. EXACT PERSISTENCE CHANGES
+================================================================================
+  db.recommendationHistory[]  (NEW array, created on demand — no migration)
+    {
+      id          : "rh_<16 hex>"        (unique)
+      userId      : "u_demo" | null       (user-scoped, strict)
+      at          : ISO-8601 timestamp
+      source      : "GET /outfits/recommended"
+      occasion    : "casual" | null       (request context when available)
+      tempC       : 24 | null             (weather context when available)
+      outfitId    : "gen-…" | "o1" | null (compact reference)
+      itemIds     : ["w1", …]             (compact reference, max 24)
+      match       : 71 | null
+      interacted  : null | { type, at }   ("whether the user later interacted")
+    }
+    No wardrobe copies, no pieces/explanation/breakdown, no embeddings, no
+    model output.
+    Retention: newest MAX_PER_USER = 100 rows per user, oldest evicted on
+    write (§3/§1 identified no existing retention pattern for history, so a
+    bound was set up front instead of inventing a cleanup daemon).
+
+  db.feedback[]  (EXISTING array, extended — old rows untouched)
+    + id     : "fb_<type>_<24 hex>"  stable event key (see §11)
+    + type   : "rating" | "favorite"
+    + source : "outfit_feedback" | "outfit_favorite"
+    Legacy rows {outfitId, rating, comment, at, userId} remain byte-identical
+    and are still returned by /admin/reports and counted by /admin/dashboard.
+
+  db.styleMemories[] (UNCHANGED format) — written only via style-memory.js.
+
+  backend/data/db.json: git-ignored runtime data. It is created/updated by the
+  existing store on boot (unchanged mechanism); no schema file, no migration,
+  no new dependency, no new database.
+
+================================================================================
+7. EVENT MODEL
+================================================================================
+  Signal                    Producer in the current runtime  Event written
+  ------------------------  ------------------------------   -----------------
+  recommendation shown      GET /outfits/recommended         history row
+                            (server side, both success and  per shown outfit
+                            fallback path, wrapped)
+  explicit rating           POST /outfits/:id/feedback       feedback row
+                            (endpoint + SmartWardrobeApi)    type=rating
+  favourite (positive)      POST /outfits/:id/favorite       feedback row
+                            (endpoint + AppState method)     type=favorite
+  wear / use                PATCH /wardrobe/items/:id        EXISTING counters
+                            (logWear)                        (no new store)
+  negative / rejection      rating 1-2 on the feedback       feedback row
+                            endpoint (direction -1)          type=rating
+  outfit opened / clicked   NONE — no producer exists        NOT BUILT
+  impression ack / view     NONE — server records only what  NOT BUILT
+                            it returned
+  outfit-history thumbs     local toast only (Flutter)       NOT BUILT
+                            → future integration point
+  dislike action            no dedicated producer; rating 1  NOT BUILT
+                            covers the negative signal today
+
+  Every written event is: user-scoped (userId), timestamped (at),
+  attributable (outfitId + itemIds), safe if repeated (stable id, §11) and
+  backward compatible (lazy array creation, legacy rows untouched).
+
+================================================================================
+8. LEARNING BEHAVIOUR (feedback strength — STEP 5)
+================================================================================
+  The existing style-memory.js scale was inspected and PRESERVED unchanged
+  (RATE_RATING = 0.09, RATE_CHAT = 0.04, BOUNDS = [0.02, 0.98]). §4 maps its
+  signals onto that scale instead of inventing new weights:
+
+    signal                    direction  magnitude / item (colours & styles)  cap
+    ------------------------  ---------  ------------------------------------  -------------
+    favourite (toggle → true) positive   +0.090  (≡ rating 5)                 clamp 0.02..0.98
+    rating 5                  positive   +0.090                               clamp 0.02..0.98
+    rating 4                  positive   +0.045                               clamp 0.02..0.98
+    rating 3                  neutral    0 (row recorded, no movement)        n/a
+    rating 2                  negative   -0.030                               clamp 0.02..0.98
+    rating 1                  negative   -0.060                               clamp 0.02..0.98
+    (fabrics move at 0.6x the colour/style delta — existing learnRating rule)
+    comment text              existing learnChat (clause mining, 0.04 rate)
+
+    duplicate handling : dropped before reaching the learner (§11).
+    decay              : none (existing behaviour) — bounded instead by the
+                         0.02/0.98 clamp + one event per payload per UTC day.
+    one action cannot dominate: max delta per action is 0.09 of a 0..1 scale,
+                         and the clamp stops any single direction at 0.98.
+    This is preference learning / signal aggregation — NOT model training, and
+    no machine learning is claimed anywhere in this section.
+
+================================================================================
+9. STYLEMEMORY INTEGRATION (STEP 4)
+================================================================================
+  - Learning is delegated to the pre-existing memoryStore.record() path, the
+    same one POST /outfits/:id/feedback and /ai/chat already used. There is no
+    second "style memory" system, no parallel store, no new learning function.
+  - §4 supplies what that path was missing: correct item attribution
+    (db.recommendationHistory fallback) and idempotent events.
+  - New signals reach §3 automatically: engine.recommend() already receives
+    `memory: memoryStore.read(db, userId)`, so favourites/ratings flow into the
+    existing `learned_affinity` component (weight 0.10) with ZERO ranking
+    changes.
+  - style-memory.js itself was NOT modified (§2 instruction: do not modify).
+    A malformed legacy memory row (e.g. `colors: null`) is therefore handled at
+    the integration boundary: learning is attempted inside try/catch, the
+    failure is logged (`[feedback] learning skipped: …`) and the event is still
+    recorded; the response payload is built from a sanitised view
+    (safeMemory) so it can never throw.
+
+================================================================================
+10. EXPLICIT vs LEARNED PREFERENCE SEPARATION
+================================================================================
+  EXPLICIT (user.styleProfile — never written by this section)
+    favoriteColors, preferredStyles, avoidedColors, heightCm, weightKg,
+    fitPreference, sizes{top,bottom,shoe}
+  LEARNED (db.styleMemories via memoryStore)
+    colours/styles/fabrics/occasions opinions, itemRatings, avoid[], facts[],
+    totals{ratings,chats}
+  Verification: runtime check "explicit styleProfile byte-identical after all
+  learning" (PASS) and unit test F (PASS). §3 keeps `profile_match` (explicit)
+  and `learned_affinity` (learned) as separate score components — untouched.
+
+================================================================================
+11. IDEMPOTENCY / DUPLICATE HANDLING (STEP 6)
+================================================================================
+  Mechanism: stable event id, derived deterministically from the payload:
+      fb_<type>_<sha256(type|userId|outfitId|rating|comment|YYYY-MM-DD)[0..24]>
+    - user-scoped, subject-scoped, payload-scoped, day-scoped (UTC window).
+    - Follows the repository's crypto/hash conventions (store.sha256 uses the
+      same node:crypto primitive); no new dependency, no extra table.
+  Before learning: findFeedback(db, id) → hit ⇒ skip learning, skip the row,
+    answer `duplicate: true` with the current learned state.
+  Consequences: retries/double taps cannot multiply the signal; a deliberate
+  identical re-rate on a later day still counts (new day ⇒ new id).
+  Legacy rows carry no id, so they can never collide with a new event.
+  History rows need no dedup: each GET legitimately creates a new impression,
+  and growth is bounded by the 100-rows-per-user retention.
+
+================================================================================
+12. API CHANGES, IF ANY (STEP 8)
+================================================================================
+  GET  /outfits/recommended   UNCHANGED contract: request ?occasion=&tempC=&count=;
+                              response keys exactly [outfits, weather, occasion],
+                              same Outfit shape, same engine, same fallback.
+                              (History write happens after ranking, best-effort.)
+  POST /outfits/:id/feedback  request unchanged {rating, comment};
+                              response {ok, learned{confidence,ratings,signals,
+                              palette,notes}} UNCHANGED + one ADDITIVE boolean
+                              `duplicate`. Existing consumers read `ok`/`learned`
+                              only — compatible.
+  POST /outfits/:id/favorite  response {outfit} exactly as before.
+  Auth                        unchanged (optionalAuth on these routes, same
+                              bearer model everywhere else).
+  NEW ENDPOINT                none. No new public surface was needed: history is
+                              written by the existing GET and read internally by
+                              the existing feedback routes. Exposing history over
+                              HTTP is documented as a future API change.
+  Internal learning metadata (event ids, learnError) is never returned to
+  clients.
+
+================================================================================
+13. TESTS EXECUTED AND RESULTS (STEP 10)
+================================================================================
+  File  : backend/test/feedback-learning.test.js
+  Runner: node:test + node:assert/strict — dependency-free, because
+          backend/node_modules is absent (jest/npm test cannot run), exactly
+          like the §3 suite.
+  Command (from backend/):  node --test test/feedback-learning.test.js
+  Result: 11 tests, 11 pass, 0 fail (run 3x, identical).
+
+  Suite §3 re-run unchanged:  node --test test/recommendation-engine.test.js
+  Result: 8 tests, 8 pass, 0 fail — the §3 suite still passes untouched.
+
+  ID  Test                                            Result
+  --  ----------------------------------------------  ------
+  A   existing feedback behaviour stays compatible     PASS (legacy rows kept,
+                                                       row shape, response data)
+  B   history persists + readable + retention cap      PASS (0→2 rows, keys,
+                                                       eviction at 100/user)
+  C   user-scoped history + feedback + memories        PASS (no cross-user
+                                                       lookup/learning)
+  D   positive feedback raises learned affinity        PASS (0.5 → 0.5585 for a
+                                                       rating 5 and for a favourite)
+  E   negative feedback lowers learned affinity        PASS (0.5 → 0.461 for a
+                                                       rating 1; rating 3 moves 0)
+  F   explicit profile unchanged after learning        PASS (byte-identical,
+                                                       learned row separate)
+  G   duplicate feedback does not multiply learning    PASS (1 row, identical
+                                                       memory, favourites too)
+  H   missing/legacy/malformed db.json fields          PASS (no arrays, legacy
+                                                       styleMemory row, colors:null
+                                                       memory, junk rows, bad
+                                                       rating → no crash)
+  I   empty history is a working state                 PASS (+ linked case:
+                                                       itemIds recovered from
+                                                       history, interacted set)
+  J   §3 engine still works + weights preserved +      PASS
+      history does not change ranking
+  K   GET /outfits/recommended contract                verified over HTTP in §14
+  L   deterministic identical inputs/events            PASS (two independent
+                                                       runs byte-identical)
+
+================================================================================
+14. RUNTIME CHECKS AND RESULTS (STEP 11)
+================================================================================
+  backend/node_modules is absent, so (as in §3) express/cors/multer/dotenv were
+  taken from the throwaway directory outside the repo and exposed through
+  NODE_PATH — no dependency added to package.json, repository untouched.
+  Server always started IN THE BACKGROUND and explicitly terminated inside the
+  same script (which then asserts the port is closed). Nothing left running.
+
+  Script: <temp>/sec4_check.js · port 3307 · EMBEDDINGS=off · 32 checks
+
+  Result: 32 PASS / 0 FAIL, server terminated afterwards.
+  Highlights:
+    - server starts, GET /health ok
+    - GET /outfits/recommended → keys exactly [outfits, weather, occasion],
+      3 outfits in the existing shape, weather/occasion echoed
+    - identical repeated GET → identical itemIds/match/name/explanation
+      (deterministic)
+    - two GETs wrote 6 history rows (0 → 6), user-scoped (u_demo), compact key
+      set, occasion/tempC/source context present
+    - feedback first call {ok, learned}, row with stable id fb_rating_…
+    - identical retry → duplicate:true, feedback rows 1→1, learned ratings 1→1
+    - favourite → {outfit} only, +1 learned rating; unfavourite → no learning;
+      re-favourite same day → no extra row, no extra learning
+    - feedback on a generated recommendation (gen-1791393390725-3) accepted;
+      its itemIds recovered from history ([w1,w11,w4,w10]) landed in
+      memory.itemRatings; history row marked interacted {type:'rating', at};
+      the negative rating moved itemRatings[w1].rating 5 → 2.6
+    - explicit styleProfile byte-identical after all learning
+    - GET /outfits/recommended still healthy afterwards
+    - GET /admin/dashboard feedbackCount and GET /admin/reports still work
+    - GET /ai/style-dna reads the learned memory without error
+    - background server terminated (no stray process, ports 3301/3307 free)
+  Afterwards backend/data/db.json (git-ignored runtime data) was restored to
+  its pre-verification snapshot so no artificial test feedback is left behind.
+
+================================================================================
+15. KNOWN LIMITATIONS (documented, not hidden)
+================================================================================
+  L1 "Shown" means the server returned it — there is no client acknowledgement
+     of actual rendering (no impression ack / view / click producer exists).
+  L2 No Flutter screen currently calls outfitFeedback()/toggleFavorite(); the
+     Outfit History thumbs up/down is a local toast. The endpoints are ready
+     and tested, wiring them is a frontend task (future integration point).
+  L3 Un-favouriting records no negative signal (ambiguous undo vs dislike);
+     rating 1-2 is the negative signal today. A dedicated rejection action is a
+     future integration point.
+  L4 Wear is NOT duplicated into a second event store: timesWorn/lastWornLabel
+     already persist via PATCH and already drive §3's `freshness`. The Express
+     wear path carries no outfit attribution, so a structured wear-event row
+     would add no ranking value here (the TypeORM WearEvent entity is unused
+     and documented instead).
+  L5 No time decay on learned preferences (existing behaviour); bounded by the
+     0.02/0.98 clamp + per-UTC-day idempotency + a 100-row/user history cap.
+  L6 db.feedback remains unbounded (pre-existing pattern, kept for
+     /admin/reports compatibility); only the NEW history array has retention.
+  L7 Attribution of feedback to a generated outfit depends on that row still
+     existing in the 100-per-user history window; beyond it, items resolve to
+     [] and learning degrades to exactly the pre-§4 behaviour (no crash).
+  L8 Idempotency window is one UTC day: the same user/outfit/payload on the
+     same day counts once. A deliberate identical re-rate later still counts.
+  L9 NestJS entities (recommendations, recommendation_feedback, outfit_feedback,
+     wear_events, style_memories) exist but remain unwired — documented only,
+     per the primary-runtime rule.
+  L10 The seed's legacy `styleMemory` (singular) row is still dead data; fixing
+     or removing it would be unrelated cleanup and was out of scope.
+  L11 Jest (npm test) could not run: backend/node_modules is absent. The suite
+     uses node:test so it runs with zero installs.
+
+================================================================================
+16. CONFIRMATION — SECTION 3 RANKING BEHAVIOUR PRESERVED
+================================================================================
+  - backend/src/recommendation-engine.js: NOT modified (git status shows it
+    unchanged since §3).
+  - backend/src/scoring.js: only §3's existing additive exports
+    (completeness, COMPLETENESS_CAP); §4 added nothing to it.
+  - backend/src/retrieval.js, ai-engine.js, style-memory.js, taxonomy.js:
+    NOT modified.
+  - §4 writes data AFTER ranking and never passes history into the engine; the
+    engine still receives the same {occasion, weather, count, styleProfile,
+    memory} inputs as in §3. Test J asserts that a database carrying §4 history
+    ranks identically to one that never saw §4, and asserts SCORE_WEIGHTS is
+    exactly {0.45, 0.20, 0.15, 0.10, 0.10}.
+  - The §3 suite (8/8) still passes, and runtime checks confirm the endpoint
+    contract and determinism §3 established.
+  - Only the documented `memory` input changed content (that is the entire
+    point of §4: learning), which affects only the 0.10 learned_affinity
+    component through the pre-existing StyleMemory helpers.
+
+================================================================================
+17. CONFIRMATION — SECTION 5 NOT STARTED
+================================================================================
+  Section 5 was NOT started. No Section 5 files, endpoints, UI, explanation
+  pipeline, trust features or notification work exist. No unrelated cleanup or
+  refactoring was performed. The §1/§2/§3 reports were not modified.
+
+  git status --short at completion:
+    M  backend/server.js          (§3 + §4 changes, same file)
+    M  backend/src/scoring.js     (§3 only)
+    M  backend/src/store.js       (§4 only: +5 seed lines)
+    ?? AUDIT_REPORT_SECTION1.txt               (§1)
+    ?? SECTION2_DATA_EVENTS_REPORT.txt         (§2)
+    ?? SECTION3_RECOMMENDATION_ENGINE_REPORT.txt (§3)
+    ?? backend/src/recommendation-engine.js    (§3)
+    ?? backend/test/recommendation-engine.test.js (§3)
+    ?? backend/src/recommendation-history.js   (§4 NEW)
+    ?? backend/test/feedback-learning.test.js  (§4 NEW)
+    ?? SECTION4_FEEDBACK_LEARNING_REPORT.txt   (§4 NEW, this file)
+  git diff --stat: 3 files changed, 124 insertions(+), 21 deletions(-)
+  No unrelated file was modified.
+
+=== END OF SECTION 4 ===
