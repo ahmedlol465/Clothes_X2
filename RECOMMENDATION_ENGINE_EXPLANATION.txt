@@ -1,0 +1,972 @@
+================================================================================
+SMARTWARDROBE — RECOMMENDATION ENGINE EXPLANATION
+A beginner-friendly walkthrough of how the app decides what outfit to show you
+================================================================================
+
+Document type : plain-text explanation (READ-ONLY analysis, no code written)
+Repository    : D:\Clothes_X2
+Date          : Thu Oct 08 2026
+Method        : source inspection only. Nothing in the repository was modified
+                except this file. Both backend test suites were RUN to verify
+                the behaviour described below (results in section 20).
+
+HOW TO READ THIS DOCUMENT
+  * It is written for somebody who does not already know the codebase.
+  * Every claim about "what is implemented" is traceable to a named file and,
+    where useful, a line number.
+  * Three status words are used consistently:
+      IMPLEMENTED — the code exists and runs in the current app.
+      PLANNED     — designed for or partially built, but not reachable by the
+                    user today.
+      NOT USED    — present in the repository (or in the spec) but not part of
+                    the recommendation path at all.
+  * Section 5 separates ITEM attributes from OUTFIT attributes. Those two are
+    the most common source of confusion, so they get their own section early.
+  * Section 15 is the AI/ML status section: implemented vs planned vs not used.
+
+--------------------------------------------------------------------------------
+CONTENTS
+--------------------------------------------------------------------------------
+ 1. Big picture — what the engine does
+ 2. Where it lives (files + primary runtime)
+ 3. Request -> response: GET /outfits/recommended
+ 4. Inputs it consumes
+ 5. ITEM attributes vs OUTFIT attributes
+ 6. Step 1: hard constraints (the filters that run before anything else)
+ 7. Step 2: candidate generation (beam search)
+ 8. Step 3: compatibility scoring (the 11-factor model)
+ 9. Step 4: two-stage retrieval
+10. Step 5: the personalised 5-component ranking
+11. Step 6: diversity selection
+12. Step 7: exploration (deliberate variety)
+13. Step 8: final ranking, the "match" number, the explanation
+14. Personalisation inputs: profile + StyleMemory
+15. AI / ML status: implemented vs planned vs not used
+16. Context: weather, occasion, season
+17. The feedback -> learning loop
+18. What the user actually sees (Flutter Home integration)
+19. Non-functional behaviour: determinism, fallbacks, performance
+20. Tests and how to run them
+21. Known gaps and things that are not wired yet
+22. File map and glossary
+
+================================================================================
+1. BIG PICTURE — WHAT THE ENGINE DOES
+================================================================================
+
+Ask the app "what should I wear?" and it has to answer with a short ranked list
+of complete outfits built from clothes you actually own.
+
+The recommendation engine is the single place that makes that decision. It does
+NOT own the individual measurements it uses — colour harmony, weather fit,
+relevance search and learned taste all already existed in other modules. What
+the engine adds is an ordered pipeline that asks each of those modules one
+question at a time and then combines the answers with explicit weights.
+
+One request in, one ranked list out:
+
+  wardrobe + style profile + weather + occasion + learned memory
+        |
+        v
+  [1] HARD CONSTRAINTS   throw away unwearable / unwanted garments
+        |
+        v
+  [2] GENERATION         build complete outfit candidates (beam search)
+        |
+        v
+  [3] RETRIEVAL SIGNAL   how well do the pieces match the request?
+        |
+        v
+  [4] PERSONALISED SCORE one weighted table over 5 components
+        |
+        v
+  [5] DIVERSITY          trade a few points for visible variety
+        |
+        v
+  [6] EXPLORATION        occasionally swap in a near-equal alternative
+        |
+        v
+  [7] FINAL RANKING      score descending, deterministic tie-break
+        |
+        v
+  ranked outfits, each with a match % and a "why" sentence
+
+Two design rules run through the whole thing:
+
+  a) Every component reports whether it actually had evidence. A component with
+     no evidence is dropped and the remaining weights are re-scaled to still
+     add up to 1.0. A user with no profile therefore gets a neutral answer, not
+     a flattering constant that hides the fact that nothing was personalised.
+
+  b) Nothing is random. The same request produces the same list (details in
+     section 19). That is what makes the behaviour testable and explainable.
+
+================================================================================
+2. WHERE IT LIVES (FILES + PRIMARY RUNTIME)
+================================================================================
+
+IMPORTANT — there are two backends in this repository. Only one is live:
+
+  IMPLEMENTED, PRIMARY RUNTIME
+    backend/server.js        the Express HTTP server and all routes
+    backend/src/store.js     JSON file store (backend/data/db.json)
+    backend/src/recommendation-engine.js   the engine (§3 of the spec)
+    backend/src/recommendation-history.js  shown-items history (§4)
+    backend/src/scoring.js   the 11-factor outfit scoring model
+    backend/src/ai-engine.js outfit generation (beam search) + rule fallbacks
+    backend/src/retrieval.js two-stage candidate retrieval
+    backend/src/style-memory.js  learned preferences (StyleMemory)
+    backend/src/taxonomy.js  shared vocabulary: colour, formality, slots...
+    backend/src/weather.js   Open-Meteo weather (no API key)
+    backend/src/llm.js       optional free-tier LLM (stylist chat, vision)
+    backend/src/clothing-vision/*  image -> garment attributes (ingestion)
+
+  NOT USED by the running app (present but dormant)
+    backend/src/**/*.ts, backend/src/database/**   a separate NestJS/TypeORM
+      implementation with its own Recommendation and RecommendationFeedback
+      tables. Nothing in server.js requires it. The audit reports treat it as
+      documentation of an alternative architecture, not live code.
+
+  Front end
+    lib/                     Flutter app (package: smartwardrobe)
+    lib/data/app_state.dart  the app-wide state holder (ChangeNotifier)
+    lib/features/home/...    the Home screen that renders recommendations
+
+  Optional sidecar (PLANNED / not required)
+    ai-service/main.py       a FastAPI mirror of a couple of /ai/* routes,
+      meant to be enabled with AI_SERVICE_URL. It does not participate in
+      recommendation ranking (see section 15).
+
+The engine itself is a plain Node module with five dependencies:
+taxonomy, scoring, style-memory, retrieval, ai-engine. It imports no HTTP
+framework, no database and no LLM client, so it can be called directly from
+tests — which is exactly how the test suites exercise it.
+
+================================================================================
+3. REQUEST -> RESPONSE: GET /outfits/recommended
+================================================================================
+
+This is the only endpoint that runs the engine. (Other AI routes such as
+POST /ai/generate-outfit call the generator directly and bypass ranking.)
+
+  QUERY PARAMETERS            DEFAULT      MEANING
+    occasion                   'casual'    what the outfit is for
+    tempC                      '24'        temperature in Celsius
+    count                      '3'         how many outfits, clamped 1..8
+    (auth header)              optional    identifies the user; requests may
+                                           be anonymous (optionalAuth)
+
+  WHAT THE SERVER DOES WITH THEM (backend/server.js:1256)
+    1. Builds a weather object from the temperature ONLY:
+         condition = tempC >= 26 ? 'sunny' : 'partly cloudy'
+       Note: this endpoint does not call the weather service. It trusts the
+       temperature the client sent and derives the condition from it.
+    2. Calls engine.recommend(db.wardrobe, { occasion, weather, count,
+       styleProfile, memory }) — the raw wardrobe, archived rows included,
+       because the engine owns the filtering.
+    3. Best-effort: records what was shown into db.recommendationHistory
+       (section 17), wrapped so a failing store can never break the response.
+    4. Responds with exactly three keys:
+         { outfits: [...], weather: {...}, occasion: "..." }
+
+  FAILURE BEHAVIOUR
+    If the engine throws, the route falls back to a direct
+    ai.generateOutfits(...) call with the same parameters and still returns a
+    valid 200. The Home screen is never downgraded to an error by an engine
+    bug. If even that fails, the Flutter side reports the error and keeps whatever
+    real outfits are already on screen.
+
+  The response contract (shape and key order) predates the engine and was
+  deliberately preserved when the engine was introduced, so the existing client
+  did not have to change to receive better rankings.
+
+================================================================================
+4. INPUTS IT CONSUMES
+================================================================================
+
+  INPUT                     SOURCE                          REQUIRED?
+  ----------------------------------------------------------------------------
+  wardrobe (all rows)       db.wardrobe via store.js        yes
+  occasion string           query parameter                 yes (has default)
+  temperature               query parameter                 yes (has default)
+  count                     query parameter                 yes (has default)
+  style profile             user record, only if logged in  optional
+  StyleMemory record        db.styleMemories, per user id   optional
+  month                     defaults to the current month   optional
+  focus (free text)         engine option, NOT exposed      PLANNED
+  excludeIds                engine option, not sent by route PLANNED
+  anchorItemId              engine option, not sent by route PLANNED
+
+Anonymous users are fully supported: with no profile and no memory, both
+personalised components report "no signal" and drop out, leaving compatibility,
+retrieval relevance and freshness to do the work. The answer is still a ranked
+list, just a non-personalised one.
+
+================================================================================
+5. ITEM ATTRIBUTES vs OUTFIT ATTRIBUTES
+================================================================================
+
+This is the distinction that matters most when reading the code. They are two
+different objects with two different lifetimes.
+
+--------------------------------------------------------------------------------
+5.1 ITEM = one garment in your wardrobe (a row in db.wardrobe)
+--------------------------------------------------------------------------------
+  Stored attributes (backend/src/store.js seed + POST /wardrobe/items):
+    id            internal key, e.g. 'w1'
+    name          human name, e.g. "Oxford Cotton Shirt"
+    image         asset path or uploaded image — DISPLAY ONLY, never scored
+    category      Tops / Bottoms / Shoes / Outerwear / Accessories
+    color         free-text colour ("Navy", "Indigo", "Beige")
+    style         style label ("Casual", "Smart Casual", "Minimal")
+    material      "100% Cotton", "Merino Wool", "Linen Blend"...
+    season        "Spring / Summer", "All Season"...
+    formality     "Casual", "Smart Casual", "Formal", "Elegant"...
+    pattern       "Plain", "Cable", "Floral"...  (retrieval text only)
+    brand         free text; empty for most seed rows (retrieval text only)
+    timesWorn     integer counter
+    lastWornLabel English label, e.g. "Worn 5 days ago", "Just added"
+    archived      soft-delete flag; archived items are never recommended
+    createdAt     timestamp
+
+  Ingestion-only attributes (present on uploaded items, NOT used for ranking):
+    analysis, analysisSource, analysisRejected, analysisConfidence,
+    agreement, uncertainAttributes, colorDetail, analysisModel, analyzedAt
+    -> these record HOW each tag was decided by the vision pipeline, so the
+       detail screen can show provenance. The ranking engine never reads them.
+
+  Also note: the vision pipeline produces a finer "subcategory" (T-Shirt,
+  Chinos, Loafers...) which is kept inside the analysis payload; the stored
+  `category` field stays one of the five coarse slots.
+
+  Which item attributes the engine actually reasons about:
+    category   -> which outfit slot the garment can fill (required)
+    color      -> colour harmony, profile match, avoided colours, diversity
+    style      -> style compatibility, profile match, trend term, diversity
+    material   -> warmth for the weather match, fabric preference in memory
+    season     -> season match factor (adjusted by temperature)
+    formality  -> occasion fit + style compatibility (formal spread)
+    pattern    -> retrieval text only
+    brand      -> retrieval text only
+    name       -> retrieval text, warmth heuristics, explanation wording,
+                  and it is how "Worn 5 days ago" labels get parsed
+    timesWorn  -> freshness (rotation pressure) + retrieval recency
+    lastWornLabel -> freshness (recency half)
+    archived   -> hard constraint
+    id         -> dedupe and tie-breaking
+    image      -> nothing; shown in the UI only
+
+--------------------------------------------------------------------------------
+5.2 OUTFIT = one recommendation returned to the client
+--------------------------------------------------------------------------------
+  Attributes produced for a generated recommendation:
+    id           'gen-<timestamp>-<index>' — generated, not saved to db.outfits
+    name         composed from the pieces, e.g. "Navy Shirt & Chinos"
+    occasion     echoed from the request
+    image        representative image picked for display — DISPLAY ONLY
+    match        THE headline number 0-100. After ranking it is the engine's
+                 own score (section 13), so the list order and the number the
+                 user reads can never disagree.
+    items        the resolved garment objects (internal, used for scoring)
+    itemIds      ids of the pieces — this is what feedback attributes to
+    pieces       human-readable piece names for the UI
+    breakdown    the 11 scoring factors with label / value / weight / applied
+    explanation  a sentence explaining why this outfit scored what it scored
+    completeness how many required slots were filled (ratio, filled, required)
+    favorite     false for generated outfits (favourites are saved outfits)
+
+  Attributes of a SAVED outfit (db.outfits — created by POST /outfits, or
+  saved by the user): same shape, but id is 'o...', it persists across
+  restarts, and it may carry createdAt. Recommendations are ephemeral: they are
+  recomputed on every request.
+
+  RULE OF THUMB: item attributes describe ONE garment and are used to judge
+  whether a garment belongs in an outfit. Outfit attributes describe a
+  COMBINATION and only exist after generation. The engine never scores an
+  item in isolation; it always scores the combination, then averages a few
+  item-level signals (freshness, affinity, retrieval) over the pieces.
+
+--------------------------------------------------------------------------------
+5.3 The Flutter model is a subset
+--------------------------------------------------------------------------------
+  lib/data/models.dart exposes ClothingItem without pattern, brand or the
+  analysis block, and Outfit with id/name/image/occasion/match/pieces/itemIds/
+  breakdown/factors/explanation/favorite/completeness/variant. So the phone
+  sees a curated view of what the backend stores. That is intentional, but it
+  does mean pattern and brand can influence ranking invisibly to the user.
+
+================================================================================
+6. STEP 1: HARD CONSTRAINTS
+================================================================================
+
+File: backend/src/recommendation-engine.js, function applyHardConstraints.
+
+These run BEFORE any candidate is built. A garment that fails here can never
+appear in a suggestion, no matter how well it scores.
+
+  ID  RULE                                              WHY
+  H1  archived / deleted garments are dropped           soft-delete
+  H2  caller-supplied excludeIds are dropped            "not this one"
+  H3  malformed rows are dropped (no id, or neither      downstream modules
+      name nor category)                                 assume valid rows
+  H4  explicit profile avoidedColors are excluded       user said so
+  H5  StyleMemory "never wear X" opinions are excluded  learned aversion
+  H6  unknown category can never fill a required slot   a top must be a top
+  H7  the same garment may appear only once per outfit  basic sanity
+
+RELAXATION (deliberate, and reported):
+  H4 and H5 are dropped if honouring them would leave a REQUIRED slot (top,
+  bottom, shoes) with zero candidates, or empty the pool entirely. Recommending
+  nothing at all is considered worse than recommending the avoided piece.
+  Optional slots (outerwear, accessory) are NEVER relaxed — losing a scarf
+  costs nothing. The relaxation is recorded in the returned metadata
+  (constraints.relaxedSlots / relaxedToFullPool), so it is auditable rather
+  than silent — although note that the HTTP route does not currently forward
+  that metadata (section 21).
+
+The function returns three things: the usable pool, a per-rule count of what
+was removed, and how many rows were live before filtering.
+
+================================================================================
+7. STEP 2: CANDIDATE GENERATION (BEAM SEARCH)
+================================================================================
+
+File: backend/src/ai-engine.js, functions beamSearch + generateOutfits.
+
+The engine does not invent outfits; it asks the existing generator for up to
+MAX_CANDIDATES = 8 candidates and then re-ranks them.
+
+How the generator builds a candidate:
+  * Slots are filled in a fixed order: outerwear, top, bottom, shoes,
+    accessory. Outerwear is only considered when it is cold (tempC <= 21) or
+    the occasion is dressy (formality target >= 4).
+  * For each slot it ranks the eligible garments (occasion, weather, profile,
+    memory, focus and rotation all bias this ranking) and keeps the best few.
+  * Instead of enumerating every combination (which used to stop at 24), it
+    keeps the best BEAM_WIDTH = 8 partial outfits after each slot, scoring the
+    partial combination each time. Limits: BEAM_PER_SLOT = 6 candidates per
+    slot, MAX_COMBOS = 400 combinations total.
+  * A garment can never appear twice in the same outfit.
+  * An optional anchor garment can force every outfit to be built around one
+    specific piece (engine option anchorItemId — not exposed over HTTP yet).
+
+After the beam finishes, the generator scores each complete outfit with the
+11-factor model (section 8), then runs its OWN small diversity pass (each
+already-used garment costs 7 points) and re-sorts best-first, so the eight
+candidates it hands back are already varied and roughly ordered.
+
+Each candidate comes out as an outfit object with match, breakdown, pieces,
+itemIds and a generated id.
+
+FAILURE MODES: empty pool -> no candidates -> the endpoint answers with an
+empty list rather than raising.
+
+================================================================================
+8. STEP 3: COMPATIBILITY SCORING (THE 11-FACTOR MODEL)
+================================================================================
+
+File: backend/src/scoring.js. This is the "do these pieces work together?"
+answer, and it is the single largest component of the final rank (weight 0.45).
+
+  FACTOR                  WEIGHT   WHAT IT MEASURES
+  color_harmony            0.16    colour-wheel relationships between pieces
+  style_compatibility      0.13    similar style labels / eras, formality spread
+  occasion_fit             0.14    how well the formality matches the request
+  weather_match            0.12    warmth vs temperature, fabric, layers
+  season_match             0.08    garment seasons vs the current month
+  personal_preference      0.14    favourite colours/styles + learned affinity
+  body_fit_preference      0.06    fitPreference vs garment cut words
+  recent_usage             0.06    rotation pressure (times worn)
+  wardrobe_availability    0.05    how representative the pieces are of the set
+  trend_compatibility      0.03    lightweight trend/season heuristics
+  user_feedback            0.03    learned ratings for these pieces
+
+Three properties worth understanding:
+
+  1. EVIDENCE GATE. Each factor returns hasSignal. A factor with no evidence
+     is excluded and the remaining weights renormalise to 1. Before this gate
+     existed, "Personal Taste / Fit Preference / User Feedback" returned a
+     flattering ~75-80 even for a brand new user, which was about 40% of the
+     weight and flattened every difference between outfits (three outfits with
+     occasion fit 51-92 all scored 79-80). Now they drop out until there is
+     real data.
+
+  2. CALIBRATION. The weighted average is squashed through a logistic curve
+     centred at 62, so scores spread around a plausible middle instead of
+     clustering in the high 70s.
+
+  3. COMPLETENESS CEILING. A score is capped by how many required slots the
+     outfit fills: all three -> 100, two -> 80, one -> 62, none -> 40. A
+     one-piece outfit with beautiful colours cannot outrank a complete one.
+     The same table (completeness + COMPLETENESS_CAP) is re-exported and reused
+     by the ranking engine, so there is one definition of "counts as an outfit"
+     in two places.
+
+The result is { match, raw, calibrated, breakdown[11], completeness }. The
+breakdown is what the UI shows as the factor list, and explain() turns it into
+the sentence under the outfit.
+
+================================================================================
+9. STEP 4: TWO-STAGE RETRIEVAL
+================================================================================
+
+File: backend/src/retrieval.js. Purpose: measure how well each garment fits
+the REQUEST (occasion / focus), which is a different question from the
+outfit-internal harmony measured by scoring.js.
+
+  STAGE 1 — retrieve and score locally (no external service)
+    * Turn the request and every garment into a text description.
+    * If the local sentence-embedding model is available
+      (Xenova/all-MiniLM-L6-v2, 384 dimensions, loaded via
+      @huggingface/transformers), embed both and take cosine similarity.
+    * Blend that with an exact lexical score so concrete attributes ("navy")
+      are not lost in a fuzzy vector — the blend understands "something warm
+      for a cold office" while still honouring a specific colour word.
+    * Scores are normalised and the shortlist is balanced across categories,
+      so a query cannot come back with five tops.
+    * If the model is missing, disabled (EMBEDDINGS=off), or fails to load,
+      the lexical half is used alone. Nothing else changes.
+
+  STAGE 2 — a language model picks the final items
+    * This second stage is real in the STYLIST path (stylistContext in
+      server.js builds a retrieve -> LLM -> validate -> score flow).
+    * For GET /outfits/recommended there is NO stage 2: the engine only uses
+      the Stage 1 scores as a ranking component (section 10). The endpoint
+      itself never calls an LLM.
+
+  HOW THE ENGINE USES IT
+    buildRetrievalMap() calls retrieval.rank() once for the request, keeps a
+    map of itemId -> score, and for each candidate outfit averages the scores
+    of its pieces, expressed as a share of the best score in the whole pool.
+    That gives a 0-100 component with no invented cut-off. If retrieval yields
+    nothing usable, the component reports no signal and its weight is
+    redistributed — the engine never fails because a search failed.
+
+  STARTUP: server.js calls retrieval.warmup() in the background so the first
+  request is not the slow one (section 19).
+
+================================================================================
+10. STEP 5: THE PERSONALISED 5-COMPONENT RANKING
+================================================================================
+
+File: backend/src/recommendation-engine.js, SCORE_WEIGHTS + scoreCandidate.
+
+This is the engine's own contribution: one table that decides what "good" means
+for this particular user, right now.
+
+  COMPONENT             WEIGHT   SOURCE OF TRUTH
+  compatibility          0.45    scoring.js 11-factor match (section 8)
+  retrieval_relevance    0.20    retrieval rank vs. the best piece in the pool
+  profile_match          0.15    hit-rate against declared favourite colours
+                                and preferred styles
+  freshness              0.10    rotation pressure per garment
+  learned_affinity       0.10    StyleMemory inferred liking for these pieces
+
+  Weights sum to 1.0 and are exported (SCORE_WEIGHTS) so they can be retuned
+  in one place. They are explicitly documented in the source as HEURISTICS —
+  there is no evaluation dataset in this repository, so they are plausible
+  initial values, not empirically optimised numbers.
+
+Per candidate, each component computes a 0-100 value plus hasSignal:
+
+  compatibility      the generator's match for the outfit.
+  retrieval_relevance mean of the pieces' retrieval scores / best score.
+  profile_match      For every piece, two chances to hit: a colour hit and a
+                     style hit. Score = hits / (2 x pieces). Only declared
+                     profile values count — learned opinions are deliberately
+                     kept in a different component so "what I said I like" and
+                     "what I seem to like" stay separable in the breakdown.
+  freshness          Per garment: 60% recency (parses "Worn 5 days ago";
+                     today ~0, a week ~90, never worn ~100) plus 40% volume
+                     (0 wears = 100, each wear -4, floored at 20 after 20
+                     wears). An unparseable label stays neutral (60) rather
+                     than guessing.
+  learned_affinity   Mean of style-memory itemAffinity over the pieces. It is
+                     reported as "no signal" until the memory holds at least
+                     one opinion.
+
+Then:
+  * Components without signal drop out; remaining weights renormalise.
+  * raw = weighted sum of the surviving components.
+  * The completeness ceiling (section 8) is applied to raw, so re-ranking can
+    never promote a partial outfit past a complete one.
+  * The output records score, raw, ceiling and a per-component breakdown with
+    the meaning, value, applied weight and whether it was applied — which is
+    what the opt-in diagnostic mode prints for auditing.
+
+KNOWN, DOCUMENTED OVERLAP: profile_match and learned_affinity restate signals
+that compatibility already carries at lower weight. The source calls this an
+amplification, not a second algorithm: the measurements come from the same
+helpers, and the total influence stays bounded because compatibility alone is
+capped at 0.45.
+
+================================================================================
+11. STEP 6: DIVERSITY SELECTION
+================================================================================
+
+File: backend/src/recommendation-engine.js, selectDiverse.
+
+Without this step a ranked list is often five versions of the same look,
+because the top-scoring combinations tend to share garments.
+
+  * Candidates are walked in score order.
+  * Each pick is chosen to maximise  score - 14 x overlapWithAlreadySelected.
+  * Overlap is 0..1 and blends three signals:
+        50%  reuse of the same garment ids
+        25%  reuse of the same colour family
+        25%  reuse of the same style label
+    Garment reuse is weighted highest because that is what a reader notices
+    first ("the same jeans again"); palette and silhouette are softer versions
+    of the same complaint.
+  * Identical outfits (same set of itemIds) are never selected twice.
+  * DETERMINISTIC: the pool is walked with a strict "greater than", so ties
+    keep the higher-scored candidate. No randomness anywhere.
+
+The top pick is therefore always simply the best outfit; variety only starts
+costing points from the second pick onwards.
+
+================================================================================
+12. STEP 7: EXPLORATION (DELIBERATE VARIETY)
+================================================================================
+
+File: backend/src/recommendation-engine.js, applyExploration.
+
+A purely greedy list shows you the same safest three outfits forever.
+Exploration deliberately substitutes a near-equal candidate so the list keeps
+moving — but with guard rails so it can never surface something bad.
+
+  GATES (all must hold, otherwise exploration reports why it did not apply):
+    * at least 2 outfits were selected (nothing to swap in a single pick)
+    * the candidate is not already selected
+    * the candidate scores at least 55 AND within 10 points of the best
+    * the candidate is not a near-duplicate of anything selected
+      (overlap < 0.5)
+    * the swap does not push the list's worst score down
+
+  SELECTION: among the qualified candidates, the pick index is
+      stableHash(occasion | tempC | count | month | focus) % qualifiedCount
+    using a fixed FNV-1a hash. Same request -> same pick. A different
+    occasion, temperature, count or month surfaces a different reasonable
+    candidate.
+
+  The swapped-in and swapped-out outfit ids are reported in metadata
+  (meta.exploration), so the behaviour is inspectable — again, that metadata is
+  not currently forwarded by the HTTP route (section 21).
+
+================================================================================
+13. STEP 8: FINAL RANKING, THE "MATCH" NUMBER, THE EXPLANATION
+================================================================================
+
+  * After exploration the selection is re-sorted by score descending, with ties
+    broken by the sorted itemIds joined together. That tie-break is why
+    identical inputs produce byte-identical output even though generated
+    outfit ids contain a timestamp.
+  * finish() then OVERWRITES outfit.match with the engine's own score. This is
+    important: before ranking, `match` held the generator's 11-factor number;
+    afterwards it holds the final rank score. The user-visible percentage and
+    the list order therefore always agree.
+  * The explanation sentence is rebuilt from the same breakdown by
+    scoring.explain(), so the "why" text quotes the number the user sees. If
+    rebuilding throws, the generator's original explanation is kept rather
+    than failing the request.
+  * Returned metadata (computed but not sent to the client today) includes:
+      engine name, occasion, requested count, the weight table, a plain-English
+      meaning for each component, pool sizes (source / live / usable), the
+      hard-constraint counts and any relaxation, generation count, retrieval
+      status, active components, exploration outcome, and per-candidate
+      score/raw/ceiling rows.
+
+================================================================================
+14. PERSONALISATION INPUTS: PROFILE + STYLEMEMORY
+================================================================================
+
+Two independent sources of "what this user likes". They are deliberately never
+merged into one store.
+
+14.1 EXPLICIT PROFILE — declared by the user
+    Endpoints: GET /users/me/style-profile, PATCH /users/me/style-profile.
+    Fields: favouriteColors, preferredStyles, avoidedColors, heightCm,
+    weightKg, fitPreference, sizes {top, bottom, shoe}.
+    The PATCH handler only accepts whitelisted keys and whitelisted vocabulary
+    values, so a crafted body cannot inject arbitrary data.
+    Used by: profile_match component, hard constraint H4, and several of the
+    11 factors (personal_preference, body_fit_preference).
+
+14.2 STYLEMEMORY — inferred by the system
+    File: backend/src/style-memory.js. One record per user, seeded with
+    neutral priors (no opinion about anything yet).
+    Stores four maps of 0..1 preference scores: colors, styles, fabrics,
+    itemRatings, plus absolute "avoid" phrases and a confidence value.
+    Learning rates: 0.09 per explicit 1-5 rating, 0.04 per opinion sentence
+    mined from chat. Scores are clamped between 0.02 and 0.98 — one bad outfit
+    is never a verdict.
+    Used by: learned_affinity component, hard constraint H5, several of the
+    11 factors, the stylist prompt digest, and GET /ai/style-dna.
+
+    Note on vocabulary: memory.styles keys are not only style labels. Chat
+    mining also stores garment nouns ("sneakers", "blazer") as opinions in
+    their own right, so a memory might read: casual 0.6, minimal 0.55,
+    sneakers 0.7, blazer 0.3. That is why an example memory looks mixed.
+
+14.3 What feeds back into ranking
+    profile -> profile_match + factors
+    memory  -> learned_affinity + factors + the H5 exclusions
+    Nothing else. Weather and occasion are context, not preference.
+
+================================================================================
+15. AI / ML STATUS: IMPLEMENTED VS PLANNED VS NOT USED
+================================================================================
+
+This section exists to stop three very different technologies from being
+described as one thing.
+
+--------------------------------------------------------------------------------
+IMPLEMENTED AND ACTUALLY USED IN RANKING
+--------------------------------------------------------------------------------
+  * Deterministic weighted scoring (scoring.js, recommendation-engine.js).
+    This is the "AI" that produces the number you see. It is arithmetic, not a
+    trained model.
+  * StyleMemory (style-memory.js): online, rule-based preference learning with
+    explicit learning rates. Real learning, but no model training.
+  * Lexical retrieval: always available, pure text matching.
+  * Sentence embeddings (Xenova/all-MiniLM-L6-v2) for retrieval Stage 1 —
+    a real local neural model, OPTIONAL. If the dependency or model is absent
+    the system silently uses the lexical half; the endpoint is unaffected.
+
+--------------------------------------------------------------------------------
+IMPLEMENTED BUT NOT PART OF THE RANKING PATH
+--------------------------------------------------------------------------------
+  * Clothing vision (backend/src/clothing-vision): Marqo/marqo-fashionCLIP as
+    an ONNX model, plus CIELAB pixel colour analysis, used to read an uploaded
+    photo into category / colour / style / pattern / material / season /
+    formality. This shapes ITEM attributes at ingestion time (section 5) and
+    can reject non-clothing images. It never scores an outfit.
+  * Free-tier LLM (backend/src/llm.js): Gemini by default, with Groq /
+    OpenRouter / OpenAI options, model rotation on 4xx/5xx, and a rule-based
+    fallback when no key is configured. Used for stylist chat (including
+    streaming), photo analysis and outfit-matching prompts. It is NOT called
+    by GET /outfits/recommended or by the engine.
+
+--------------------------------------------------------------------------------
+PLANNED / PARTIALLY BUILT / NOT REACHABLE BY THE USER
+--------------------------------------------------------------------------------
+  * focus (free-text request) and anchorItemId and excludeIds: fully supported
+    by the engine and generator, but no query parameter forwards them, so no
+    client can trigger them today.
+  * Engine metadata (weights, constraint counts, exploration outcome,
+    candidate scores): computed on every request and thrown away by the route.
+  * Per-request diagnostic block (recommendation-engine.js, marked TEMPORARY
+    DIAGNOSTIC in the source): an opt-in audit mode (opts.diagnostic) that
+    prints the profile_match contribution per candidate to stdout. Off by
+    default, does not affect scoring, and the source says it should be removed.
+  * NestJS/TypeORM Recommendation and RecommendationFeedback tables: schema
+    exists, nothing writes or reads them from the running app.
+  * ai-service/main.py (FastAPI mirror): optional sidecar for a couple of /ai
+    routes; not in the recommendation path.
+  * Second-stage LLM pick for recommendations: exists for the stylist flow,
+    not wired for GET /outfits/recommended.
+
+--------------------------------------------------------------------------------
+NOT USED AT ALL (present in docs/spec or the repo, absent from this path)
+--------------------------------------------------------------------------------
+  * No model training, fine-tuning or reinforcement learning anywhere. All
+    models are loaded, never updated.
+  * No evaluation dataset, no offline metrics (precision / recall / NDCG), no
+    A/B framework. This is why the weight table is labelled heuristic.
+  * No vector database — embeddings live in a process-local cache only.
+  * No learned-to-rank / neural ranker; ranking is a weighted sum.
+  * No real trend or social data feed behind trend_compatibility; that factor
+    is a small heuristic.
+  * No click / view / impression tracking. The only behavioural signals are
+    explicit: ratings, favourites, chat opinions and wear events.
+  * YOLOv8 appears only in README/handoff discussion, not in this path.
+
+================================================================================
+16. CONTEXT: WEATHER, OCCASION, SEASON
+================================================================================
+
+WEATHER
+  * Live data: backend/src/weather.js calls Open-Meteo (free, no API key),
+    caches for 10 minutes, maps WMO weather codes to a human description and
+    to a `tags` string the scoring layer greps. Falls back to OpenWeatherMap
+    if WEATHER_KEY is set, then to a seasonal estimate. It never throws.
+  * Endpoint: GET /weather/current responds { weather: {...} } — note the
+    envelope; the Flutter side unwraps it (section 18).
+  * BUT the recommendation route does not call it. The client fetches weather,
+    sends tempC back, and the route derives condition from the temperature
+    threshold of 26 C. So ranking sees a two-value condition vocabulary
+    ("sunny" / "partly cloudy") no matter what the sky is doing.
+  * Inside scoring, weather_match uses temperature plus fabric warmth and
+    layering, and weather also decides whether outerwear is even considered.
+
+OCCASION
+  * A free-text-ish string with a default of 'casual'. taxonomy.js maps
+    occasions onto a formality target, which drives occasion_fit and the
+    outerwear decision. Occasion is also part of the exploration seed, so a
+    different occasion can surface a different list.
+
+SEASON
+  * season_match compares garment seasons against the current MONTH (engine
+    option month, defaulting to the server's current month). It can be
+    overridden programmatically but not over HTTP.
+
+================================================================================
+17. THE FEEDBACK -> LEARNING LOOP
+================================================================================
+
+File: backend/src/recommendation-history.js + server.js feedback routes.
+
+Step 1 — REMEMBER WHAT WAS SHOWN.
+  Every successful GET /outfits/recommended writes compact rows into
+  db.recommendationHistory: user id, timestamp, source, occasion, temperature,
+  and the item ids that were displayed. Deliberately stored: no wardrobe
+  copies, no explanations, no embeddings, no model output. Bounded per user
+  (a retention cap trims the oldest rows). The write is best-effort and
+  wrapped in try/catch so a broken store can never fail a recommendation.
+
+Step 2 — LEARN FROM WHAT HAPPENED.
+  * POST /outfits/:id/feedback (ratings/comments) -> routes through
+    style-memory with the affected item ids.
+  * POST /outfits/:id/favorite: a false->true transition is treated as a real
+    positive signal and learned with the same strength as a 5-star rating.
+    Un-favouriting records NOTHING, because toggling off is ambiguous
+    (undo vs dislike) and inventing a negative there would be guesswork.
+  * Generated recommendations have ids like gen-... and are never saved to
+    db.outfits, so when feedback arrives for one, item attribution falls back
+    to recommendationHistory — that is why Step 1 exists.
+  * IDEMPOTENCE: every event gets a stable id derived from user + outfit +
+    payload + UTC day (format fb_<type>_<hash>). A retried request reports
+    `duplicate: true` instead of learning the same signal twice.
+
+Step 3 — THE SIGNAL COMES BACK.
+  Updated StyleMemory is read on the next recommendation request and feeds the
+  learned_affinity component, hard constraint H5 and several of the 11 factors.
+
+ GUARANTEES (asserted by tests):
+  * feedback and history are strictly user-scoped
+  * explicit profile preferences are NEVER modified by learning — learning
+    only moves inferred scores
+  * empty history is a working state, not an error
+  * missing / legacy / malformed db.json fields do not crash
+
+================================================================================
+18. WHAT THE USER ACTUALLY SEES (FLUTTER HOME INTEGRATION)
+================================================================================
+
+File: lib/data/app_state.dart (loadToday), lib/features/home/home_screen.dart.
+
+FLOW OF ONE LOAD
+  1. Home schedules loadToday() + loadWardrobe() after the first frame (a
+     post-frame callback — calling them synchronously from initState would
+     notify listeners during build, the exact hazard another test in this repo
+     documents).
+  2. loadToday() has an in-flight guard: while recommendationsLoading is true a
+     second call returns immediately, so rebuilds cannot spawn duplicate
+     requests.
+  3. It fetches weather FIRST and unwraps the { weather: {...} } envelope into a
+     flat map (the previous code kept the envelope, so the weather pill read
+     null and always showed the hard-coded "Sunny 28 C"). A weather failure
+     does not stop the flow — the recommendation call still runs with the
+     default temperature.
+  4. It calls recommendedOutfits(occasion, tempC, count) with
+     count = 4 (a Home-screen constant) and stores the response list EXACTLY as
+     returned. There is no client-side re-ranking. todayOutfit is simply the
+     first entry.
+  5. On failure it records recommendationsError and keeps any real outfits
+     already on screen; recommendationsSettled is always flipped in `finally`.
+
+THE FOUR STATES THE SCREEN OWES THE USER
+  loading  skeleton rail while the request is in flight
+  error    a retry card carrying the real message
+  empty    an honest empty card — and critically, the rail NEVER falls back to
+           bundled demo outfits when the engine returned nothing
+  success  the shared OutfitCard rail, one tap away from PerfectMatchScreen,
+           which shows the breakdown and explanation
+
+The Flutter side contains no ranking logic, no weather rules and no learning —
+by design. The backend owns order; the phone owns presentation.
+
+================================================================================
+19. NON-FUNCTIONAL BEHAVIOUR: DETERMINISM, FALLBACKS, PERFORMANCE
+================================================================================
+
+DETERMINISM
+  * No Math.random anywhere in the engine.
+  * The exploration seed is a fixed FNV-1a hash of occasion|tempC|count|month|
+    focus.
+  * Ties break on the sorted itemIds string, not on object identity.
+  * Caveat: generated outfit ids contain a timestamp, so ids differ between
+    calls; itemIds, scores, names and explanations are what the determinism
+    tests pin down.
+  * month defaults to the current calendar month, so output can change when
+    the month rolls over — that is intended seasonality, not instability.
+
+FALLBACK LADDER (each level keeps the user served)
+  1. engine.recommend(...) succeeds            -> ranked, personalised list
+  2. engine throws                             -> direct generateOutfits(...)
+  3. retrieval model unavailable / fails       -> lexical scoring only
+  4. retrieval yields nothing                  -> component drops, weights
+                                                  renormalise
+  5. no profile / no memory                    -> personalised components drop
+  6. empty or unusable wardrobe                -> empty list, reason recorded
+  7. weather service unreachable               -> seasonal estimate, then a
+                                                  numeric default
+  8. LLM key missing or provider down          -> rule-based stylist reply
+
+  Every level is logged; none of them raise to the user.
+
+PERFORMANCE
+  * retrieval.warmup() runs at server start so the first request is not the
+    slow one; if it fails the server still comes up.
+  * Embeddings are cached in process memory; there is no vector DB and no
+    per-request model loading.
+  * Generation is bounded: 400 combinations max, beam of 8, at most 8
+    candidates re-ranked, count clamped to 8.
+  * Weather has a 10-minute TTL cache.
+  * Both local models in the repository (fashionCLIP and MiniLM) do load into
+    memory, which the audit notes as a constraint when running multiple
+    servers at once.
+
+SECURITY / PRIVACY NOTES
+  * Recommendation requests work anonymously (optionalAuth) — an anonymous
+    caller simply gets no personalisation.
+  * Style profile writes are whitelist-validated.
+  * History rows contain ids and context only, not garment copies or text.
+
+================================================================================
+20. TESTS AND HOW TO RUN THEM
+================================================================================
+
+Both suites are dependency-free on purpose and were RUN for this analysis:
+
+  cd backend
+  node --test test/recommendation-engine.test.js
+  -> PASS: 8/8 tests, 0 failed (about 30 seconds)
+
+  cd backend
+  node --test test/feedback-learning.test.js
+  -> PASS: 11/11 tests, 0 failed (under a second)
+
+WHAT THE ENGINE SUITE COVERS (8 behaviours)
+  weather influence, occasion influence, preference influence, empty wardrobe,
+  all-archived wardrobe, no-profile wardrobe, single-item wardrobe,
+  determinism, and diversity (returned recommendations are not minor variations
+  of one outfit).
+
+WHAT THE FEEDBACK SUITE COVERS (11 groups)
+  A legacy feedback rows still work; B history persists with a retention cap;
+  C strict user scoping; D positive feedback raises learned affinity; E
+  negative feedback lowers it; F explicit profile is never touched by
+  learning; G duplicate feedback does not double-learn; H malformed db fields
+  do not crash; I empty history is valid; J recommendation generation still
+  works after the feedback integration; L identical inputs and events are
+  deterministic.
+
+FLUTTER SIDE
+  test/home_recommendation_test.dart — widget tests for the four Home states
+  (skeleton, retry card, honest empty, success rail). It runs offline: the
+  mock HTTP client answers 400, which loadToday reports as
+  recommendationsError rather than crashing. The success state seeds
+  AppState.recommendedOutfits directly, because a mock client cannot return a
+  200 — the live contract itself was verified against a running backend and is
+  documented in SECTION5_HOME_INTEGRATION_REPORT.txt.
+
+NOT COVERED (honest limits)
+  * No test asserts ranking QUALITY — only behaviour, safety and determinism.
+    There is no evaluation dataset to assert against.
+  * The HTTP contract of GET /outfits/recommended is not exercised by these
+    suites (it needs express installed); it is covered by module-level shape
+    checks plus the documented live verification.
+
+================================================================================
+21. KNOWN GAPS AND THINGS THAT ARE NOT WIRED YET
+================================================================================
+
+  1. Engine metadata is computed and discarded. Weights, constraint counts,
+     relaxation reasons and exploration outcomes never reach the client.
+  2. focus / anchorItemId / excludeIds have no HTTP surface.
+  3. Condition is derived from temperature alone at the endpoint, ignoring the
+     richer weather service the repository already has.
+  4. Exploration and diversity both exist (generator pass + engine pass). They
+     cooperate, but there are two layers of variety logic to keep in sync.
+  5. Weights are heuristic, undocumented by any evaluation, and there is no
+     harness to retune them — only an exported table to edit.
+  6. trend_compatibility has no real trend source.
+  7. No impression / click tracking, so nothing learns from what was SEEN and
+     ignored, only from explicit reactions.
+  8. The temporary diagnostic block in recommendation-engine.js is still in the
+     source and is marked for removal.
+  9. NestJS Recommendation tables and the FastAPI ai-service mirror are
+     dormant (see section 15).
+ 10. The Flutter ClothingItem model drops pattern, brand and the analysis
+     provenance block, so those stored fields influence ranking invisibly on
+     the client.
+ 11. Generated recommendations are never persisted as outfits, which is why
+     feedback attribution depends on recommendationHistory rows surviving.
+ 12. Anonymous traffic is indistinguishable from a brand-new user for
+     personalisation purposes (both = no signal).
+
+================================================================================
+22. FILE MAP AND GLOSSARY
+================================================================================
+
+FILE MAP (what to open for each question)
+
+  "Why was this outfit ranked here?"   backend/src/recommendation-engine.js
+  "Why did these clothes score 92?"    backend/src/scoring.js
+  "How was this combination built?"    backend/src/ai-engine.js (beamSearch)
+  "How relevant is this to my request?"backend/src/retrieval.js
+  "What counts as a top vs a bottom?"  backend/src/taxonomy.js (slotOf)
+  "What does the app think I like?"    backend/src/style-memory.js
+  "What did you show me last time?"    backend/src/recommendation-history.js
+  "Where does the temperature come from?" backend/src/weather.js
+  "Which route runs all of this?"      backend/server.js (GET /outfits/recommended)
+  "Where is the data stored?"          backend/src/store.js -> backend/data/db.json
+  "How does the phone ask for this?"   lib/core/api/smartwardrobe_api.dart
+  "How does state flow to the UI?"     lib/data/app_state.dart (loadToday)
+  "What does Home render?"             lib/features/home/home_screen.dart
+  "What does the phone's model look like?" lib/data/models.dart
+  Prior session reports for context:  AUDIT_REPORT_SECTION1.txt,
+                                      SECTION2_DATA_EVENTS_REPORT.txt,
+                                      SECTION3_RECOMMENDATION_ENGINE_REPORT.txt,
+                                      SECTION4_FEEDBACK_LEARNING_REPORT.txt,
+                                      SECTION5_HOME_INTEGRATION_REPORT.txt
+
+GLOSSARY
+
+  Beam search      a way to build combinations step by step, keeping only the
+                   best few partial results after each step instead of trying
+                   every possible combination.
+  Candidate        one complete outfit offered for ranking.
+  Component        one named part of the final score (compatibility, freshness,
+                   ...), each 0-100 with its own weight.
+  hasSignal        "this component had real evidence to contribute". Components
+                   without it are dropped and the other weights are rescaled.
+  Renormalisation  rescaling weights so the ones that did speak still add to 1.
+  Hard constraint  a rule that can remove a garment before any scoring happens.
+  Slot             the role a garment plays in an outfit: top, bottom, shoes,
+                   outerwear, accessory.
+  Retrieval        finding which garments are relevant to a text request.
+  Embedding        a list of numbers representing text (or an image) so that
+                   similar things end up close together; compared by angle.
+  Lexical scoring   plain word/substring matching, no model involved.
+  Diversity pass   a step that trades a few score points to avoid repeating
+                   the same garments across the returned list.
+  Exploration      deliberately swapping in a near-equal alternative so the
+                   same safest options are not shown forever.
+  StyleMemory      the per-user record of inferred likes/aversion, updated with
+                   small fixed learning rates.
+  Idempotent       an action that, if repeated, does not add a second signal.
+  Match            the headline 0-100 shown to the user; after ranking it IS
+                   the engine's score, so order and number always agree.
+  Breakdown        the per-factor list that justifies the match number.
+  Explanation      the sentence under an outfit generated from the breakdown.
+  Completeness     how many required slots an outfit fills; also caps the score.
+
+================================================================================
+END OF DOCUMENT
+Scope confirmation: this file is the only artifact created. No application
+source, configuration, test or data file was modified, and nothing new was
+implemented. Verification performed: read-only inspection plus running the two
+existing backend test suites (8/8 and 11/11 passing).
+================================================================================

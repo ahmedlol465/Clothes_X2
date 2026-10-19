@@ -11,6 +11,7 @@ import '../../data/assets.dart';
 import '../../data/mock_data.dart';
 import '../../data/models.dart';
 import '../outfits/outfit_planner_screen.dart';
+import '../outfits/outfits_screen.dart';
 import '../outfits/perfect_match_screen.dart';
 import '../shell/main_shell.dart';
 import '../wardrobe/add_clothing_screen.dart';
@@ -18,9 +19,12 @@ import '../wardrobe/item_detail_screen.dart';
 
 /// Frame 7 - the dashboard shown after sign in.
 ///
-/// The hero outfit and weather load from the backend
-/// (`GET /outfits/recommended`, `GET /weather/current`) and fall back
-/// to the bundled content offline.
+/// The hero outfit, the "Recommended for You" rail and the weather all come
+/// from the backend (`GET /outfits/recommended`, `GET /weather/current`) in
+/// one [AppState.loadToday] call. The hero falls back to the bundled content
+/// offline (pre-existing behaviour); the rail only ever renders what the
+/// recommendation engine actually returned, with loading / empty / error
+/// states of its own.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.onOpenTab});
 
@@ -36,8 +40,16 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _state.loadToday();
-    _state.loadWardrobe();
+    // Defer the first loads until after the first frame: loadToday() notifies
+    // listeners synchronously (recommendationsLoading) and initState runs
+    // during the build phase, so an already-mounted ListenableBuilder would
+    // otherwise be asked to build mid-build — the same hazard
+    // wardrobe_screen.dart documents for loadWardrobe().
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _state.loadToday();
+      _state.loadWardrobe();
+    });
   }
 
   void _push(BuildContext context, Widget screen) {
@@ -69,7 +81,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Expanded(
                     child: Text("Today's AI Selection", style: AppText.h4),
                   ),
-                  SwMatchBadge(match: _state.todayOutfit.match),
+                  SwMatchBadge(match: _state.todayOutfit.displayMatch),
                 ],
               ),
             ),
@@ -81,6 +93,28 @@ class _HomeScreenState extends State<HomeScreen> {
                 onView: () => _push(
                   context,
                   PerfectMatchScreen(outfit: _state.todayOutfit),
+                ),
+              ),
+            ),
+            const SizedBox(height: Insets.sectionGap),
+
+            // Recommended for you (GET /outfits/recommended) -----------------
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+              child: SwSectionHeader(title: 'Recommended for You'),
+            ),
+            const SizedBox(height: Insets.xs),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+              child: _RecommendationRail(
+                outfits: _state.recommendedOutfits,
+                loading: _state.recommendationsLoading,
+                settled: _state.recommendationsSettled,
+                error: _state.recommendationsError,
+                onRetry: () => _state.loadToday(),
+                onOpen: (outfit) => _push(
+                  context,
+                  PerfectMatchScreen(outfit: outfit),
                 ),
               ),
             ),
@@ -431,6 +465,161 @@ class RecentlyAddedRail extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// The ranked looks returned by `GET /outfits/recommended`.
+///
+/// The list is [AppState.recommendedOutfits] exactly as the backend engine
+/// ordered it — this widget never ranks, filters or re-scores anything, it
+/// only renders the four states Home owes the user:
+///
+///  * loading   → neutral skeleton rail (also covers "not requested yet")
+///  * error     → message plus a Retry that re-runs `AppState.loadToday`
+///  * empty     → an honest "nothing to show", never bundled demo outfits
+///  * success   → the shared [OutfitCard] every other outfit surface uses,
+///                tapping one opens the existing [PerfectMatchScreen]
+class _RecommendationRail extends StatelessWidget {
+  const _RecommendationRail({
+    required this.outfits,
+    required this.loading,
+    required this.settled,
+    required this.error,
+    required this.onRetry,
+    required this.onOpen,
+  });
+
+  final List<Outfit> outfits;
+  final bool loading;
+  final bool settled;
+  final String? error;
+  final VoidCallback onRetry;
+  final ValueChanged<Outfit> onOpen;
+
+  /// Matches the saved-outfits grid ratio (0.74) so a recommendation card is
+  /// pixel-identical to the same card on the Outfits screen.
+  static const double _cardWidth = 160;
+  static const double _railHeight = 216;
+
+  @override
+  Widget build(BuildContext context) {
+    // Skeleton while the request is in flight or has never been made.
+    if (outfits.isEmpty && (loading || !settled)) {
+      return const _RecommendationSkeleton();
+    }
+
+    if (outfits.isEmpty && error != null) {
+      return SwCard(
+        key: const ValueKey('home_rec_error'),
+        padding: const EdgeInsets.all(Insets.lg),
+        child: Column(
+          children: [
+            const SwIconBadge(icon: SwIcon.alert, circle: true, size: 44),
+            const SizedBox(height: Insets.md),
+            Text(
+              "Couldn't load recommendations",
+              textAlign: TextAlign.center,
+              style: AppText.cardTitle,
+            ),
+            const SizedBox(height: Insets.xs),
+            // The real API error, never an invented reason.
+            Text(
+              error!,
+              textAlign: TextAlign.center,
+              style: AppText.caption,
+            ),
+            const SizedBox(height: Insets.lg),
+            SwButton(label: 'Retry', onTap: onRetry, expand: false),
+          ],
+        ),
+      );
+    }
+
+    if (outfits.isEmpty) {
+      return SwCard(
+        key: const ValueKey('home_rec_empty'),
+        padding: const EdgeInsets.all(Insets.lg),
+        child: Column(
+          children: [
+            const SwIconBadge(icon: SwIcon.shirt, circle: true, size: 44),
+            const SizedBox(height: Insets.md),
+            Text(
+              'No recommendations yet',
+              textAlign: TextAlign.center,
+              style: AppText.cardTitle,
+            ),
+            const SizedBox(height: Insets.xs),
+            Text(
+              'The stylist has nothing that fits this occasion yet. '
+              'Add a few more pieces to your wardrobe and try again.',
+              textAlign: TextAlign.center,
+              style: AppText.caption,
+            ),
+            const SizedBox(height: Insets.lg),
+            SwOutlineButton(label: 'Refresh', onTap: onRetry, expand: false),
+          ],
+        ),
+      );
+    }
+
+    return SizedBox(
+      key: const ValueKey('home_rec_rail'),
+      height: _railHeight,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        itemCount: outfits.length,
+        separatorBuilder: (_, _) => const SizedBox(width: Insets.md),
+        itemBuilder: (context, i) => SizedBox(
+          width: _cardWidth,
+          child: OutfitCard(
+            outfit: outfits[i],
+            onTap: () => onOpen(outfits[i]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shimmer-free placeholder cards while the recommendation request is in
+/// flight — the same neutral block the Profile screen uses for its loading
+/// state, so the app keeps one loading vocabulary.
+class _RecommendationSkeleton extends StatelessWidget {
+  const _RecommendationSkeleton();
+
+  static const double _railHeight = 216;
+  static const double _cardWidth = 160;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      key: const ValueKey('home_rec_skeleton'),
+      height: _railHeight,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        physics: const NeverScrollableScrollPhysics(),
+        children: [
+          for (var i = 0; i < 3; i++) ...[
+            if (i > 0) const SizedBox(width: Insets.md),
+            Container(
+              width: _cardWidth,
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: Radii.cardRadius,
+                border: Border.all(color: AppColors.border),
+              ),
+              child: const Center(
+                child: SizedBox.square(
+                  dimension: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

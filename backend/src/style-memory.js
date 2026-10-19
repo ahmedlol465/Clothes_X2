@@ -124,6 +124,82 @@ function learnRating(memory, { items = [], rating = 5 }) {
   return memory;
 }
 
+/**
+ * Signed preference delta one explicit rating carries, per colour/style key.
+ * This is the exact quantity `learnRating` adds (fabric moves at 0.6×). Ratings
+ * 4–5 are positive, 1–2 negative, 3 neutral, with magnitude scaling by how
+ * decisive the rating was — the existing §9 scale, factored out so a *change*
+ * of rating can be expressed as one subtraction.
+ */
+function ratingSignal(rating) {
+  const r = clampScore(rating);
+  const direction = r >= 4 ? 1 : r <= 2 ? -1 : 0;
+  if (!direction) return 0;
+  const strength = direction > 0 ? (r - 3) / 2 : (3 - r) / 3; // 0..1
+  return direction * RATE_RATING * strength;
+}
+
+/**
+ * Apply one outfit rating with REPLACE semantics (§ Phase 1).
+ *
+ * `previous` is the user's prior rating of the *same* outfit (null on the very
+ * first rating). The colour/style/fabric maps are moved by
+ * `ratingSignal(new) − ratingSignal(previous)`, so changing 5 → 1 nets exactly
+ * the effect of a lone 1: the old contribution is removed before the new one is
+ * added, never summed. In the unclamped range this is provably identical to
+ * learning the current rating on a fresh memory.
+ *
+ * Per-item ratings are a latest-opinion cache, mirroring "the user's current
+ * rating of this look": a decisive (4–5 / 1–2) rating replaces the item's entry,
+ * a neutral (3) rating clears it, matching `learnRating`'s "a neutral rating
+ * moves nothing" rule.
+ *
+ * Deliberately separate from `learnRating` (which stays additive for the
+ * day-scoped `/outfits/:id/feedback` and favourite events); only the
+ * persistence-backed star control goes through here. Returns the mutated memory.
+ */
+function applyRating(memory, { items = [], rating, previous = null } = {}) {
+  if (!memory || typeof memory !== 'object') return memory;
+  if (!memory.colors) memory.colors = {};
+  if (!memory.styles) memory.styles = {};
+  if (!memory.fabrics) memory.fabrics = {};
+  if (!memory.itemRatings) memory.itemRatings = {};
+  if (!memory.totals) memory.totals = { ratings: 0, chats: 0 };
+  if (typeof memory.totals.ratings !== 'number') memory.totals.ratings = 0;
+
+  const next = ratingSignal(rating);
+  const prev = previous == null ? 0 : ratingSignal(previous);
+  const delta = next - prev;
+  const decisive = next !== 0;
+  const wasDecisive = prev !== 0;
+  const at = new Date().toISOString();
+
+  for (const item of items) {
+    if (!item) continue;
+    if (delta !== 0) {
+      const colorKey = keyOf(familyOf(item.color));
+      memory.colors[colorKey] = bump(memory.colors[colorKey], delta);
+
+      const styleKey = keyOf(item.style);
+      memory.styles[styleKey] = bump(memory.styles[styleKey], delta);
+
+      const fabricKey = keyOf(item.material);
+      memory.fabrics[fabricKey] = bump(memory.fabrics[fabricKey], delta * 0.6);
+    }
+    if (item.id) {
+      if (decisive) memory.itemRatings[item.id] = { rating: clampScore(rating), at };
+      else delete memory.itemRatings[item.id];
+    }
+  }
+
+  // Count decisive ratings only, and count a *change* once: a 1 replacing a 5
+  // is still one signal, not two.
+  if (decisive && !wasDecisive) memory.totals.ratings += 1;
+  else if (!decisive && wasDecisive) memory.totals.ratings = Math.max(0, memory.totals.ratings - 1);
+
+  return memory;
+}
+
 const NEGATIVE_PATTERNS = [
   /\b(hate|dislike|don'?t like|do not like|never wear|avoid|no more)\b/i,
   /\b(too|not)\s+(formal|casual|boring|loud|bright|plain|basic|warm|heavy)\b/i,
@@ -266,11 +342,16 @@ function learnChat(memory, message) {
       fired = true;
     }
 
-    // 2. Real hues. "I always wear navy" — colour and style move together.
+    // 2. Real hues. "I always wear navy" — the exact word and its family move
+    //    together (readers match either), and the hue is a colour opinion, never
+    //    a style one: "navy" must not leak into `styles` where it is unreadable.
     for (const word of clause.match(COLOR_SCAN) || []) {
       const key = keyOf(word);
+      const fam = familyOf(word);
       memory.colors[key] = bump(memory.colors[key], direction * RATE_CHAT * 0.8);
-      memory.styles[key] = bump(memory.styles[key], direction * RATE_CHAT * 0.5);
+      if (fam && fam !== key) {
+        memory.colors[fam] = bump(memory.colors[fam], direction * RATE_CHAT * 0.8);
+      }
       fired = true;
     }
 
@@ -321,6 +402,30 @@ function confidence(memory) {
 function preferenceOf(map = {}, key) {
   const v = map[keyOf(key)];
   return typeof v === 'number' ? clamp01(v) : 0.5;
+}
+
+/**
+ * Preference for one colour, 0..1.
+ *
+ * Reads the exact colour word first, then falls back to its family. Chat has
+ * historically written raw colour words ("navy"), ratings write family keys
+ * ("blue"); both must be honoured, and an exact hit beats the family so a
+ * within-family disagreement ("I love navy, hate royal blue") stays visible.
+ */
+function colorPreference(memory = {}, color) {
+  const word = keyOf(color);
+  if (word && typeof memory.colors?.[word] === 'number') {
+    return clamp01(memory.colors[word]);
+  }
+  return preferenceOf(memory.colors, familyOf(color));
+}
+
+/** Does the memory hold a colour opinion (exact word or family) for this colour? */
+function hasColorOpinion(memory = {}, color) {
+  const word = keyOf(color);
+  if (word && typeof memory.colors?.[word] === 'number') return true;
+  const fam = familyOf(color);
+  return !!fam && typeof memory.colors?.[fam] === 'number';
 }
 
 /**
@@ -381,17 +486,65 @@ function formalityAffinity(memory, item = {}) {
   return clamp01(0.5 + stated * level * 0.5);
 }
 
+/** Has the user actually stated a formality lean worth scoring against? */
+function hasFormalityOpinion(memory = {}) {
+  const lean = memory.occasions?.formal;
+  return typeof lean === 'number' && Math.abs(lean - 0.5) > 0.02;
+}
+
 /**
- * How much the user likes an outfit overall, 0..1.
- * Blends the colour, style, fabric and formality opinions the item carries.
+ * Does this memory hold an opinion that actually applies to this item?
+ *
+ * A stored preference only moves the score when it matches something concrete
+ * in the item: its rated id, an exact/family colour it shares, its style, its
+ * fabric, or a stated formality lean. A memory full of "navy" opinions must
+ * not nudge an all-beige outfit — the learned-affinity component falls out and
+ * its weight is renormalised over the components that did speak.
+ */
+function hasOpinionFor(memory, item = {}) {
+  if (!memory) return false;
+  if (item.id && memory.itemRatings?.[item.id]) return true;
+  const word = keyOf(item.color);
+  if (word && typeof memory.colors?.[word] === 'number') return true;
+  const fam = familyOf(item.color);
+  if (fam && typeof memory.colors?.[fam] === 'number') return true;
+  const style = keyOf(item.style);
+  if (style && typeof memory.styles?.[style] === 'number') return true;
+  const fabric = keyOf(item.material);
+  if (fabric && typeof memory.fabrics?.[fabric] === 'number') return true;
+  const lean = memory.occasions?.formal;
+  return typeof lean === 'number' && Math.abs(lean - 0.5) > 0.02;
+}
+
+/**
+ * How much the user likes an item overall, 0..1.
+ *
+ * Blends only the colour, style, fabric and formality opinions the item
+ * actually carries. The old version always averaged all four sub-signals and
+ * defaulted every missing one to 0.5, so a single strong opinion was diluted
+ * back toward the middle and every item drifted to ~50. With no relevant
+ * opinion at all the item stays neutral at 0.5 — the caller decides whether to
+ * count it (see `hasOpinionFor`).
  */
 function itemAffinity(memory, item = {}) {
-  const parts = [
-    preferenceOf(memory.colors, familyOf(item.color)),
-    preferenceOf(memory.styles, item.style),
-    preferenceOf(memory.fabrics, item.material),
-    formalityAffinity(memory, item),
-  ];
+  const parts = [];
+
+  if (hasColorOpinion(memory, item.color)) {
+    parts.push(colorPreference(memory, item.color));
+  }
+  const styleKey = keyOf(item.style);
+  if (styleKey && typeof memory?.styles?.[styleKey] === 'number') {
+    parts.push(preferenceOf(memory.styles, item.style));
+  }
+  const fabricKey = keyOf(item.material);
+  if (fabricKey && typeof memory?.fabrics?.[fabricKey] === 'number') {
+    parts.push(preferenceOf(memory.fabrics, item.material));
+  }
+  if (hasFormalityOpinion(memory)) {
+    parts.push(formalityAffinity(memory, item));
+  }
+
+  if (!parts.length) return 0.5;
   return parts.reduce((a, b) => a + b, 0) / parts.length;
 }
 
@@ -546,9 +699,13 @@ module.exports = {
   read,
   write,
   learnRating,
+  applyRating,
+  ratingSignal,
   learnChat,
   confidence,
   itemAffinity,
+  colorPreference,
+  hasOpinionFor,
   formalityAffinity,
   isAvoided,
   withoutAvoided,
