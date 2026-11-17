@@ -66,3 +66,57 @@ test('a fit opinion can be declared in notes; "regular" still cannot', () => {
   const regularNotes = scoring.scoreOutfit(OUTFIT, { styleProfile: { notes: 'usual build, regular sizes' } });
   assert.equal(fitFactor(regularNotes).applied, false, '"regular" in notes stays silent');
 });
+
+// ------------------------------------------------------------------- explain()
+
+test('explain() names the colour harmony strength with the palette', () => {
+  const res = scoring.scoreOutfit(OUTFIT, { occasion: 'casual', weather: { tempC: 22 } });
+  const why = scoring.explain(OUTFIT, { occasion: 'casual', weather: { tempC: 22 } }, res);
+  assert.ok(why.includes('White / Beige / Brown'), 'palette is named: $why');
+  assert.ok(why.includes('Overall match'), 'match is reported: $why');
+});
+
+test('explain() names the occasion fit strength', () => {
+  const formal = scoring.scoreOutfit(OUTFIT, { occasion: 'formal dinner', weather: { tempC: 22 } });
+  const why = scoring.explain(OUTFIT, { occasion: 'formal dinner', weather: { tempC: 22 } }, formal);
+  assert.ok(why.includes('occasion fit'), 'occasion fit is named: $why');
+});
+
+test('explain() gives cold-weather advice for snow', () => {
+  const res = scoring.scoreOutfit(OUTFIT, { occasion: 'casual', weather: { tempC: -5, condition: 'snow' } });
+  const why = scoring.explain(OUTFIT, { occasion: 'casual', weather: { tempC: -5, condition: 'snow' } }, res);
+  assert.ok(why.includes('cold-weather'), 'snow triggers cold-weather advice: $why');
+});
+
+test('explain() gives hot-weather advice', () => {
+  const res = scoring.scoreOutfit(OUTFIT, { occasion: 'casual', weather: { tempC: 32 } });
+  const why = scoring.explain(OUTFIT, { occasion: 'casual', weather: { tempC: 32 } }, res);
+  assert.ok(why.includes('lightweight layers'), 'heat triggers lightweight advice: $why');
+});
+
+test('explain() notes missing required slots when incomplete', () => {
+  const incomplete = [OUTFIT[0]]; // only a top, no bottom or shoes
+  const res = scoring.scoreOutfit(incomplete, { occasion: 'casual', weather: { tempC: 22 } });
+  const why = scoring.explain(incomplete, { occasion: 'casual', weather: { tempC: 22 } }, res);
+  assert.ok(why.includes('slot'), 'missing slots are mentioned: $why');
+});
+
+test('explain() names not-yet-scored factors', () => {
+  const res = scoring.scoreOutfit(OUTFIT, { styleProfile: {}, month: 5 });
+  const why = scoring.explain(OUTFIT, { styleProfile: {}, month: 5 }, res);
+  // personal_preference and body_fit_preference have no signal with an empty profile
+  assert.ok(why.includes('not yet scored'), 'unscored factors are named: $why');
+});
+
+test('explain() names the weakest factor when it falls below 62', () => {
+  // A single item (incomplete outfit) gets wardrobe_availability around 46,
+  // which is below 62 and should be called out.
+  const single = [OUTFIT[0]];
+  const res = scoring.scoreOutfit(single, { occasion: 'casual', weather: { tempC: 22 } });
+  const why = scoring.explain(single, { occasion: 'casual', weather: { tempC: 22 } }, res);
+  assert.ok(why.includes('compromise'), 'weak factor is called out: $why');
+});
+
+test('explain() returns empty for no pieces', () => {
+  assert.equal(scoring.explain([], {}), 'No pieces selected yet.');
+});

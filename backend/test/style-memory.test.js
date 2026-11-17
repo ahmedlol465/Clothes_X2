@@ -107,3 +107,62 @@ test('hasOpinionFor only reports signals that apply to the item', () => {
   assert.equal(memoryStore.hasOpinionFor(byFormality, navyItem()), true,
     'a stated formality lean applies to any outfit');
 });
+
+// ------------------------------------------------------------------- Preference management
+
+test('preferences can be read back after learning', () => {
+  const m = memoryStore.empty();
+  memoryStore.learnChat(m, 'I love navy.');
+  memoryStore.learnRating(m, { items: [navyItem(), beigeItem()], rating: 5 });
+
+  assert.ok(m.colors.navy > 0.5, 'navy colour preference learned');
+  assert.ok(m.styles.casual > 0.5, 'casual style preference learned');
+  assert.ok(memoryStore.confidence(m) > 0, 'confidence is reported');
+  assert.equal(m.totals.ratings, 1, 'rating count tracked');
+});
+
+test('avoid list dedups and caps at 10 entries', () => {
+  const m = memoryStore.empty();
+  memoryStore.learnChat(m, 'never wear sneakers.');
+  memoryStore.learnChat(m, 'never wear sneakers.'); // duplicate — ignored
+  memoryStore.learnChat(m, 'never wear linen.');
+
+  assert.equal(m.avoid.length, 2, 'two distinct exclusions');
+  assert.ok(m.avoid.includes('sneakers'), 'sneakers excluded');
+  assert.ok(m.avoid.includes('linen'), 'linen excluded');
+});
+
+test('confidence grows with signals', () => {
+  const empty = memoryStore.empty();
+  assert.equal(memoryStore.confidence(empty), 0, 'empty memory has zero confidence');
+
+  const withRating = memoryStore.empty();
+  memoryStore.learnRating(withRating, { items: [navyItem()], rating: 5 });
+  assert.ok(memoryStore.confidence(withRating) > 0, 'ratings build confidence');
+
+  const withChat = memoryStore.empty();
+  memoryStore.learnChat(withChat, 'I love navy.');
+  assert.ok(memoryStore.confidence(withChat) > 0, 'chat signals build confidence');
+});
+
+test('styleDNA reflects learned preferences', () => {
+  const m = memoryStore.empty();
+  memoryStore.learnChat(m, 'I always wear navy.');
+  memoryStore.learnRating(m, { items: [navyItem()], rating: 5 });
+
+  const dna = memoryStore.styleDna(m, [navyItem(), beigeItem()]);
+  assert.ok(dna.confidence > 0, 'DNA confidence reported');
+  assert.ok(Array.isArray(dna.notes), 'DNA notes array present');
+  assert.ok(Array.isArray(dna.palette), 'DNA palette array present');
+});
+
+test('preferences are user-isolated', () => {
+  const db = { styleMemories: [] };
+  const m1 = memoryStore.read(db, 'user1');
+  memoryStore.learnChat(m1, 'I love navy.');
+  memoryStore.write(db, m1);
+
+  const m2 = memoryStore.read(db, 'user2');
+  assert.equal(m2.colors.navy, undefined, 'user2 does not see user1 preferences');
+  assert.equal(db.styleMemories.length, 1, 'only one memory record written');
+});

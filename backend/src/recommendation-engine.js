@@ -660,6 +660,7 @@ async function recommend(wardrobe, opts = {}) {
   const retrievalQuery = focus || String(opts.retrievalQuery || '').trim();
 
   const { pool, constraints, liveCount } = applyHardConstraints(wardrobe, opts, memory);
+  const gap = ai.wardrobeGap(wardrobe);
   const meta = {
     engine: 'recommendation-engine',
     occasion,
@@ -672,6 +673,7 @@ async function recommend(wardrobe, opts = {}) {
       usable: pool.length,
     },
     constraints,
+    wardrobeGap: gap,
     generated: 0,
     returned: 0,
   };
