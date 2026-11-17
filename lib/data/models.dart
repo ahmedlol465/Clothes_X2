@@ -1,5 +1,30 @@
 import 'package:flutter/widgets.dart';
 
+double? _asDoubleOrNull(Object? value) {
+  if (value is num) return value.toDouble();
+  return null;
+}
+
+Map<String, dynamic>? _asMapOrNull(Object? value) =>
+    value is Map ? Map<String, dynamic>.from(value) : null;
+
+/// Read factors from the explicit `factors` field, falling back to deriving
+/// from `breakdown` for older payloads that predate the explicit field.
+List<MatchFactor> _factorsFromJson(Map<String, dynamic> json) {
+  if (json['factors'] is List && (json['factors'] as List).isNotEmpty) {
+    return [
+      for (final b in (json['factors'] as List))
+        if (b is Map)
+          MatchFactor.fromJson(Map<String, dynamic>.from(b)),
+    ];
+  }
+  return [
+    for (final b in (json['breakdown'] as List? ?? const []))
+      if (b is Map)
+        MatchFactor.fromJson(Map<String, dynamic>.from(b)),
+  ];
+}
+
 /// A single garment in the user's wardrobe.
 @immutable
 class ClothingItem {
@@ -13,8 +38,18 @@ class ClothingItem {
     required this.material,
     required this.season,
     required this.formality,
+    this.pattern = 'Plain',
     this.timesWorn = 0,
     this.lastWornLabel,
+    // AI analysis provenance (§8.4). Populated by the backend when a garment
+    // was created through a real photo analysis (`POST /wardrobe/items`
+    // returns these fields); null for mock/demo items or items added before
+    // this upgrade. The server owns these values — the client only reads them.
+    this.analysisSource,
+    this.analysisConfidence,
+    this.analysisRaw,
+    this.analysisRejected = false,
+    this.analyzedAt,
   });
 
   final String id;
@@ -26,11 +61,82 @@ class ClothingItem {
   final String material;
   final String season;
   final String formality;
+
+  /// Shopper-style pattern detected from the image (e.g. "Plain", "Striped").
+  /// Defaults to the backend's fallback so existing items keep a value.
+  final String pattern;
+
   final int timesWorn;
   final String? lastWornLabel;
 
+  /// Who produced the analysis: `clothing-vision`, `clothing-vision+gemini`,
+  /// `filename` (unverified guess from the name), `heuristic` (offline
+  /// fallback), or null when no analysis exists.
+  final String? analysisSource;
+
+  /// Honest 0..1 confidence from the vision pipeline (agreement x attribute
+  /// certainty). Null when the garment was not analyzed.
+  final double? analysisConfidence;
+
+  /// The full raw analysis payload from the backend, kept so the detail
+  /// screen can show color detail, evidence and the model identity.
+  final Map<String, dynamic>? analysisRaw;
+
+  /// True when the backend's gate rejected the image as non-clothing. The
+  /// item may still be stored (the user may know better), but the UI must say
+  /// so instead of showing default tags as fact.
+  final bool analysisRejected;
+
+  /// When the analysis was performed (ISO-8601), or null.
+  final DateTime? analyzedAt;
+
   /// Compact "Tops • White" style summary used under the product name.
   String get meta => '$category • $color';
+
+  /// How the analysis turned out. `null` when there is no analysis record.
+  String? get analysisStatus {
+    if (analysisRejected) return 'rejected';
+    if (analysisSource == null) return null;
+    if (analysisSource == 'heuristic') return 'heuristic';
+    if (analysisSource == 'filename') return 'filename';
+    if (analysisConfidence != null && analysisConfidence! < 0.5) {
+      return 'uncertain';
+    }
+    return 'analyzed';
+  }
+
+  /// Human read-out of [analysisStatus], or null when there is nothing to say.
+  String? get analysisStatusLabel {
+    switch (analysisStatus) {
+      case 'rejected':
+        return 'Rejected by the AI gate — not detected as clothing.';
+      case 'heuristic':
+        return 'Analyzed offline — tags are best-guess defaults.';
+      case 'filename':
+        return 'Unverified — tags guessed from the file name.';
+      case 'uncertain':
+        return 'Analyzed with low confidence — verify the tags below.';
+      case 'analyzed':
+        return 'Analyzed by AI vision.';
+      default:
+        return null;
+    }
+  }
+
+  /// The named colour plus its measured confidence when available.
+  String? get colorWithConfidence {
+    if (color.isEmpty) return null;
+    final conf = analysisConfidence;
+    if (conf == null) return color;
+    return '$color (${(conf * 100).round()}%)';
+  }
+
+  /// Attributes the model was not confident about, e.g. ['material', 'season'].
+  List<String> get uncertainAttributesList {
+    final raw = analysisRaw?['uncertainAttributes'];
+    if (raw is List) return raw.whereType<String>().toList();
+    return const <String>[];
+  }
 
   /// JSON mapping for the backend wardrobe API (§8.3).
   factory ClothingItem.fromJson(Map<String, dynamic> json) => ClothingItem(
@@ -43,8 +149,16 @@ class ClothingItem {
         material: '${json['material'] ?? 'Cotton'}',
         season: '${json['season'] ?? 'All Season'}',
         formality: '${json['formality'] ?? 'Casual'}',
+        pattern: '${json['pattern'] ?? 'Plain'}',
         timesWorn: (json['timesWorn'] as num?)?.toInt() ?? 0,
         lastWornLabel: json['lastWornLabel'] as String?,
+        analysisSource: json['analysisSource'] as String?,
+        analysisConfidence: (json['analysisConfidence'] as num?)?.toDouble(),
+        analysisRaw: json['analysis'] is Map
+            ? Map<String, dynamic>.from(json['analysis'] as Map)
+            : null,
+        analysisRejected: json['analysisRejected'] == true,
+        analyzedAt: DateTime.tryParse('${json['analyzedAt'] ?? ''}'),
       );
 
   Map<String, dynamic> toJson() => {
@@ -57,8 +171,15 @@ class ClothingItem {
         'material': material,
         'season': season,
         'formality': formality,
+        'pattern': pattern,
         'timesWorn': timesWorn,
         if (lastWornLabel != null) 'lastWornLabel': lastWornLabel,
+        if (analysisSource != null) 'analysisSource': analysisSource,
+        if (analysisConfidence != null)
+          'analysisConfidence': analysisConfidence,
+        if (analysisRaw != null) 'analysis': analysisRaw,
+        if (analysisRejected) 'analysisRejected': true,
+        if (analyzedAt != null) 'analyzedAt': analyzedAt?.toIso8601String(),
       };
 
   ClothingItem copyWith({
@@ -162,10 +283,13 @@ class Outfit {
     this.explanation,
     this.favorite = false,
     this.completeness,
+    this.completenessDetail,
     this.variant,
     this.note,
     this.keptFromOriginal,
     this.regenerated = false,
+    this.provenance,
+    this.grounding,
   });
 
   final String id;
@@ -205,6 +329,19 @@ class Outfit {
   /// Completeness of the look (0..1) from the scoring engine's gate.
   final double? completeness;
 
+  /// Additive detailed completeness gate (`{ratio, filled, required}`).
+  /// Old servers sent this object as [completeness] itself; it is preserved
+  /// here so that payload still parses.
+  final Map<String, dynamic>? completenessDetail;
+
+  /// How the outfit was produced (`llm_ids`, `recovered_from_reply`,
+  /// `generated_fallback`, `rule_fallback`, `generated`, `match`, `remix`).
+  final String? provenance;
+
+  /// How the outfit relates to the reply/wardrobe
+  /// (`{recoveredItemIds, usedFallback, allOwned}`).
+  final Map<String, dynamic>? grounding;
+
   /// Remix variant key (`casual`, `cold`, `summer`, `date`, `formal`).
   final String? variant;
 
@@ -218,41 +355,52 @@ class Outfit {
   final bool regenerated;
 
   /// JSON mapping for the backend outfits API (§8.5).
-  factory Outfit.fromJson(Map<String, dynamic> json) => Outfit(
-        id: '${json['id'] ?? ''}',
-        name: '${json['name'] ?? 'Untitled look'}',
-        image: '${json['image'] ?? 'assets/images/outfit_flatlay_beige.jpg'}',
-        occasion: '${json['occasion'] ?? 'Casual'}',
-        match: (json['match'] as num?)?.toInt() ?? 85,
-        compatibilityScore: (json['compatibilityScore'] as num?)?.toInt(),
-        rankingScore: (json['rankingScore'] as num?)?.toInt(),
-        pieces: [
-          for (final p in (json['pieces'] as List? ?? const [])) '$p',
-        ],
-        summary: json['summary'] as String?,
-        itemIds: [
-          for (final p in (json['itemIds'] as List? ?? const [])) '$p',
-        ],
-        breakdown: [
-          for (final b in (json['breakdown'] as List? ?? const []))
-            (
-              label: '${b['label'] ?? ''}',
-              value: (b['value'] ?? 0).toInt(),
-            ),
-        ],
-        factors: [
-          for (final b in (json['breakdown'] as List? ?? const []))
-            if (b is Map)
-              MatchFactor.fromJson(Map<String, dynamic>.from(b)),
-        ],
-        explanation: json['explanation'] as String?,
-        favorite: json['favorite'] == true,
-        completeness: (json['completeness'] as num?)?.toDouble(),
-        variant: json['variant'] as String?,
-        note: json['note'] as String?,
-        keptFromOriginal: (json['keptFromOriginal'] as num?)?.toInt(),
-        regenerated: json['regenerated'] == true,
-      );
+  factory Outfit.fromJson(Map<String, dynamic> json) {
+    final completenessRaw = json['completeness'];
+    final completenessDetail = _asMapOrNull(json['completenessDetail']) ??
+        (completenessRaw is Map
+            ? Map<String, dynamic>.from(completenessRaw)
+            : null);
+    final completenessNumber = _asDoubleOrNull(completenessRaw) ??
+        _asDoubleOrNull(completenessDetail?['ratio']);
+    return Outfit(
+      id: '${json['id'] ?? ''}',
+      name: '${json['name'] ?? 'Untitled look'}',
+      image: '${json['image'] ?? 'assets/images/outfit_flatlay_beige.jpg'}',
+      occasion: '${json['occasion'] ?? 'Casual'}',
+      match: (json['match'] as num?)?.toInt() ?? 85,
+      compatibilityScore: (json['compatibilityScore'] as num?)?.toInt(),
+      rankingScore: (json['rankingScore'] as num?)?.toInt(),
+      pieces: [
+        for (final p in (json['pieces'] as List? ?? const [])) '$p',
+      ],
+      summary: json['summary'] as String?,
+      itemIds: [
+        for (final p in (json['itemIds'] as List? ?? const [])) '$p',
+      ],
+      breakdown: [
+        for (final b in (json['breakdown'] as List? ?? const []))
+          (
+            label: '${b['label'] ?? ''}',
+            value: (b['value'] ?? 0).toInt(),
+          ),
+      ],
+      // Prefer the explicit factors the backend now sends (with weight,
+      // applied and contribution) so the UI can show what actually moved the
+      // score. Fall back to deriving from breakdown for older payloads.
+      factors: _factorsFromJson(json),
+      explanation: json['explanation'] as String?,
+      favorite: json['favorite'] == true,
+      completeness: completenessNumber,
+      completenessDetail: completenessDetail,
+      variant: json['variant'] as String?,
+      note: json['note'] as String?,
+      keptFromOriginal: (json['keptFromOriginal'] as num?)?.toInt(),
+      regenerated: json['regenerated'] == true,
+      provenance: json['provenance'] is String ? json['provenance'] as String : null,
+      grounding: _asMapOrNull(json['grounding']),
+    );
+  }
 }
 
 /// A single row in the AI stylist conversation.
@@ -425,6 +573,82 @@ class SlotGap {
         color: '${json['color'] ?? ''}',
         material: '${json['material'] ?? ''}',
         reason: '${json['reason'] ?? ''}',
+      );
+}
+
+/// A wardrobe gap entry: a missing category, what to add, and what it unlocks.
+@immutable
+class WardrobeGapEntry {
+  const WardrobeGapEntry({
+    required this.gap,
+    required this.suggestion,
+    required this.reason,
+    required this.unlocks,
+  });
+
+  final String gap;
+  final String suggestion;
+  final String reason;
+  final List<String> unlocks;
+
+  factory WardrobeGapEntry.fromJson(Map<String, dynamic> json) => WardrobeGapEntry(
+        gap: '${json['gap'] ?? ''}',
+        suggestion: '${json['suggestion'] ?? ''}',
+        reason: '${json['reason'] ?? ''}',
+        unlocks: List<String>.from((json['unlocks'] as List? ?? const [])),
+      );
+}
+
+/// Occasion coverage: whether the wardrobe can build an outfit for a context.
+@immutable
+class WardrobeGapCoverage {
+  const WardrobeGapCoverage({
+    required this.occasion,
+    required this.covered,
+    required this.match,
+  });
+
+  final String occasion;
+  final bool covered;
+  final int match;
+
+  factory WardrobeGapCoverage.fromJson(Map<String, dynamic> json) =>
+      WardrobeGapCoverage(
+        occasion: '${json['occasion'] ?? ''}',
+        covered: json['covered'] == true,
+        match: (json['match'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// Wardrobe gap analysis from `POST /ai/wardrobe-gap` and recommendation meta.
+@immutable
+class WardrobeGap {
+  const WardrobeGap({
+    required this.gaps,
+    required this.totalItems,
+    required this.byCategory,
+    required this.coverage,
+    required this.health,
+  });
+
+  final List<WardrobeGapEntry> gaps;
+  final int totalItems;
+  final Map<String, dynamic> byCategory;
+  final List<WardrobeGapCoverage> coverage;
+  final Map<String, dynamic> health;
+
+  factory WardrobeGap.fromJson(Map<String, dynamic> json) => WardrobeGap(
+        gaps: [
+          for (final g in (json['gaps'] as List? ?? const []))
+            if (g is Map) WardrobeGapEntry.fromJson(Map<String, dynamic>.from(g)),
+        ],
+        totalItems: (json['totalItems'] as num?)?.toInt() ?? 0,
+        byCategory: Map<String, dynamic>.from(json['byCategory'] ?? const {}),
+        coverage: [
+          for (final c in (json['coverage'] as List? ?? const []))
+            if (c is Map) WardrobeGapCoverage.fromJson(Map<String, dynamic>.from(c)),
+        ],
+        health: Map<String, dynamic>.from(json['health'] ?? const {}),
       );
 }
 
@@ -693,4 +917,188 @@ class UserProfile {
     final text = '${value ?? ''}'.trim();
     return text.isEmpty ? null : text;
   }
+}
+
+/// A single learned colour preference with its source and value (0..1).
+@immutable
+class ColorPreference {
+  const ColorPreference({
+    required this.name,
+    required this.value,
+    this.source,
+  });
+
+  final String name;
+  final double value;
+  final String? source;
+
+  factory ColorPreference.fromJson(Map<String, dynamic> json) => ColorPreference(
+        name: '${json['name'] ?? ''}',
+        value: (json['value'] as num?)?.toDouble() ?? 0.5,
+        source: '${json['source'] ?? ''}'.trim().isEmpty ? null : '${json['source']}',
+      );
+}
+
+/// A single learned style preference with its source and value (0..1).
+@immutable
+class StylePreference {
+  const StylePreference({
+    required this.name,
+    required this.value,
+    this.source,
+  });
+
+  final String name;
+  final double value;
+  final String? source;
+
+  factory StylePreference.fromJson(Map<String, dynamic> json) => StylePreference(
+        name: '${json['name'] ?? ''}',
+        value: (json['value'] as num?)?.toDouble() ?? 0.5,
+        source: '${json['source'] ?? ''}'.trim().isEmpty ? null : '${json['source']}',
+      );
+}
+
+/// A single learned fabric preference with its source and value (0..1).
+@immutable
+class FabricPreference {
+  const FabricPreference({
+    required this.name,
+    required this.value,
+    this.source,
+  });
+
+  final String name;
+  final double value;
+  final String? source;
+
+  factory FabricPreference.fromJson(Map<String, dynamic> json) => FabricPreference(
+        name: '${json['name'] ?? ''}',
+        value: (json['value'] as num?)?.toDouble() ?? 0.5,
+        source: '${json['source'] ?? ''}'.trim().isEmpty ? null : '${json['source']}',
+      );
+}
+
+/// The full set of learned style preferences for the current user
+/// (`GET /ai/preferences`).
+@immutable
+class LearnedPreferences {
+  const LearnedPreferences({
+    required this.userId,
+    required this.colors,
+    required this.styles,
+    required this.fabrics,
+    required this.occasions,
+    required this.avoid,
+    required this.facts,
+    required this.itemRatings,
+    required this.confidence,
+    required this.totals,
+    required this.updatedAt,
+  });
+
+  final String? userId;
+  final Map<String, dynamic> colors;
+  final Map<String, dynamic> styles;
+  final Map<String, dynamic> fabrics;
+  final Map<String, dynamic> occasions;
+  final List<String> avoid;
+  final List<Map<String, dynamic>> facts;
+  final Map<String, dynamic> itemRatings;
+  final double confidence;
+  final Map<String, dynamic> totals;
+  final String? updatedAt;
+
+  /// Colour preferences as typed models, filtered to non-neutral values.
+  List<ColorPreference> get colorPreferences => colors.entries
+      .where((e) => e.value is num && (e.value as num).toDouble() != 0.5)
+      .map((e) => ColorPreference(
+            name: e.key,
+            value: (e.value as num).toDouble(),
+            source: 'learned',
+          ))
+      .toList();
+
+  /// Style preferences as typed models, filtered to non-neutral values.
+  List<StylePreference> get stylePreferences => styles.entries
+      .where((e) => e.value is num && (e.value as num).toDouble() != 0.5)
+      .map((e) => StylePreference(
+            name: e.key,
+            value: (e.value as num).toDouble(),
+            source: 'learned',
+          ))
+      .toList();
+
+  /// Fabric preferences as typed models, filtered to neutral values.
+  List<FabricPreference> get fabricPreferences => fabrics.entries
+      .where((e) => e.value is num && (e.value as num).toDouble() != 0.5)
+      .map((e) => FabricPreference(
+            name: e.key,
+            value: (e.value as num).toDouble(),
+            source: 'learned',
+          ))
+      .toList();
+
+  /// Whether the user has stated a formality lean.
+  bool get hasFormalityOpinion {
+    final v = occasions['formal'];
+    return v is num && v.toDouble() != 0.5;
+  }
+
+  /// The stated formality lean, or null when neutral.
+  double? get formalityLean {
+    final v = occasions['formal'];
+    return v is num ? v.toDouble() : null;
+  }
+
+  factory LearnedPreferences.fromJson(Map<String, dynamic> json) =>
+      LearnedPreferences(
+        userId: '${json['userId'] ?? ''}'.trim().isEmpty ? null : '${json['userId']}',
+        colors: Map<String, dynamic>.from(json['colors'] ?? const {}),
+        styles: Map<String, dynamic>.from(json['styles'] ?? const {}),
+        fabrics: Map<String, dynamic>.from(json['fabrics'] ?? const {}),
+        occasions: Map<String, dynamic>.from(json['occasions'] ?? const {}),
+        avoid: List<String>.from((json['avoid'] as List? ?? const [])),
+        facts: List<Map<String, dynamic>>.from((json['facts'] as List? ?? const [])
+            .map((f) => Map<String, dynamic>.from(f as Map))),
+        itemRatings: Map<String, dynamic>.from(json['itemRatings'] ?? const {}),
+        confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
+        totals: Map<String, dynamic>.from(json['totals'] ?? const {}),
+        updatedAt: '${json['updatedAt'] ?? ''}'.trim().isEmpty ? null : '${json['updatedAt']}',
+      );
+}
+
+/// User-controlled preference update payload for `PATCH /ai/preferences`.
+@immutable
+class PreferenceUpdate {
+  const PreferenceUpdate({
+    this.color,
+    this.colorValue,
+    this.style,
+    this.styleValue,
+    this.fabric,
+    this.fabricValue,
+    this.formality,
+    this.avoid,
+  });
+
+  final String? color;
+  final double? colorValue;
+  final String? style;
+  final double? styleValue;
+  final String? fabric;
+  final double? fabricValue;
+  final String? formality;
+  final String? avoid;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        if (color != null) 'color': color,
+        if (colorValue != null) 'value': colorValue,
+        if (style != null) 'style': style,
+        if (styleValue != null) 'value': styleValue,
+        if (fabric != null) 'fabric': fabric,
+        if (fabricValue != null) 'value': fabricValue,
+        if (formality != null) 'formality': formality,
+        if (avoid != null) 'avoid': avoid,
+      };
 }

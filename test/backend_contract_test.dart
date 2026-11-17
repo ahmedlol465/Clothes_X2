@@ -127,6 +127,17 @@ void main() {
     }, token: token, timeout: aiTimeout) as Map<String, dynamic>;
     expect((chat['reply'] as String).length, greaterThan(20));
     expect(chat['source'], isNotNull);
+    final chatMeta = (chat['meta'] as Map?)?.cast<String, dynamic>();
+    expect(chatMeta?['contractVersion'], 2);
+    expect(chatMeta?['itemIdValidation'], isA<Map>());
+    final chatMemory = (chat['memory'] as Map?)?.cast<String, dynamic>();
+    expect(chatMemory?['facets'], isA<Map>());
+    final chatOutfit = (chat['outfit'] as Map?)?.cast<String, dynamic>();
+    if (chatOutfit != null) {
+      expect(chatOutfit['completeness'], isA<num>());
+      expect(chatOutfit['provenance'], isA<String>());
+      expect(chatOutfit['grounding'], isA<Map>());
+    }
 
     // Conversation memory: the second turn must see the first.
     await call('POST', '/ai/chat', body: {
@@ -306,6 +317,17 @@ void main() {
     expect(outfit, isNotNull);
     expect((outfit!['itemIds'] as List), isNotEmpty);
     expect(outfit['match'], isA<int>());
+    expect(outfit['completeness'], isA<num>());
+    expect(outfit['provenance'], isA<String>());
+    expect(outfit['grounding'], isA<Map>());
+
+    // Session 3: the stream `done` carries the same semantic envelope as the
+    // non-stream body, plus contract metadata on its own `meta` event.
+    expect(done['intent'], isA<String>());
+    expect(done['meta'], isA<Map>());
+    expect((done['meta'] as Map)['contractVersion'], 2);
+    expect((done['meta'] as Map)['itemIdValidation'], isA<Map>());
+    expect((done['memory'] as Map)['facets'], isA<Map>());
 
     // The exclusion the message stated must survive into what gets recommended.
     final names = ((outfit['items'] as List?) ?? const [])

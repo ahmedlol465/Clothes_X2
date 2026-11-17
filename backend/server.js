@@ -21,6 +21,7 @@ const multer = require('multer');
 const store = require('./src/store');
 const ai = require('./src/ai-engine');
 const llm = require('./src/llm');
+const language = require('./src/language');
 const scoring = require('./src/scoring');
 const memoryStore = require('./src/style-memory');
 const retrieval = require('./src/retrieval');
@@ -30,6 +31,7 @@ const savedOutfits = require('./src/saved-outfits');
 const weatherService = require('./src/weather');
 const vision = require('./src/vision');
 const tax = require('./src/taxonomy');
+const responseContract = require('./src/response-contract');
 
 const PORT = process.env.EXPRESS_PORT || process.env.PORT || 3001;
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || ''; // e.g. http://localhost:8000
@@ -731,6 +733,27 @@ app.post('/ai/packing-list', optionalAuth, (req, res) => {
   res.json(ai.packingList(db.wardrobe.filter((i) => !i.archived), req.body || {}));
 });
 
+// ============================================================ 8.7.1 Wardrobe Assistant
+// Read-only Q&A over the user's actual wardrobe records. Never creates,
+// updates, or deletes wardrobe items.
+app.post('/ai/wardrobe-assistant', optionalAuth, (req, res) => {
+  const { message = '', conversationId } = req.body || {};
+  const result = ai.wardrobeAssistant(message, db.wardrobe.filter((i) => !i.archived), { conversationId });
+  trackAi('wardrobe-assistant', Date.now() - 0, { intent: result.intent, itemsFound: result.itemsFound.length });
+  res.json(result);
+});
+
+// ============================================================ 8.7.2 Shopping Assistant
+// Category-level shopping guidance grounded in real wardrobe gaps or an
+// explicit user request. Suggestions are clearly not-owned and are never
+// added to the wardrobe. Not live listings: no prices, merchants, or links.
+app.post('/ai/shopping-assistant', optionalAuth, (req, res) => {
+  const { message = '', gapFocus, conversationId } = req.body || {};
+  const result = ai.shoppingAssistant(message, db.wardrobe.filter((i) => !i.archived), { gapFocus, conversationId });
+  trackAi('shopping-assistant', Date.now() - 0, { focus: result.focus, suggestions: result.suggestions.length });
+  res.json(result);
+});
+
 // ------------------------------------------------------------- stylist core
 /**
  * Shared context assembly for every stylist entry point.
@@ -831,7 +854,9 @@ function buildOutfitFromIds(ids, ctx, opts = {}) {
     styleProfile: ctx.styleProfile,
     memory: ctx.memory,
   });
-  return {
+  const provenance = opts.provenance || responseContract.PROVENANCE.llmIds;
+  const itemIds = items.map((p) => p.id);
+  return responseContract.normalizeOutfit({
     id: `llm-${Date.now()}`,
     name: ai.outfitName(items, opts.occasion || ctx.occasion),
     occasion: opts.occasion || ctx.occasion,
@@ -842,11 +867,18 @@ function buildOutfitFromIds(ids, ctx, opts = {}) {
       occasion: opts.occasion || ctx.occasion,
       weather: ctx.weather,
     }, result),
-    itemIds: items.map((p) => p.id),
+    itemIds,
     pieces: items.map((p) => p.name),
     items,
     image: items[0]?.image,
-  };
+  }, {
+    provenance,
+    grounding: {
+      recoveredItemIds: itemIds,
+      usedFallback: false,
+      allOwned: true,
+    },
+  });
 }
 
 /** Server-side conversation recall when the client sends no history. */
@@ -862,6 +894,24 @@ function recallTurns(userId, conversationId, limit = 10) {
 }
 
 /**
+ * Find the most recent turn in this conversation that produced an outfit,
+ * returning its itemIds plus the provenance/grounding metadata from that turn.
+ * Iterates newest-first so the latest look is always the one remixed.
+ */
+function findLastOutfitTurn(userId, conversationId) {
+  const log = db.conversations || [];
+  for (let i = log.length - 1; i >= 0; i--) {
+    const t = log[i];
+    if ((!userId || t.userId === userId) &&
+        (!conversationId || t.conversationId === conversationId) &&
+        t.itemIds && t.itemIds.length) {
+      return t;
+    }
+  }
+  return null;
+}
+
+/**
  * POST /ai/chat — the stylist turn.
  *
  * Order of operations:
@@ -873,11 +923,13 @@ function recallTurns(userId, conversationId, limit = 10) {
  */
 app.post('/ai/chat', optionalAuth, async (req, res) => {
   const t0 = Date.now();
+  const requestId = responseContract.newRequestId();
   const { message = '', history = [], conversationId } = req.body || {};
   if (!String(message).trim()) return res.status(400).json({ error: 'message is required.' });
 
   const user = req.user;
   const ctx = await stylistContext(user, message);
+  const detectedLang = language.detectLanguage(message);
   // `let`: reassigned to the provider name once the LLM turn succeeds. As a
   // `const` the assignment threw, and the catch below swallowed it — so the
   // reply read like an LLM answer while `source` stayed "rules" and the
@@ -886,35 +938,85 @@ app.post('/ai/chat', optionalAuth, async (req, res) => {
   let reply = '';
   let intent = 'chat';
   let followUp = null;
-  let constraints = { colors: [], styles: [], avoid: [] };
+  let constraints = responseContract.emptyConstraints();
   let occasion = ctx.occasion;
   let tokens;
   let memoryNotes = null;
+  let degraded = false;
+  let itemIdValidation = { requested: [], valid: [], dropped: [] };
 
   if (llm.status().configured) {
-    try {
-      const gen = await llm.stylistChat({
-        message,
-        // History: whatever the client sent, else what we remembered.
-        history: history.length ? history : recallTurns(user?.id, conversationId),
-        wardrobe: ctx.shortlist,
-        weather: ctx.weather,
-        styleProfile: ctx.styleProfile,
-        memoryDigest: memoryStore.digest(ctx.memory),
-        events: ctx.events,
-        imageUrl: req.body?.dataUrl || req.body?.imageUrl || null,
-      });
-      reply = gen.text;
-      intent = gen.intent;
-      followUp = gen.followUp;
-      constraints = gen.constraints;
-      memoryNotes = gen.memoryNotes;
-      occasion = gen.occasion || occasion;
-      tokens = gen.tokens;
-      source = llm.status().provider;
-      ctx.outfit = buildOutfitFromIds(gen.itemIds, ctx, { occasion });
-    } catch (e) {
-      console.error('[ai] chat failed, rules fallback:', e.message);
+    // Retry loop: re-prompt the LLM if it returns invalid/hallucinated itemIds
+    // Up to 2 attempts (initial + 1 retry) to avoid excessive latency.
+    let llmAttempts = 0;
+    const MAX_LLM_ATTEMPTS = 2;
+    let gen = null;
+
+    while (llmAttempts < MAX_LLM_ATTEMPTS) {
+      try {
+        gen = await llm.stylistChat({
+          message,
+          history: history.length ? history : recallTurns(user?.id, conversationId),
+          wardrobe: ctx.shortlist,
+          weather: ctx.weather,
+          styleProfile: ctx.styleProfile,
+          memoryDigest: memoryStore.digest(ctx.memory),
+          events: ctx.events,
+          imageUrl: req.body?.dataUrl || req.body?.imageUrl || null,
+        });
+
+        reply = gen.text;
+        intent = gen.intent;
+        followUp = gen.followUp;
+        constraints = gen.constraints;
+        memoryNotes = gen.memoryNotes;
+        occasion = gen.occasion || occasion;
+        tokens = gen.tokens;
+        source = llm.status().provider;
+
+        // Validate the model's chosen ids against the live wardrobe before they
+        // can become an outfit; `meta.itemIdValidation` records what was dropped.
+        itemIdValidation = responseContract.validateItemIds(gen.itemIds, ctx.wardrobe);
+
+        // Check if we got enough valid IDs to build an outfit
+        const hasEnoughValidIds = itemIdValidation.valid.length >= 2;
+        const allRequestedValid = itemIdValidation.dropped.length === 0;
+
+        if (hasEnoughValidIds && allRequestedValid) {
+          // Success: all IDs are valid and we have enough
+          ctx.outfit = buildOutfitFromIds(itemIdValidation.valid, ctx, {
+            occasion,
+            provenance: responseContract.PROVENANCE.llmIds,
+          });
+          break; // Exit retry loop
+        }
+
+        // Not enough valid IDs or some were dropped - prepare for retry if attempts remain
+        if (!hasEnoughValidIds) {
+          degraded = true;
+        }
+
+        llmAttempts++;
+        if (llmAttempts < MAX_LLM_ATTEMPTS) {
+          console.warn(`[ai] chat: LLM returned ${itemIdValidation.valid.length} valid IDs (dropped: ${itemIdValidation.dropped.join(', ')}), retrying... (attempt ${llmAttempts + 1}/${MAX_LLM_ATTEMPTS})`);
+          // Clear reply so we retry
+          reply = '';
+        } else {
+          // Last attempt failed - we'll fall through to rule engine or use partial valid IDs
+          console.warn(`[ai] chat: LLM retry exhausted, using ${itemIdValidation.valid.length} valid IDs`);
+          ctx.outfit = buildOutfitFromIds(itemIdValidation.valid, ctx, {
+            occasion,
+            provenance: responseContract.PROVENANCE.llmIds,
+          });
+          if (!ctx.outfit && (itemIdValidation.requested.length || itemIdValidation.dropped.length)) {
+            degraded = true;
+          }
+        }
+      } catch (e) {
+        console.error('[ai] chat failed, rules fallback:', e.message);
+        degraded = true;
+        break; // On error, fall through to rule engine
+      }
     }
   }
 
@@ -926,15 +1028,94 @@ app.post('/ai/chat', optionalAuth, async (req, res) => {
       weather: ctx.weather,
       styleProfile: ctx.styleProfile,
       memory: ctx.memory,
+      language: detectedLang,
     });
     reply = fallback.text;
     intent = fallback.intent || 'chat';
     occasion = fallback.occasion || occasion;
-    ctx.outfit = fallback.outfit || null;
+    const fallbackOutfit = fallback.outfit || null;
+    ctx.outfit = fallbackOutfit
+      ? responseContract.normalizeOutfit(fallbackOutfit, {
+        provenance: responseContract.PROVENANCE.ruleFallback,
+        occasion,
+        grounding: {
+          recoveredItemIds: fallbackOutfit.itemIds || [],
+          usedFallback: false,
+          allOwned: true,
+        },
+      })
+      : null;
+    if (fallbackOutfit) {
+      const ids = [...(fallbackOutfit.itemIds || [])];
+      itemIdValidation = { requested: ids, valid: ids, dropped: [] };
+    }
     if (!constraints.colors.length) constraints = fallback.constraints || constraints;
+    degraded = true;
   }
 
+  // Session 5 + 8 — contextual outfit editing and follow-up understanding.
+  // Route the turn by intent so follow-ups modify the previous look instead
+  // of building something new, single-item changes only swap one piece, and
+  // ambiguous references fall back to context rather than guessing.
+  const intentFromMessage = responseContract.inferIntent(message);
+  const previousTurn = findLastOutfitTurn(user?.id, conversationId);
+  let usedContext = false;
+
+  if (intentFromMessage === 'modify_item' && previousTurn?.itemIds?.length) {
+    // Single-item modification: swap just one piece, keep everything else.
+    const category = responseContract.detectSingleItemChange(message);
+    const itemToReplace = ai.detectItemReference(message, ctx.wardrobe, previousTurn.itemIds);
+    if (itemToReplace) {
+      const modResult = ai.modifySingleItem(ctx.wardrobe, {
+        itemIds: previousTurn.itemIds,
+        itemToReplace,
+        weather: ctx.weather,
+        styleProfile: ctx.styleProfile,
+        memory: ctx.memory,
+      });
+      if (modResult.outfit) {
+        ctx.outfit = modResult.outfit;
+        intent = 'modify_item';
+        usedContext = true;
+        followUp = responseContract.editFollowUp(detectedLang, category || 'item');
+      }
+    }
+  } else if (intentFromMessage === 'modify_outfit' && previousTurn?.itemIds?.length) {
+    // Full outfit remix: re-dress the previous look for a new context.
+    const grounding = previousTurn.grounding || {};
+    if (grounding.usedFallback !== true) {
+      const variant = ai.detectRemixVariant(message);
+      const remixResult = ai.remixOutfit(ctx.wardrobe, {
+        itemIds: previousTurn.itemIds,
+        variant,
+        weather: ctx.weather,
+        styleProfile: ctx.styleProfile,
+        memory: ctx.memory,
+      });
+      if (remixResult.outfit) {
+        ctx.outfit = remixResult.outfit;
+        intent = 'modify_outfit';
+        usedContext = true;
+        if (remixResult.regenerated) degraded = true;
+      }
+    }
+  } else if (intentFromMessage === 'ambiguous' && previousTurn?.itemIds?.length) {
+    // Ambiguous reference ("that", "it", "the one"): use the previous outfit
+    // as context but don't silently change it. Build a fresh look instead so
+    // the user can confirm or correct.
+    usedContext = true;
+    followUp = responseContract.ambiguousFollowUp(detectedLang);
+  }
+
+  // When no contextual routing applied, fall through to the default outfit
+  // (already built by the LLM or rule engine above). intent stays as set by
+  // the generator or falls back to 'chat'.
   const outfit = ctx.outfit || null;
+  const suggestions = responseContract.suggestionsForTurn({
+    intent,
+    hasOutfit: !!outfit,
+    lang: detectedLang,
+  });
 
   // Learning loop: mine the user's own words for durable preferences.
   if (learnTurn(ctx.memory, message, memoryNotes)) memoryStore.write(db, ctx.memory);
@@ -945,22 +1126,46 @@ app.post('/ai/chat', optionalAuth, async (req, res) => {
     conversationId: conversationId || null,
     at: now(), message, reply,
     itemIds: outfit?.itemIds || [],
+    provenance: outfit?.provenance || null,
+    grounding: outfit?.grounding || null,
+    intent: intent || null,
+    followUp: followUp || null,
+    usedContext,
   });
   if (db.conversations.length > 400) db.conversations = db.conversations.slice(-400);
   persist();
 
-  trackAi('chat', Date.now() - t0, { source, tokens });
+  const facets = responseContract.memoryFacets(ctx.memory);
+  const meta = responseContract.baseMeta({
+    requestId,
+    engine: source,
+    degraded,
+    itemIdValidation,
+    language: detectedLang,
+  });
+  trackAi('chat', Date.now() - t0, {
+    source,
+    tokens,
+    degraded,
+    dropped: itemIdValidation.dropped.length,
+  });
   res.json({
     reply,
     outfit,
     followUp,
+    suggestions,
     intent,
     occasion,
     constraints,
     weather: ctx.weather,
-    memory: { confidence: memoryStore.confidence(ctx.memory), digest: memoryStore.digest(ctx.memory) },
+    memory: {
+      confidence: memoryStore.confidence(ctx.memory),
+      digest: memoryStore.digest(ctx.memory),
+      facets,
+    },
     conversationId: conversationId || null,
     source,
+    meta,
   });
 });
 
@@ -978,6 +1183,8 @@ app.post('/ai/chat/stream', optionalAuth, async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
 
+  const detectedLang = language.detectLanguage(message);
+
   const send = (event, data) => {
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -989,7 +1196,43 @@ app.post('/ai/chat/stream', optionalAuth, async (req, res) => {
   }
 
   const t0 = Date.now();
+  const requestId = responseContract.newRequestId();
+  const generatedAt = new Date().toISOString();
   const user = req.user;
+
+  // Structured turn fields. Text still streams as plain prose; these are
+  // derived deterministically (no extra LLM call) and shipped on `done`.
+  let intent = responseContract.inferIntent(message);
+  let occasion = null;
+  let constraints = responseContract.emptyConstraints();
+  let followUp = null;
+  let itemIdValidation = { requested: [], valid: [], dropped: [] };
+  let degraded = !llm.status().configured;
+  let metaSent = false;
+
+  // `meta` is optional and carries no text. It is emitted once, immediately
+  // before the first delta (or before the synthetic fallback delta), so it can
+  // never leak into `done.reply == deltas.join()`.
+  const sendMeta = () => {
+    if (metaSent) return;
+    metaSent = true;
+    send('meta', {
+      intent,
+      occasion,
+      constraints,
+      conversationId: conversationId || null,
+      source,
+      meta: responseContract.baseMeta({
+        requestId,
+        generatedAt,
+        engine: source,
+        degraded,
+        itemIdValidation,
+        language: detectedLang,
+      }),
+    });
+  };
+
   let ctx;
   try {
     ctx = await stylistContext(user, message);
@@ -997,6 +1240,7 @@ app.post('/ai/chat/stream', optionalAuth, async (req, res) => {
     send('error', { error: e.message });
     return res.end();
   }
+  occasion = ctx.occasion;
 
   const aborter = new AbortController();
   res.on('close', () => aborter.abort());
@@ -1018,6 +1262,7 @@ app.post('/ai/chat/stream', optionalAuth, async (req, res) => {
       })) {
         if (aborter.signal.aborted) break;
         if (chunk.delta) {
+          if (!text) sendMeta();
           text += chunk.delta;
           send('delta', { delta: chunk.delta });
         }
@@ -1027,6 +1272,7 @@ app.post('/ai/chat/stream', optionalAuth, async (req, res) => {
       console.error('[ai] stream failed:', e.message);
       send('error', { error: e.message, recoverable: true });
       source = 'rules';
+      degraded = true;
     }
   }
 
@@ -1036,39 +1282,419 @@ app.post('/ai/chat/stream', optionalAuth, async (req, res) => {
     const fallback = ai.chatReply(message, {
       wardrobe: ctx.wardrobe, weather: ctx.weather,
       styleProfile: ctx.styleProfile, memory: ctx.memory,
+      language: detectedLang,
     });
     text = fallback.text;
     source = 'rules';
-    ctx.outfit = fallback.outfit || null;
+    intent = fallback.intent || intent;
+    occasion = fallback.occasion || occasion;
+    constraints = fallback.constraints || constraints;
+    degraded = true;
+    const fallbackOutfit = fallback.outfit || null;
+    ctx.outfit = fallbackOutfit
+      ? responseContract.normalizeOutfit(fallbackOutfit, {
+        provenance: responseContract.PROVENANCE.ruleFallback,
+        occasion,
+        grounding: {
+          recoveredItemIds: fallbackOutfit.itemIds || [],
+          usedFallback: false,
+          allOwned: true,
+        },
+      })
+      : null;
+    if (fallbackOutfit) {
+      const ids = [...(fallbackOutfit.itemIds || [])];
+      itemIdValidation = { requested: ids, valid: ids, dropped: [] };
+    }
+    sendMeta();
     send('delta', { delta: text, synthetic: true });
   } else {
     // No structured id list on this path. Prefer the pieces the model actually
     // named; only fall back to generating a look when it named fewer than two.
-    const named = buildOutfitFromIds(idsMentionedIn(text, ctx.wardrobe), ctx);
-    ctx.outfit = named || ai.generateOutfits(ctx.wardrobe, {
-      occasion: ctx.occasion, weather: ctx.weather,
-      styleProfile: ctx.styleProfile, memory: ctx.memory, count: 1,
-    })[0] || null;
+    // A generated fallback is marked, never disguised as grounded in the prose.
+    const mentioned = idsMentionedIn(text, ctx.wardrobe);
+    itemIdValidation = responseContract.validateItemIds(mentioned, ctx.wardrobe);
+
+    // Log validation results for hallucination monitoring
+    if (itemIdValidation.dropped.length > 0) {
+      console.warn(`[ai] stream: LLM mentioned ${mentioned.length} items, ${itemIdValidation.dropped.length} invalid/hallucinated (dropped: ${itemIdValidation.dropped.join(', ')}), ${itemIdValidation.valid.length} valid`);
+    }
+
+    const named = buildOutfitFromIds(itemIdValidation.valid, ctx, {
+      provenance: responseContract.PROVENANCE.recovered,
+    });
+    if (named) {
+      ctx.outfit = named;
+      // If we had dropped items, mark as degraded since the prose may reference them
+      if (itemIdValidation.dropped.length > 0) {
+        degraded = true;
+      }
+    } else {
+      const generated = ai.generateOutfits(ctx.wardrobe, {
+        occasion: ctx.occasion, weather: ctx.weather,
+        styleProfile: ctx.styleProfile, memory: ctx.memory, count: 1,
+      })[0] || null;
+      ctx.outfit = generated
+        ? responseContract.normalizeOutfit(generated, {
+          provenance: responseContract.PROVENANCE.generatedFallback,
+          grounding: {
+            recoveredItemIds: itemIdValidation.valid,
+            usedFallback: true,
+            allOwned: true,
+          },
+        })
+        : null;
+      degraded = true;
+    }
+  }
+
+  // Session 5 + 8 — contextual outfit editing and follow-up understanding.
+  // Route the turn by intent so follow-ups modify the previous look instead
+  // of building something new, single-item changes only swap one piece, and
+  // ambiguous references fall back to context rather than guessing.
+  const intentFromMessage = responseContract.inferIntent(message);
+  const previousTurn = findLastOutfitTurn(user?.id, conversationId);
+  let usedContext = false;
+
+  if (intentFromMessage === 'modify_item' && previousTurn?.itemIds?.length) {
+    // Single-item modification: swap just one piece, keep everything else.
+    const category = responseContract.detectSingleItemChange(message);
+    const itemToReplace = ai.detectItemReference(message, ctx.wardrobe, previousTurn.itemIds);
+    if (itemToReplace) {
+      const modResult = ai.modifySingleItem(ctx.wardrobe, {
+        itemIds: previousTurn.itemIds,
+        itemToReplace,
+        weather: ctx.weather,
+        styleProfile: ctx.styleProfile,
+        memory: ctx.memory,
+      });
+      if (modResult.outfit) {
+        ctx.outfit = modResult.outfit;
+        intent = 'modify_item';
+        usedContext = true;
+        followUp = responseContract.editFollowUp(detectedLang, category || 'item');
+      }
+    }
+  } else if (intentFromMessage === 'modify_outfit' && previousTurn?.itemIds?.length) {
+    // Full outfit remix: re-dress the previous look for a new context.
+    const grounding = previousTurn.grounding || {};
+    if (grounding.usedFallback !== true) {
+      const variant = ai.detectRemixVariant(message);
+      const remixResult = ai.remixOutfit(ctx.wardrobe, {
+        itemIds: previousTurn.itemIds,
+        variant,
+        weather: ctx.weather,
+        styleProfile: ctx.styleProfile,
+        memory: ctx.memory,
+      });
+      if (remixResult.outfit) {
+        ctx.outfit = remixResult.outfit;
+        intent = 'modify_outfit';
+        usedContext = true;
+        if (remixResult.regenerated) degraded = true;
+      }
+    }
+  } else if (intentFromMessage === 'ambiguous' && previousTurn?.itemIds?.length) {
+    // Ambiguous reference ("that", "it", "the one"): use the previous outfit
+    // as context but don't silently change it. Build a fresh look instead so
+    // the user can confirm or correct.
+    usedContext = true;
+    followUp = responseContract.ambiguousFollowUp(detectedLang);
   }
 
   const outfit = ctx.outfit || null;
+  const suggestions = responseContract.suggestionsForTurn({
+    intent,
+    hasOutfit: !!outfit,
+    lang: detectedLang,
+  });
+
   // The streaming turn is the one the app actually uses, so it learns too.
   if (learnTurn(ctx.memory, message, null)) memoryStore.write(db, ctx.memory);
   db.conversations.push({
     id: store.uid('t'), userId: user?.id || null,
     conversationId: conversationId || null, at: now(), message, reply: text,
     itemIds: outfit?.itemIds || [],
+    provenance: outfit?.provenance || null,
+    grounding: outfit?.grounding || null,
+    intent: intent || null,
+    followUp: followUp || null,
+    usedContext,
   });
   if (db.conversations.length > 400) db.conversations = db.conversations.slice(-400);
   persist();
-  trackAi('chat/stream', Date.now() - t0, { source, tokens });
+
+  const facets = responseContract.memoryFacets(ctx.memory);
+  const meta = responseContract.baseMeta({
+    requestId,
+    generatedAt,
+    engine: source,
+    degraded,
+    itemIdValidation,
+    language: detectedLang,
+  });
+  trackAi('chat/stream', Date.now() - t0, {
+    source,
+    tokens,
+    degraded,
+    dropped: itemIdValidation.dropped.length,
+  });
 
   send('done', {
     reply: text,
+    intent,
+    occasion,
+    followUp,
+    suggestions,
+    constraints,
+    conversationId: conversationId || null,
     outfit,
     weather: ctx.weather,
-    memory: { confidence: memoryStore.confidence(ctx.memory), digest: memoryStore.digest(ctx.memory) },
+    memory: {
+      confidence: memoryStore.confidence(ctx.memory),
+      digest: memoryStore.digest(ctx.memory),
+      facets,
+    },
     source,
+    meta,
+  });
+  res.end();
+});
+
+/**
+ * POST /ai/critique — Fashion Critic outfit evaluation (non-stream).
+ *
+ * Accepts: { message, outfit?: { itemIds?: string[] }, history?, conversationId? }
+ * Returns: { text, score, strengths, weaknesses, suggestions, itemIds,
+ *   occasion, source, meta } — a structured evaluation, not an outfit build.
+ */
+app.post('/ai/critique', optionalAuth, async (req, res) => {
+  const t0 = Date.now();
+  const { message = '', history = [], conversationId, outfit } = req.body || {};
+  if (!String(message).trim()) return res.status(400).json({ error: 'message is required.' });
+
+  const user = req.user;
+  const ctx = await stylistContext(user, message);
+  const detectedLang = language.detectLanguage(message);
+  let source = 'rules';
+  let text = '';
+  let score = null;
+  let strengths = [];
+  let weaknesses = [];
+  let suggestions = [];
+  let itemIds = [];
+  let occasion = ctx.occasion;
+  let degraded = false;
+  let itemIdValidation = { requested: [], valid: [], dropped: [] };
+
+  const evalItemIds = (outfit?.itemIds && outfit.itemIds.length)
+    ? outfit.itemIds
+    : (itemIdValidation.valid && itemIdValidation.valid.length) ? itemIdValidation.valid : [];
+
+  if (llm.status().configured) {
+    try {
+      source = llm.status().provider;
+      const gen = await llm.criticChat({
+        message,
+        history: history.length ? history : recallTurns(user?.id, conversationId),
+        wardrobe: ctx.shortlist,
+        weather: ctx.weather,
+        styleProfile: ctx.styleProfile,
+        memoryDigest: memoryStore.digest(ctx.memory),
+        events: ctx.events,
+      });
+
+      text = gen.text;
+      score = gen.score;
+      strengths = gen.strengths;
+      weaknesses = gen.weaknesses;
+      suggestions = gen.suggestions;
+      itemIds = gen.itemIds;
+      occasion = gen.occasion || occasion;
+      source = llm.status().provider;
+
+      if (itemIds.length) {
+        itemIdValidation = responseContract.validateItemIds(itemIds, ctx.wardrobe);
+      } else {
+        degraded = true;
+      }
+    } catch (e) {
+      console.error('[ai] critique failed:', e.message);
+      source = 'rules';
+      degraded = true;
+    }
+  }
+
+  if (!text.trim()) {
+    // Rule-based fallback evaluation.
+    const ids = evalItemIds.length ? evalItemIds : (ctx.outfit?.itemIds || []);
+    const wardrobeItems = (ctx.wardrobe || []).filter((i) => !i.archived);
+    const evalItems = wardrobeItems.filter((i) => ids.includes(i.id));
+    const scored = evalItems.length ? scoring.scoreOutfit(evalItems, {
+      occasion, weather: ctx.weather, styleProfile: ctx.styleProfile, memory: ctx.memory,
+    }) : null;
+    text = scored
+      ? `This look scores ${scored.match}%. ${scoring.explain(evalItems, { occasion, weather: ctx.weather }, scored)}`
+      : 'Add items to your wardrobe so I can evaluate an outfit.';
+    score = scored ? scored.match : null;
+    source = 'rules';
+    degraded = true;
+    itemIds = ids;
+    itemIdValidation = { requested: ids, valid: ids, dropped: [] };
+  }
+
+  const facets = responseContract.memoryFacets(ctx.memory);
+  const meta = responseContract.baseMeta({
+    requestId: store.uid('r'),
+    generatedAt: new Date(t0).toISOString(),
+    engine: source,
+    degraded,
+    itemIdValidation,
+    language: detectedLang,
+  });
+
+  trackAi('critique', Date.now() - t0, { source, degraded });
+
+  res.json({
+    text,
+    score,
+    strengths,
+    weaknesses,
+    suggestions,
+    itemIds,
+    occasion,
+    source,
+    meta,
+  });
+});
+
+/**
+ * POST /ai/critique/stream — Fashion Critic outfit evaluation (streaming SSE).
+ *
+ * Same input as POST /ai/critique, but streams the prose evaluation token by
+ * token and finishes with a `done` event carrying the structured evaluation.
+ */
+app.post('/ai/critique/stream', optionalAuth, async (req, res) => {
+  const t0 = Date.now();
+  const { message = '', history = [], conversationId, outfit } = req.body || {};
+  if (!String(message).trim()) {
+    res.status(400).json({ error: 'message is required.' });
+    return res.end();
+  }
+
+  const detectedLang = language.detectLanguage(message);
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  const send = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+  const sendMeta = () => {
+    send('meta', {
+      requestId,
+      generatedAt: new Date(t0).toISOString(),
+      engine: 'rules',
+      degraded: false,
+      language: detectedLang,
+    });
+  };
+
+  let requestId;
+  let ctx;
+  const reqUser = req.user;
+  try {
+    ctx = await stylistContext(reqUser, message);
+    requestId = store.uid('r');
+  } catch (e) {
+    send('error', { error: e.message });
+    return res.end();
+  }
+  const occasion = ctx.occasion;
+
+  const aborter = new AbortController();
+  res.on('close', () => aborter.abort());
+
+  let text = '';
+  let source = 'rules';
+  let score = null;
+  let strengths = [];
+  let weaknesses = [];
+  let suggestions = [];
+  let itemIds = [];
+  let degraded = false;
+
+  if (llm.status().configured) {
+    try {
+      source = llm.status().provider;
+      for await (const chunk of llm.streamCritic({
+        message,
+        history: history.length ? history : recallTurns(reqUser?.id, conversationId),
+        wardrobe: ctx.shortlist,
+        weather: ctx.weather,
+        styleProfile: ctx.styleProfile,
+        memoryDigest: memoryStore.digest(ctx.memory),
+      })) {
+        if (aborter.signal.aborted) break;
+        if (chunk.delta) {
+          if (!text) sendMeta();
+          text += chunk.delta;
+          send('delta', { delta: chunk.delta });
+        }
+        if (chunk.done) {
+          score = null; // stream returns prose only; no structured fields
+          source = llm.status().provider;
+        }
+      }
+    } catch (e) {
+      console.error('[ai] critique/stream failed:', e.message);
+      send('error', { error: e.message, recoverable: true });
+      source = 'rules';
+      degraded = true;
+    }
+  }
+
+  if (!text.trim()) {
+    const fallback = ai.chatReply(message, {
+      wardrobe: ctx.wardrobe, weather: ctx.weather,
+      styleProfile: ctx.styleProfile, memory: ctx.memory,
+    });
+    text = fallback.text;
+    source = 'rules';
+    degraded = true;
+    const scored = fallback.outfit ? scoring.scoreOutfit(fallback.outfit.items || [], {
+      occasion, weather: ctx.weather, styleProfile: ctx.styleProfile, memory: ctx.memory,
+    }) : null;
+    score = scored ? scored.match : null;
+    itemIds = fallback.outfit?.itemIds || [];
+    sendMeta();
+    send('delta', { delta: text, synthetic: true });
+  }
+
+  const facets = responseContract.memoryFacets(ctx.memory);
+  const meta = responseContract.baseMeta({
+    requestId,
+    generatedAt: new Date(t0).toISOString(),
+    engine: source,
+    degraded,
+    itemIdValidation: { requested: itemIds, valid: itemIds, dropped: [] },
+    language: detectedLang,
+  });
+
+  send('done', {
+    reply: text,
+    score,
+    strengths,
+    weaknesses,
+    suggestions,
+    itemIds,
+    occasion,
+    source,
+    meta,
   });
   res.end();
 });
@@ -1133,26 +1759,35 @@ app.post('/ai/match-outfit', optionalAuth, (req, res) => {
     // Score the resulting look so the user sees one consistent number.
     if (result.items.length >= 2) {
       const memory = memoryStore.read(db, req.user?.id);
+      const occasion = result.reference.occasion || 'casual';
       const scored = scoring.scoreOutfit(result.items, {
-        occasion: result.reference.occasion || 'casual',
+        occasion,
         weather: req.body?.weather || currentWeather(),
         styleProfile: req.user?.styleProfile,
         memory,
       });
-      result.outfit = {
+      result.outfit = responseContract.normalizeOutfit({
         id: `match-${Date.now()}`,
         name: result.reference.title,
+        occasion,
         match: scored.match,
         breakdown: scored.breakdown,
         explanation: scoring.explain(result.items, {
-          occasion: result.reference.occasion || 'casual',
+          occasion,
           weather: req.body?.weather || currentWeather(),
         }, scored),
         itemIds: result.itemIds,
         pieces: result.items.map((i) => i.name),
         items: result.items,
         image: result.items[0]?.image,
-      };
+      }, {
+        provenance: responseContract.PROVENANCE.match,
+        grounding: {
+          recoveredItemIds: result.itemIds || [],
+          usedFallback: false,
+          allOwned: true,
+        },
+      });
     }
 
     trackAi('match-outfit', Date.now() - t0, { source, tokens });
@@ -1218,6 +1853,143 @@ app.delete('/ai/conversations', optionalAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+/** GET /ai/preferences — view all learned style preferences for the current user. */
+app.get('/ai/preferences', optionalAuth, (req, res) => {
+  const memory = memoryStore.read(db, req.user?.id);
+  res.json({
+    userId: req.user?.id || null,
+    colors: memory.colors || {},
+    styles: memory.styles || {},
+    fabrics: memory.fabrics || {},
+    occasions: memory.occasions || {},
+    avoid: memory.avoid || [],
+    facts: memory.facts || [],
+    itemRatings: memory.itemRatings || {},
+    confidence: memoryStore.confidence(memory),
+    totals: memory.totals || { ratings: 0, chats: 0 },
+    updatedAt: memory.updatedAt || null,
+  });
+});
+
+/** PATCH /ai/preferences — update individual learned preferences. */
+app.patch('/ai/preferences', optionalAuth, (req, res) => {
+  const memory = memoryStore.read(db, req.user?.id);
+  const b = req.body || {};
+  let changed = false;
+
+  // Single colour preference: { color: 'navy', value: 0.8 }
+  if (b.color !== undefined && b.value !== undefined) {
+    const key = String(b.color || '').trim().toLowerCase();
+    const num = Number(b.value);
+    if (Number.isFinite(num)) {
+      memory.colors[key] = Math.min(0.98, Math.max(0.02, num));
+      changed = true;
+    }
+  }
+
+  // Single style preference: { style: 'casual', value: 0.7 }
+  if (b.style !== undefined && b.value !== undefined) {
+    const key = String(b.style || '').trim().toLowerCase();
+    const num = Number(b.value);
+    if (Number.isFinite(num)) {
+      memory.styles[key] = Math.min(0.98, Math.max(0.02, num));
+      changed = true;
+    }
+  }
+
+  // Single fabric preference: { fabric: 'cotton', value: 0.6 }
+  if (b.fabric !== undefined && b.value !== undefined) {
+    const key = String(b.fabric || '').trim().toLowerCase();
+    const num = Number(b.value);
+    if (Number.isFinite(num)) {
+      memory.fabrics[key] = Math.min(0.98, Math.max(0.02, num));
+      changed = true;
+    }
+  }
+
+  // Formality lean: { formality: 'formal' | 'casual' } shifts the occasions map
+  if (b.formality !== undefined) {
+    const f = String(b.formality).toLowerCase();
+    const current = typeof memory.occasions.formal === 'number' ? memory.occasions.formal : 0.5;
+    const step = 0.05;
+    if (f === 'formal' || f === 'dressier') {
+      memory.occasions.formal = Math.min(0.98, Math.max(0.02, current + step));
+    } else if (f === 'casual' || f === 'relaxed') {
+      memory.occasions.formal = Math.min(0.98, Math.max(0.02, current - step));
+    } else {
+      return res.status(400).json({ error: "formality must be 'formal' or 'casual'." });
+    }
+    changed = true;
+  }
+
+  // Add to avoid list: { avoid: 'sneakers' }
+  if (b.avoid && typeof b.avoid === 'string') {
+    const phrase = b.avoid.trim();
+    if (phrase.length >= 3 && !memory.avoid.includes(phrase)) {
+      memory.avoid.unshift(phrase);
+      memory.avoid = memory.avoid.slice(0, 10);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    memoryStore.write(db, memory);
+    persist();
+  }
+  res.json({ ok: true, changed, preferences: {
+    colors: memory.colors || {},
+    styles: memory.styles || {},
+    fabrics: memory.fabrics || {},
+    occasions: memory.occasions || {},
+    avoid: memory.avoid || [],
+    confidence: memoryStore.confidence(memory),
+  }});
+});
+
+/** DELETE /ai/preferences/reset — clear all learned preferences for the current user. */
+app.delete('/ai/preferences/reset', optionalAuth, (req, res) => {
+  const userId = req.user?.id;
+  const idx = (db.styleMemories || []).findIndex((m) => m.userId === userId);
+  if (idx >= 0) {
+    db.styleMemories.splice(idx, 1);
+    persist();
+  }
+  res.json({ ok: true, reset: true });
+});
+
+/** POST /ai/preferences/avoid — add an item to the absolute avoid list. */
+app.post('/ai/preferences/avoid', optionalAuth, (req, res) => {
+  const memory = memoryStore.read(db, req.user?.id);
+  const { avoid } = req.body || {};
+  if (!avoid || typeof avoid !== 'string') {
+    return res.status(400).json({ error: 'avoid is required and must be a string.' });
+  }
+  const phrase = avoid.trim();
+  if (phrase.length < 3) {
+    return res.status(400).json({ error: 'avoid phrase must be at least 3 characters.' });
+  }
+  if (!memory.avoid.includes(phrase)) {
+    memory.avoid.unshift(phrase);
+    memory.avoid = memory.avoid.slice(0, 10);
+    memoryStore.write(db, memory);
+    persist();
+  }
+  res.json({ ok: true, avoid: memory.avoid });
+});
+
+/** DELETE /ai/preferences/avoid/:phrase — remove an item from the absolute avoid list. */
+app.delete('/ai/preferences/avoid/:phrase', optionalAuth, (req, res) => {
+  const memory = memoryStore.read(db, req.user?.id);
+  const phrase = decodeURIComponent(req.params.phrase);
+  const before = memory.avoid.length;
+  memory.avoid = (memory.avoid || []).filter((p) => p !== phrase);
+  if (memory.avoid.length !== before) {
+    memoryStore.write(db, memory);
+    persist();
+  }
+  res.json({ ok: true, avoid: memory.avoid, removed: memory.avoid.length !== before });
+});
+
 /** GET /ai/capabilities — what the stylist can currently do, and why not. */
 app.get('/ai/capabilities', optionalAuth, async (req, res) => {
   const llmStatus = llm.status();
@@ -1278,7 +2050,7 @@ app.get('/outfits/recommended', optionalAuth, async (req, res) => {
     }
   };
   try {
-    const { outfits } = await engine.recommend(db.wardrobe, {
+    const { outfits, meta } = await engine.recommend(db.wardrobe, {
       occasion,
       weather,
       count: Number(count),
@@ -1286,14 +2058,14 @@ app.get('/outfits/recommended', optionalAuth, async (req, res) => {
       memory: memoryStore.read(db, req.user?.id),
     });
     remember(outfits);
-    return res.json({ outfits, weather, occasion });
+    return res.json({ outfits, weather, occasion, meta });
   } catch (e) {
     console.error('[recommend] engine failed, falling back to generateOutfits:', e.message);
     const outfits = ai.generateOutfits(db.wardrobe.filter((i) => !i.archived), {
       occasion, weather, styleProfile: req.user?.styleProfile || {}, count: Number(count),
     });
     remember(outfits);
-    res.json({ outfits, weather, occasion });
+    res.json({ outfits, weather, occasion, meta: { reason: 'fallback_generate_outfits', wardrobeGap: ai.wardrobeGap(db.wardrobe.filter((i) => !i.archived)) } });
   }
 });
 
@@ -1777,9 +2549,11 @@ app.get('/docs', (_req, res) => res.json({
     'DELETE /wardrobe/items/:id', 'POST /wardrobe/items/batch-upload', 'GET /wardrobe/collections',
     'POST /ai/analyze-clothing', 'POST /ai/generate-outfit', 'POST /ai/calculate-compatibility',
     'POST /ai/style-profile', 'POST /ai/wardrobe-gap', 'POST /ai/packing-list',
+    'POST /ai/wardrobe-assistant', 'POST /ai/shopping-assistant',
     'POST /ai/chat', 'POST /ai/chat/stream (SSE)', 'POST /ai/match-outfit',
-    'POST /ai/remix', 'GET /ai/style-dna', 'GET /ai/conversations',
-    'DELETE /ai/conversations', 'GET /ai/capabilities',
+    'POST /ai/remix', 'GET /ai/style-dna', 'GET /ai/preferences', 'PATCH /ai/preferences',
+    'DELETE /ai/preferences/reset', 'POST /ai/preferences/avoid', 'DELETE /ai/preferences/avoid/:phrase',
+    'GET /ai/conversations', 'DELETE /ai/conversations', 'GET /ai/capabilities',
     'GET /outfits/recommended', 'POST /outfits', 'GET /outfits/saved', 'GET /outfits/:id',
     'PATCH /outfits/:id', 'DELETE /outfits/:id', 'POST /outfits/:id/save', 'DELETE /outfits/:id/save',
     'POST /outfits/:id/favorite', 'POST /outfits/:id/feedback',

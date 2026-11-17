@@ -27,7 +27,9 @@ class _StylistScreenState extends State<StylistScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
   late final List<ChatMessage> _messages = [...MockData.stylistIntro];
+  List<String> _suggestions = MockData.stylistSuggestions;
   bool _thinking = false;
+  String? _lastUserText;
 
   @override
   void dispose() {
@@ -57,6 +59,7 @@ class _StylistScreenState extends State<StylistScreen> {
       // message (outfit card, follow-up) when `done` lands.
       _messages.add(ChatMessage(fromUser: false, text: ''));
       _thinking = true;
+      _lastUserText = text;
     });
     _input.clear();
     _scrollToEnd();
@@ -68,8 +71,12 @@ class _StylistScreenState extends State<StylistScreen> {
       text,
       onDelta: (partial) {
         if (!mounted) return;
-        setState(() => _messages[_messages.length - 1] =
-            ChatMessage(fromUser: false, text: partial));
+        setState(
+          () => _messages[_messages.length - 1] = ChatMessage(
+            fromUser: false,
+            text: partial,
+          ),
+        );
         _scrollToEnd();
       },
     );
@@ -80,7 +87,48 @@ class _StylistScreenState extends State<StylistScreen> {
         text: reply.text,
         outfit: reply.outfit,
         source: reply.source,
+        followUp: reply.followUp,
       );
+      if (reply.suggestions.isNotEmpty) _suggestions = reply.suggestions;
+      _thinking = false;
+    });
+    _scrollToEnd();
+  }
+
+  Future<void> _retry() async {
+    final text = _lastUserText;
+    if (_thinking || text == null) return;
+    setState(() {
+      if (_messages.isNotEmpty && !_messages.last.fromUser) {
+        _messages.removeLast();
+      }
+      _messages.add(ChatMessage(fromUser: false, text: ''));
+      _thinking = true;
+    });
+    _scrollToEnd();
+    final reply = await AppState.instance.streamStylist(
+      text,
+      onDelta: (partial) {
+        if (!mounted) return;
+        setState(
+          () => _messages[_messages.length - 1] = ChatMessage(
+            fromUser: false,
+            text: partial,
+          ),
+        );
+        _scrollToEnd();
+      },
+    );
+    if (!mounted) return;
+    setState(() {
+      _messages[_messages.length - 1] = ChatMessage(
+        fromUser: false,
+        text: reply.text,
+        outfit: reply.outfit,
+        source: reply.source,
+        followUp: reply.followUp,
+      );
+      if (reply.suggestions.isNotEmpty) _suggestions = reply.suggestions;
       _thinking = false;
     });
     _scrollToEnd();
@@ -100,12 +148,14 @@ class _StylistScreenState extends State<StylistScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      setState(() => _messages.add(
-            ChatMessage(
-              fromUser: false,
-              text: 'Could not open the gallery on this device.',
-            ),
-          ));
+      setState(
+        () => _messages.add(
+          ChatMessage(
+            fromUser: false,
+            text: 'Could not open the gallery on this device.',
+          ),
+        ),
+      );
       return;
     }
     if (file == null || !mounted) return;
@@ -130,7 +180,8 @@ class _StylistScreenState extends State<StylistScreen> {
       _messages[_messages.length - 1] = match == null
           ? ChatMessage(
               fromUser: false,
-              text: 'Style matching is unavailable right now. Check that the '
+              text:
+                  'Style matching is unavailable right now. Check that the '
                   'backend is running and try again.',
             )
           : ChatMessage(
@@ -192,7 +243,12 @@ class _StylistScreenState extends State<StylistScreen> {
                 final message = _messages[i];
                 return Padding(
                   padding: const EdgeInsets.only(bottom: Insets.md),
-                  child: _Bubble(message: message),
+                  child: _Bubble(
+                    message: message,
+                    onRetry: message.source == 'offline' && !_thinking
+                        ? _retry
+                        : null,
+                  ),
                 );
               },
             ),
@@ -202,6 +258,7 @@ class _StylistScreenState extends State<StylistScreen> {
             onSend: _send,
             onMatchPhoto: _matchPhoto,
             busy: _thinking,
+            suggestions: _suggestions,
           ),
         ],
       ),
@@ -262,9 +319,10 @@ class _StylistHeader extends StatelessWidget {
 }
 
 class _Bubble extends StatelessWidget {
-  const _Bubble({required this.message});
+  const _Bubble({required this.message, this.onRetry});
 
   final ChatMessage message;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -378,6 +436,13 @@ class _Bubble extends StatelessWidget {
                   style: AppText.caption.copyWith(fontSize: 10),
                 ),
               ),
+            if (!message.fromUser &&
+                message.source == 'offline' &&
+                onRetry != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 34, top: 6),
+                child: SwButton(label: 'Retry', expand: false, onTap: onRetry!),
+              ),
             if (message.match != null)
               Padding(
                 padding: const EdgeInsets.only(left: 34, top: Insets.sm),
@@ -385,8 +450,13 @@ class _Bubble extends StatelessWidget {
               ),
             if (message.outfit != null)
               Padding(
-                padding: const EdgeInsets.only(left: 34, top: Insets.sm),
-                child: _OutfitSuggestion(outfit: message.outfit!),
+                padding: const EdgeInsets.fromLTRB(68, 0, 16, 0),
+                child: _OutfitSuggestion(
+                  key: ValueKey(
+                    '${message.outfit!.id}-${message.outfit!.itemIds?.join(',')}-${message.outfit!.image}',
+                  ),
+                  outfit: message.outfit!,
+                ),
               ),
           ],
         ),
@@ -398,7 +468,7 @@ class _Bubble extends StatelessWidget {
 /// Compact outfit card embedded in the assistant reply, with the remix chips
 /// from `POST /ai/remix` wired underneath.
 class _OutfitSuggestion extends StatefulWidget {
-  const _OutfitSuggestion({required this.outfit});
+  const _OutfitSuggestion({super.key, required this.outfit});
 
   final Outfit outfit;
 
@@ -424,6 +494,7 @@ class _OutfitSuggestionState extends State<_OutfitSuggestion> {
 
   String? _busy;
   Outfit? _remixed;
+  bool _saving = false;
 
   bool get _remixable =>
       (widget.outfit.itemIds ?? const <String>[]).length >= 2;
@@ -438,10 +509,54 @@ class _OutfitSuggestionState extends State<_OutfitSuggestion> {
     if (!mounted) return;
     setState(() {
       _busy = null;
-      // A null result means the backend is unreachable; keep showing the
-      // original look rather than blanking the card.
       if (result != null) _remixed = result;
     });
+  }
+
+  Future<void> _save() async {
+    final outfit = _remixed ?? widget.outfit;
+    final ids = outfit.itemIds ?? const <String>[];
+    if (ids.isEmpty) {
+      _notify('This look has no items to save.');
+      return;
+    }
+    final factors = outfit.factors ?? const <MatchFactor>[];
+    final breakdown = factors.isNotEmpty
+        ? [for (final factor in factors) factor.toJson()]
+        : (outfit.breakdown == null || outfit.breakdown!.isEmpty
+              ? null
+              : [
+                  for (final row in outfit.breakdown!)
+                    {'label': row.label, 'value': row.value},
+                ]);
+    setState(() => _saving = true);
+    final result = await AppState.instance.createOutfit(
+      name: outfit.name,
+      itemIds: ids,
+      occasion: outfit.occasion,
+      compatibilityScore: outfit.compatibilityScore ?? outfit.match,
+      breakdown: breakdown,
+      explanation: outfit.explanation,
+      sourceOutfitId: outfit.id.isEmpty ? null : outfit.id,
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    switch (result) {
+      case SaveOutfitResult.saved:
+        _notify('Outfit saved.');
+      case SaveOutfitResult.duplicate:
+        _notify('Outfit already saved.');
+      case SaveOutfitResult.failed:
+        _notify(
+          AppState.instance.lastError ?? 'Backend offline — try again shortly.',
+        );
+    }
+  }
+
+  void _notify(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -489,6 +604,48 @@ class _OutfitSuggestionState extends State<_OutfitSuggestion> {
                     ),
                     const SizedBox(width: Insets.sm),
                     SwMatchBadge(match: outfit.displayMatch),
+                    const SizedBox(width: Insets.xs),
+                    ListenableBuilder(
+                      listenable: AppState.instance,
+                      builder: (context, _) {
+                        final ids = outfit.itemIds ?? const <String>[];
+                        final candidate = Outfit(
+                          id: '',
+                          name: outfit.name,
+                          image: outfit.image,
+                          occasion: outfit.occasion,
+                          match: outfit.match,
+                          pieces: outfit.pieces,
+                          itemIds: ids,
+                        );
+                        final saved = AppState.instance.savedOutfits.any(
+                          (savedOutfit) =>
+                              AppState.sameOutfit(savedOutfit, candidate),
+                        );
+                        return GestureDetector(
+                          onTap: _saving || ids.isEmpty ? null : _save,
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: saved
+                                  ? AppColors.tint
+                                  : Colors.transparent,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: AppColors.border),
+                            ),
+                            child: SwIconView(
+                              saved ? SwIcon.starFill : SwIcon.star,
+                              size: 16,
+                              color: saved
+                                  ? AppColors.primary
+                                  : AppColors.textSecondary,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -574,7 +731,7 @@ class _MatchResultCard extends StatelessWidget {
           Text(
             match.wearable
                 ? 'Wearable with what you own — ${match.exactCount} piece'
-                    '${match.exactCount == 1 ? '' : 's'} matched exactly.'
+                      '${match.exactCount == 1 ? '' : 's'} matched exactly.'
                 : 'Partial match — fill the gaps below to wear this look.',
             style: AppText.caption,
           ),
@@ -585,13 +742,18 @@ class _MatchResultCard extends StatelessWidget {
           ],
           if (match.gaps.isNotEmpty) ...[
             const SizedBox(height: Insets.xs),
-            Text('You are missing', style: AppText.bodyStrong.copyWith(fontSize: 13)),
+            Text(
+              'You are missing',
+              style: AppText.bodyStrong.copyWith(fontSize: 13),
+            ),
             const SizedBox(height: Insets.sm),
             for (final gap in match.gaps)
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
-                child: Text('• ${gap.slotLabel}: ${gap.missing}',
-                    style: AppText.caption),
+                child: Text(
+                  '• ${gap.slotLabel}: ${gap.missing}',
+                  style: AppText.caption,
+                ),
               ),
           ],
           if (match.outfit != null) ...[
@@ -761,12 +923,14 @@ class _Composer extends StatelessWidget {
     required this.controller,
     required this.onSend,
     required this.onMatchPhoto,
+    required this.suggestions,
     this.busy = false,
   });
 
   final TextEditingController controller;
   final void Function([String?]) onSend;
   final VoidCallback onMatchPhoto;
+  final List<String> suggestions;
   final bool busy;
 
   @override
@@ -793,10 +957,10 @@ class _Composer extends StatelessWidget {
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   physics: const BouncingScrollPhysics(),
-                  itemCount: MockData.stylistSuggestions.length,
+                  itemCount: suggestions.length,
                   separatorBuilder: (_, _) => const SizedBox(width: Insets.sm),
                   itemBuilder: (context, i) {
-                    final label = MockData.stylistSuggestions[i];
+                    final label = suggestions[i];
                     return SwChip(
                       label: label,
                       dense: true,
