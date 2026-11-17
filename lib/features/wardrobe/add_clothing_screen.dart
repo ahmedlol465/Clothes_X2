@@ -646,20 +646,46 @@ class _TagGrid extends StatelessWidget {
         const gap = Insets.md;
         final width = (constraints.maxWidth - gap) / 2;
 
+        final children = <Widget>[
+          for (final label in _tagFields.keys)
+            SizedBox(
+              width: width,
+              child: _TagCell(
+                label: label,
+                value: _tagValue(photo.analysis, label),
+                onSaved: (v) => onChanged(label, v),
+              ),
+            ),
+          const SizedBox(height: Insets.lg),
+          if (photo.analysis['confidence'] != null)
+            _AnalysisFootnote(
+              label: 'AI confidence',
+              value: '${((photo.analysis['confidence'] as num) * 100).round()}% of the detected attributes agree.',
+            ),
+        ];
+        final uncertain = photo.analysis['uncertainAttributes'];
+        if (uncertain is List && uncertain.isNotEmpty) {
+          children.add(
+            _AnalysisFootnote(
+              label: 'Verify these tags',
+              value: uncertain.whereType<String>().join(', '),
+            ),
+          );
+        }
+        if (photo.source != 'clothing-vision' && photo.source != 'clothing-vision+gemini') {
+          children.add(
+            _AnalysisFootnote(
+              label: 'Analysis source',
+              value: photo.source == 'filename'
+                  ? 'File-name guess (unverified)'
+                  : 'Offline heuristic',
+            ),
+          );
+        }
         return Wrap(
           spacing: gap,
           runSpacing: gap,
-          children: [
-            for (final label in _tagFields.keys)
-              SizedBox(
-                width: width,
-                child: _TagCell(
-                  label: label,
-                  value: _tagValue(photo.analysis, label),
-                  onSaved: (v) => onChanged(label, v),
-                ),
-              ),
-          ],
+          children: children,
         );
       },
     );
@@ -741,6 +767,34 @@ class _TagCell extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Small info line under the tag grid reporting what the AI could (and could
+/// not) confidently detect.
+class _AnalysisFootnote extends StatelessWidget {
+  const _AnalysisFootnote({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwIconView(SwIcon.circleInfo, size: 16, color: AppColors.textTertiary),
+        const SizedBox(width: Insets.sm),
+        Expanded(
+          child: Text(
+            '$label: $value',
+            style: AppText.caption,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }

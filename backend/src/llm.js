@@ -24,6 +24,7 @@
 'use strict';
 
 const weatherService = require('./weather');
+const language = require('./language');
 
 const TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) || 25000;
 
@@ -280,6 +281,7 @@ const STYLIST_SYSTEM =
   'wardrobe intimately. You are opinionated but never condescending.\n' +
   'Rules:\n' +
   '- Ground every recommendation ONLY in the catalog ids you are given. Never invent an item.\n' +
+  '- You MUST ONLY use item IDs that appear in the WARDROBE CATALOG below. Any ID not listed is a hallucination and will be rejected.\n' +
   '- Use the conversation history and the learned preferences to stay consistent ' +
   'across turns: remember what they already wore, rejected or liked.\n' +
   '- Reference the actual weather and the actual occasion.\n' +
@@ -298,12 +300,14 @@ const STYLIST_SYSTEM =
  * Wardrobe-aware stylist reply with full conversational memory.
  *
  * @returns {{text, intent, occasion, itemIds, constraints, followUp,
- *            memoryNotes, tokens}}
+ *            memoryNotes, tokens, language}}
  */
 async function stylistChat({
   message, history = [], wardrobe = [], weather, styleProfile = {},
   memoryDigest = '', events = [], imageUrl = null,
 }) {
+  const detectedLang = language.detectLanguage(message);
+  const langPrompt = language.getLanguagePrompt(detectedLang);
   const catalog = catalogLines(wardrobe) || '(the wardrobe is empty — tell the user to add items)';
   const priorTurns = recentTurns(history);
   const agenda = (Array.isArray(events) ? events : []).slice(0, 3)
@@ -322,7 +326,7 @@ async function stylistChat({
   if (imageUrl) userParts.push('The user attached a photo. Describe it briefly inside "text" and pick catalog items that recreate it.');
 
   const { text, tokens } = await complete({
-    system: STYLIST_SYSTEM,
+    system: STYLIST_SYSTEM + langPrompt,
     user: userParts.join('\n\n'),
     maxTokens: 500,
     temperature: 0.75,
@@ -344,6 +348,7 @@ async function stylistChat({
       followUp: parsed.followUp ? String(parsed.followUp) : null,
       memoryNotes: parsed.memoryNotes ? String(parsed.memoryNotes).slice(0, 200) : null,
       tokens,
+      language: detectedLang,
     };
   }
 
@@ -352,6 +357,204 @@ async function stylistChat({
     text: text.replace(/```json?|```/g, '').trim(),
     intent: 'chat', occasion: null, itemIds: [], constraints: { colors: [], styles: [], avoid: [] },
     followUp: null, memoryNotes: null, tokens,
+    language: detectedLang,
+  };
+}
+
+// ------------------------------------------------------------------- fashion critic
+
+/** Fashion Critic: evaluates an outfit rather than building one. */
+const CRITIC_SYSTEM =
+  'You are SmartWardrobe Fashion Critic — honest, constructive, and specific.\n' +
+  'Your job is to EVALUATE an outfit the user already has or is considering, ' +
+  'not to build a new one. Be truthful: point out what works and what does not,\n' +
+  'but always suggest a concrete, achievable improvement using items the user actually owns.\n' +
+  'Rules:\n' +
+  '- Ground every observation ONLY in the catalog ids you are given. Never invent an item.\n' +
+  '- You MUST ONLY use item IDs that appear in the WARDROBE CATALOG below.\n' +
+  '- Evaluate across: color coordination, clothing compatibility, style consistency, ' +
+  'outfit balance, occasion fit, and weather appropriateness.\n' +
+  '- Name genuine strengths AND weaknesses. Do not just agree with the user.\n' +
+  '- Give 1-2 concrete improvement suggestions (swap one piece, adjust fit, etc.).\n' +
+  '- Be concise: 3-5 sentences of warm, specific feedback. No filler, no generic tips.\n' +
+  'Reply with ONLY one JSON object, no markdown, shaped exactly:\n' +
+  '{"text":"<the critique, 3-5 sentences>",' +
+  '"score":0-100,' +
+  '"strengths":["<what works>"],' +
+  '"weaknesses":["<what does not>"],' +
+  '"suggestions":["<concrete improvement>"],' +
+  '"itemIds":["<catalog ids in the evaluated outfit>"],' +
+  '"occasion":"<short label or null>"}';
+
+/**
+ * Wardrobe-aware outfit evaluation with full conversational memory.
+ *
+ * @returns {{text, score, strengths, weaknesses, suggestions, itemIds,
+ *            occasion, tokens, language}}
+ */
+async function criticChat({
+  message, history = [], wardrobe = [], weather, styleProfile = {},
+  memoryDigest = '', events = [], imageUrl = null,
+}) {
+  const detectedLang = language.detectLanguage(message);
+  const langPrompt = language.getLanguagePrompt(detectedLang);
+  const catalog = catalogLines(wardrobe) || '(the wardrobe is empty — tell the user to add items)';
+  const priorTurns = recentTurns(history);
+  const agenda = (Array.isArray(events) ? events : []).slice(0, 3)
+    .map((e) => `${e.title} (${e.date || 'soon'})`).join('; ');
+
+  const sections = [
+    `TODAY: ${weather?.summary || `${weather?.tempC ?? 24}°C, ${weather?.condition || 'clear'}`}`,
+    `STYLE PROFILE: ${JSON.stringify(styleProfile || {})}`,
+    memoryDigest ? `LEARNED PREFERENCES:\n${memoryDigest}` : '',
+    agenda ? `UPCOMING EVENTS: ${agenda}` : '',
+    priorTurns ? `CONVERSATION SO FAR:\n${priorTurns}` : '',
+    `WARDROBE CATALOG (id | name | category | color | style | formality | material | wear count):\n${catalog}`,
+  ].filter(Boolean).join('\n\n');
+
+  const userParts = [
+    `${sections}\n\nLATEST MESSAGE: ${message}`,
+    'Evaluate this outfit. Reply with ONLY one JSON object.',
+  ];
+  if (imageUrl) userParts.push('The user attached a photo. Describe it briefly inside "text" and evaluate it using catalog items that match.');
+
+  const { text, tokens } = await complete({
+    system: CRITIC_SYSTEM + langPrompt,
+    user: userParts.join('\n\n'),
+    maxTokens: 500,
+    temperature: 0.5,
+    json: true,
+  });
+
+  const parsed = parseJson(text);
+  if (parsed) {
+    return {
+      text: String(parsed.text || '').trim(),
+      score: typeof parsed.score === 'number' ? parsed.score : null,
+      strengths: Array.isArray(parsed.strengths) ? parsed.strengths.map(String).slice(0, 4) : [],
+      weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses.map(String).slice(0, 4) : [],
+      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.map(String).slice(0, 3) : [],
+      itemIds: Array.isArray(parsed.itemIds) ? parsed.itemIds.map(String).slice(0, 5) : [],
+      occasion: parsed.occasion ? String(parsed.occasion) : null,
+      tokens,
+      language: detectedLang,
+    };
+  }
+
+  // Model ignored the JSON instruction — fall back to prose.
+  return {
+    text: text.replace(/```json?|```/g, '').trim(),
+    score: null, strengths: [], weaknesses: [], suggestions: [], itemIds: [], occasion: null,
+    tokens,
+    language: detectedLang,
+  };
+}
+
+/**
+ * Stream a critic evaluation token by token.
+ *
+ * Yields `{ delta }` for each token and finishes with
+ * `{ done: true, text, tokens, language }`. Used by POST /ai/critique/stream.
+ */
+async function* streamCritic({
+  message, history = [], wardrobe = [], weather, styleProfile = {},
+  memoryDigest = '',
+}) {
+  const detectedLang = language.detectLanguage(message);
+  const langPrompt = language.getLanguagePrompt(detectedLang);
+  const p = assertProvider();
+  const catalog = catalogLines(wardrobe) || '(the wardrobe is empty)';
+  const priorTurns = recentTurns(history);
+  const system = CRITIC_SYSTEM.replace(
+    'Reply with ONLY one JSON object, no markdown, shaped exactly:\n' +
+    '{"text":"<the critique, 3-5 sentences>",' +
+    '"score":0-100,' +
+    '"strengths":["<what works>"],' +
+    '"weaknesses":["<what does not>"],' +
+    '"suggestions":["<concrete improvement>"],' +
+    '"itemIds":["<catalog ids in the evaluated outfit>"],' +
+    '"occasion":"<short label or null>"}',
+    'You are streaming. Emit ONLY the critique as plain prose — 3-5 warm, specific sentences. ' +
+    'No JSON, no markdown, no bullet points. Refer to garments by their NAME only; ' +
+    'never print catalog ids. Be honest but constructive. ' +
+    'Only mention garments that appear in the WARDROBE CATALOG.' + langPrompt,
+  );
+
+  const user = [
+    `TODAY: ${weather?.summary || 'unknown'}`,
+    memoryDigest ? `LEARNED PREFERENCES:\n${memoryDigest}` : '',
+    priorTurns ? `CONVERSATION SO FAR:\n${priorTurns}` : '',
+    `WARDROBE CATALOG (id | name | category | color | style | formality | material | wear count):\n${catalog}`,
+    `LATEST MESSAGE: ${message}`,
+  ].filter(Boolean).join('\n\n');
+
+  const res = await withModelRotation(p, {}, async (model) => {
+    const response = await fetch(`${p.base}/chat/completions`, {
+      method: 'POST',
+      headers: authHeaders(p),
+      body: JSON.stringify({
+        model,
+        temperature: 0.5,
+        max_tokens: 500,
+        stream: true,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS + 10000),
+    });
+    if (!response.ok || !response.body) {
+      const err = await response.json().catch(() => ({}));
+      const e = new Error(
+        err?.error?.message || `Stream HTTP ${response.status} (${p.name}/${model})`,
+      );
+      e.status = response.status;
+      throw e;
+    }
+    return response;
+  });
+
+  let full = '';
+  let usage = {};
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for await (const chunk of res.body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let split;
+    while ((split = buffer.indexOf('\n\n')) !== -1) {
+      const frame = buffer.slice(0, split);
+      buffer = buffer.slice(split + 2);
+      for (const line of frame.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let json;
+        try {
+          json = JSON.parse(payload);
+        } catch {
+          continue;
+        }
+        if (json.usage) usage = json.usage;
+        const delta = json.choices?.[0]?.delta?.content;
+        if (delta) {
+          full += delta;
+          yield { delta };
+        }
+      }
+    }
+  }
+
+  yield {
+    done: true,
+    text: full.trim(),
+    tokens: {
+      prompt: usage.prompt_tokens || 0,
+      completion: usage.completion_tokens || 0,
+    },
+    language: detectedLang,
   };
 }
 
@@ -363,11 +566,13 @@ function arr(v) {
  * Stream a stylist reply token by token.
  *
  * Yields `{ delta }` for each token and finishes with
- * `{ done: true, text, tokens }`. Used by POST /ai/chat/stream.
+ * `{ done: true, text, tokens, language }`. Used by POST /ai/chat/stream.
  *
- * @returns {AsyncGenerator<{delta?:string, done?:boolean, text?:string, tokens?:object}>}
+ * @returns {AsyncGenerator<{delta?:string, done?:boolean, text?:string, tokens?:object, language?:string}>}
  */
 async function* streamChat({ message, history = [], wardrobe = [], weather, styleProfile = {}, memoryDigest = '' }) {
+  const detectedLang = language.detectLanguage(message);
+  const langPrompt = language.getLanguagePrompt(detectedLang);
   const p = assertProvider();
   const catalog = catalogLines(wardrobe) || '(the wardrobe is empty)';
   const priorTurns = recentTurns(history);
@@ -382,7 +587,9 @@ async function* streamChat({ message, history = [], wardrobe = [], weather, styl
     '"memoryNotes":"<a durable preference learned from this message, or null>"}',
     'You are streaming. Emit ONLY the reply text as plain prose — 2-4 warm sentences. ' +
     'No JSON, no markdown, no bullet points. Refer to garments by their NAME only; ' +
-    'never print catalog ids, they are not for the reader.',
+    'never print catalog ids, they are not for the reader. ' +
+    'CRITICAL: Only mention garments that appear in the WARDROBE CATALOG. ' +
+    'Do not invent or hallucinate any item names or details.' + langPrompt,
   );
 
   const user = [
@@ -462,6 +669,7 @@ async function* streamChat({ message, history = [], wardrobe = [], weather, styl
       prompt: usage.prompt_tokens || 0,
       completion: usage.completion_tokens || 0,
     },
+    language: detectedLang,
   };
 }
 
@@ -575,6 +783,8 @@ module.exports = {
   parseJson,
   stylistChat,
   streamChat,
+  criticChat,
+  streamCritic,
   analyzeImage,
   describeOutfit,
   liveWeather,

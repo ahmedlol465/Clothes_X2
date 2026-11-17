@@ -119,6 +119,11 @@ class AppState extends ChangeNotifier {
   /// offer a retry instead of silently keeping stale or demo data on screen.
   String? recommendationsError;
 
+  /// Wardrobe gap analysis from `GET /outfits/recommended` meta: what the
+  /// wardrobe is missing, which occasions are uncovered, and what to add.
+  /// Null until the first successful recommendation response.
+  WardrobeGap? wardrobeGap;
+
   /// How many outfits Home requests in one call: the first one powers
   /// "Today's AI Selection", the whole list powers the recommendation rail.
   static const int _homeRecommendationCount = 4;
@@ -140,9 +145,7 @@ class AppState extends ChangeNotifier {
     try {
       final week = await api.weeklyPlan();
       if (week.isNotEmpty) {
-        planWeek = [
-          for (final j in week) Map<String, dynamic>.from(j as Map),
-        ];
+        planWeek = [for (final j in week) Map<String, dynamic>.from(j as Map)];
         notifyListeners();
       }
       _markOnline();
@@ -156,15 +159,14 @@ class AppState extends ChangeNotifier {
     for (final p in MockData.packingGroups)
       PackingEntry(name: p.name, image: p.image),
   ];
-  String packingMessage =
-      '7 distinct outfits can be created from these items.';
+  String packingMessage = '7 distinct outfits can be created from these items.';
 
-  Future<void> loadPacking({String destination = 'Istanbul', int days = 7}) async {
+  Future<void> loadPacking({
+    String destination = 'Istanbul',
+    int days = 7,
+  }) async {
     try {
-      final res = await api.travelPacking(
-        destination: destination,
-        days: days,
-      );
+      final res = await api.travelPacking(destination: destination, days: days);
       final items = (res['items'] as List?) ?? [];
       if (items.isNotEmpty) {
         packingItems = [
@@ -309,7 +311,9 @@ class AppState extends ChangeNotifier {
     try {
       final res = await api.login(email, password);
       final user = res['user'];
-      if (user is Map) _profile = UserProfile.fromJson(user.cast<String, dynamic>());
+      if (user is Map) {
+        _profile = UserProfile.fromJson(user.cast<String, dynamic>());
+      }
       await _persistToken('${res['accessToken'] ?? ''}');
       _markOnline();
       notifyListeners();
@@ -324,7 +328,9 @@ class AppState extends ChangeNotifier {
     try {
       final res = await api.register(name, email, password);
       final user = res['user'];
-      if (user is Map) _profile = UserProfile.fromJson(user.cast<String, dynamic>());
+      if (user is Map) {
+        _profile = UserProfile.fromJson(user.cast<String, dynamic>());
+      }
       await _persistToken('${res['accessToken'] ?? ''}');
       _markOnline();
       notifyListeners();
@@ -375,6 +381,7 @@ class AppState extends ChangeNotifier {
     shopPicks = [...MockData.shoppingPicks];
     styleDnaSummary = null;
     styleDnaConfidence = 0;
+    learnedPreferences = null;
     _conversationId = null;
     _chatHistory.clear();
     resetConversation();
@@ -522,8 +529,12 @@ class AppState extends ChangeNotifier {
       return null;
     }
   }
+
   // ------------------------------------------------------- wardrobe (§8.3)
-  Future<void> loadWardrobe({String search = '', String category = 'All'}) async {
+  Future<void> loadWardrobe({
+    String search = '',
+    String category = 'All',
+  }) async {
     wardrobeLoading = true;
     notifyListeners();
     try {
@@ -541,7 +552,8 @@ class AppState extends ChangeNotifier {
       final q = search.trim().toLowerCase();
       wardrobe = MockData.wardrobe.where((item) {
         final matchesFilter = category == 'All' || item.category == category;
-        final matchesQuery = q.isEmpty ||
+        final matchesQuery =
+            q.isEmpty ||
             item.name.toLowerCase().contains(q) ||
             item.color.toLowerCase().contains(q) ||
             item.style.toLowerCase().contains(q);
@@ -557,14 +569,14 @@ class AppState extends ChangeNotifier {
   /// the stored pixels. Returns the public URL + analysis + source.
   /// Used by Add Clothes so tags are real before the user hits Save.
   Future<({String url, Map<String, dynamic> analysis, String source})>
-      stagePhoto({
+  stagePhoto({
     required String filename,
     required List<int> bytes,
     required String mimeType,
   }) async {
-    final stored = await api.uploadWardrobePhotos(
-      [(filename: filename, bytes: bytes, mimeType: mimeType)],
-    );
+    final stored = await api.uploadWardrobePhotos([
+      (filename: filename, bytes: bytes, mimeType: mimeType),
+    ]);
     final url = '${stored.first['url'] ?? ''}';
     try {
       final res = await api.analyzePhoto(imageUrl: url, filename: filename);
@@ -615,6 +627,7 @@ class AppState extends ChangeNotifier {
     onProgress?.call(0, total, 'upload');
     final stored = await api.uploadWardrobePhotos(photos);
     final created = <ClothingItem>[];
+    final skipped = <String>[];
     for (var i = 0; i < stored.length; i++) {
       final file = stored[i];
       final url = '${file['url'] ?? ''}';
@@ -623,15 +636,16 @@ class AppState extends ChangeNotifier {
       Map<String, dynamic> a = const {};
       String source = 'heuristic';
       try {
-        final res = await api.analyzePhoto(
-          imageUrl: url,
-          filename: filename,
-        );
+        final res = await api.analyzePhoto(imageUrl: url, filename: filename);
         a = (res['analysis'] as Map?)?.cast<String, dynamic>() ?? {};
         source = '${res['source'] ?? 'heuristic'}';
       } on ApiException catch (e) {
         if (e.status == 422) {
-          throw ApiException(_notClothingMessage, status: 422);
+          // A bottle or chair is not a garment: skip it instead of aborting
+          // the whole import, and keep importing the rest of the batch.
+          skipped.add(filename);
+          onProgress?.call(i, total, 'save');
+          continue;
         }
         if (e.status != null) rethrow;
         // Unreachable backend → keep filename heuristics below.
@@ -653,15 +667,16 @@ class AppState extends ChangeNotifier {
       });
       created.add(
         ClothingItem.fromJson(
-          Map<String, dynamic>.from(
-            (itemRes['item'] as Map?) ?? itemRes,
-          ),
+          Map<String, dynamic>.from((itemRes['item'] as Map?) ?? itemRes),
         ),
       );
       onProgress?.call(i + 1, total, 'save');
     }
     _markOnline();
     await loadWardrobe();
+    if (created.isEmpty && skipped.isNotEmpty) {
+      throw ApiException(_notClothingMessage, status: 422);
+    }
     return created;
   }
 
@@ -784,7 +799,6 @@ class AppState extends ChangeNotifier {
   /// The rule is deliberately strict (all three fields, order-sensitive) so it
   /// can only ever under-merge: two genuinely different outfits are never
   /// collapsed into one.
-  @visibleForTesting
   static bool sameOutfit(Outfit a, Outfit b) {
     if (a.name.trim() != b.name.trim()) return false;
     if (a.occasion.trim().toLowerCase() != b.occasion.trim().toLowerCase()) {
@@ -947,15 +961,24 @@ class AppState extends ChangeNotifier {
     }
 
     try {
-      final outfits = await api.recommendedOutfits(
+      final res = await api.recommendedOutfits(
         occasion: occasion,
         tempC: ((weather?['tempC'] as num?)?.toDouble()) ?? 24,
         count: _homeRecommendationCount,
       );
+      final raw = res['outfits'] as List? ?? const [];
       recommendedOutfits = [
-        for (final j in outfits)
+        for (final j in raw)
           Outfit.fromJson(Map<String, dynamic>.from(j as Map)),
       ];
+      wardrobeGap = res['meta']?['wardrobeGap'] is Map
+          ? WardrobeGap.fromJson(
+              Map<String, dynamic>.from(res['meta']?['wardrobeGap']),
+            )
+          : null;
+      if (res['meta'] is Map) {
+        recommendationsError = null;
+      }
       if (recommendedOutfits.isNotEmpty) {
         todayOutfit = recommendedOutfits.first;
       }
@@ -1078,6 +1101,10 @@ class AppState extends ChangeNotifier {
   String? styleDnaSummary;
   double styleDnaConfidence = 0;
 
+  /// All learned style preferences for the current user, from `GET /ai/preferences`.
+  /// Null until [loadPreferences] succeeds.
+  LearnedPreferences? learnedPreferences;
+
   /// Start a fresh thread. Learned taste is kept server-side; only the
   /// conversation is reset.
   void resetConversation() {
@@ -1130,7 +1157,22 @@ class AppState extends ChangeNotifier {
   /// as [askStylist] once the `done` event lands. Falls back to the rule
   /// engine through the same endpoint, and to the bundled mock replies if the
   /// backend cannot be reached at all.
-  Future<({String text, Outfit? outfit, String source})> streamStylist(
+  Future<
+    ({
+      String text,
+      Outfit? outfit,
+      String source,
+      Map<String, dynamic>? outfitRaw,
+      String? followUp,
+      String? intent,
+      String? occasion,
+      Map<String, dynamic>? constraints,
+      Map<String, dynamic>? memoryFacets,
+      Map<String, dynamic>? meta,
+      List<String> suggestions,
+    })
+  >
+  streamStylist(
     String message, {
     required void Function(String partial) onDelta,
   }) async {
@@ -1160,21 +1202,72 @@ class AppState extends ChangeNotifier {
       final outfit = payload['outfit'] is Map
           ? Outfit.fromJson(Map<String, dynamic>.from(payload['outfit'] as Map))
           : null;
+      final outfitRaw = payload['outfit'] is Map
+          ? Map<String, dynamic>.from(payload['outfit'] as Map)
+          : null;
+      final followUp = payload['followUp'] is String
+          ? payload['followUp'] as String
+          : null;
+      final intent = payload['intent'] is String
+          ? payload['intent'] as String
+          : null;
+      final occasion = payload['occasion'] is String
+          ? payload['occasion'] as String
+          : null;
+      final constraints = payload['constraints'] is Map
+          ? Map<String, dynamic>.from(payload['constraints'] as Map)
+          : null;
+      final memory = payload['memory'];
+      final memoryFacets = memory is Map && memory['facets'] is Map
+          ? Map<String, dynamic>.from(memory['facets'] as Map)
+          : null;
+      final meta = payload['meta'] is Map
+          ? Map<String, dynamic>.from(payload['meta'] as Map)
+          : null;
+      final suggestions =
+          (payload['suggestions'] as List?)
+              ?.map((value) => '$value')
+              .where((value) => value.trim().isNotEmpty)
+              .toList() ??
+          const <String>[];
       if (finalText.isNotEmpty && finalText != text) onDelta(finalText);
       _recordTurn(message, finalText);
-      _applyMemory(payload['memory']);
+      _applyMemory(memory);
       _markOnline();
       return (
         text: finalText,
         outfit: outfit,
         source: '${payload['source'] ?? 'rules'}',
+        outfitRaw: outfitRaw,
+        followUp: followUp,
+        intent: intent,
+        occasion: occasion,
+        constraints: constraints,
+        memoryFacets: memoryFacets,
+        meta: meta,
+        suggestions: suggestions,
       );
     } catch (e) {
       _markOffline(e);
-      final text = _offlineReply(message);
+      final detail = '$e';
+      final text = detail.trim().isEmpty
+          ? 'Stylist is offline. Check that the backend is running, then try again.'
+          : 'Stylist is offline: ${detail.trim()}';
       _recordTurn(message, text);
       onDelta(text);
-      return (text: text, outfit: null, source: 'offline');
+      return (
+        text: text,
+        outfit: null,
+        source: 'offline',
+        outfitRaw: null,
+        followUp: null,
+        intent: null,
+        occasion: null,
+        constraints: null,
+        memoryFacets: null,
+        meta: null,
+        suggestions: const <String>[],
+      );
     }
   }
 
@@ -1229,8 +1322,7 @@ class AppState extends ChangeNotifier {
       if (dna is Map) {
         styleDnaSummary = _describeDna(Map<String, dynamic>.from(dna));
         styleDnaConfidence =
-            ((res['styleDna'] as Map?)?['confidence'] as num?)?.toDouble() ??
-                0;
+            ((res['styleDna'] as Map?)?['confidence'] as num?)?.toDouble() ?? 0;
         notifyListeners();
       }
     } catch (e) {
@@ -1238,16 +1330,73 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Load all learned style preferences (`GET /ai/preferences`).
+  Future<void> loadPreferences() async {
+    try {
+      final prefs = await api.preferences();
+      learnedPreferences = prefs;
+      notifyListeners();
+    } catch (e) {
+      _markOffline(e);
+    }
+  }
+
+  /// Update an individual learned preference (`PATCH /ai/preferences`).
+  Future<void> updatePreference(PreferenceUpdate update) async {
+    try {
+      final res = await api.updatePreferences(update);
+      if (res['changed'] == true) {
+        await loadPreferences();
+      }
+    } catch (e) {
+      _markOffline(e);
+    }
+  }
+
+  /// Reset all learned preferences for the current user (`DELETE /ai/preferences/reset`).
+  Future<void> resetPreferences() async {
+    try {
+      await api.resetPreferences();
+      learnedPreferences = null;
+      notifyListeners();
+    } catch (e) {
+      _markOffline(e);
+    }
+  }
+
+  /// Add an item to the absolute avoid list (`POST /ai/preferences/avoid`).
+  Future<void> addAvoidItem(String phrase) async {
+    try {
+      await api.addAvoid(phrase);
+      await loadPreferences();
+    } catch (e) {
+      _markOffline(e);
+    }
+  }
+
+  /// Remove an item from the absolute avoid list (`DELETE /ai/preferences/avoid/:phrase`).
+  Future<void> removeAvoidItem(String phrase) async {
+    try {
+      await api.removeAvoid(phrase);
+      await loadPreferences();
+    } catch (e) {
+      _markOffline(e);
+    }
+  }
+
   String _describeDna(Map<String, dynamic> digest) {
-    final parts = <String>[
-      for (final entry in [
-        ('Dislikes', digest['dislikes']),
-        ('Prefers', digest['prefers']),
-        ('Notes', digest['notes']),
-      ])
-        if (entry.$2 != null && '${entry.$2}'.trim().isNotEmpty)
-          '${entry.$1}: ${entry.$2}',
-    ];
+    final parts = <String>[];
+    for (final entry in [
+      ('Dislikes', digest['dislikes']),
+      ('Prefers', digest['prefers']),
+      ('Notes', digest['notes']),
+    ]) {
+      final value = entry.$2;
+      final text = value is List
+          ? value.map((v) => '$v'.trim()).where((v) => v.isNotEmpty).join(', ')
+          : '${value ?? ''}'.trim();
+      if (text.isNotEmpty) parts.add('${entry.$1}: $text');
+    }
     if (parts.isEmpty) return 'Still learning your taste — rate a few looks.';
     return parts.join(' · ');
   }
@@ -1262,9 +1411,16 @@ class AppState extends ChangeNotifier {
 
   void _applyMemory(Object? memory) {
     if (memory is! Map) return;
-    final digest = memory['digest'];
-    if (digest is Map) {
-      styleDnaSummary = _describeDna(Map<String, dynamic>.from(digest));
+    // Structured facets are the additive source; the legacy Map-shaped digest
+    // is still honoured for older servers.
+    final facets = memory['facets'];
+    if (facets is Map) {
+      styleDnaSummary = _describeDna(Map<String, dynamic>.from(facets));
+    } else {
+      final digest = memory['digest'];
+      if (digest is Map) {
+        styleDnaSummary = _describeDna(Map<String, dynamic>.from(digest));
+      }
     }
     styleDnaConfidence =
         (memory['confidence'] as num?)?.toDouble() ?? styleDnaConfidence;

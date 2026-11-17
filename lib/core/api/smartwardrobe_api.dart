@@ -1,6 +1,7 @@
 import 'api_client.dart';
 import 'api_config.dart';
 import 'dart:convert';
+import '../../data/models.dart';
 
 /// Typed wrapper over every backend module (§8 API Overview).
 /// Auth token is held by the underlying [ApiClient].
@@ -77,11 +78,9 @@ class SmartWardrobeApi {
     required List<int> bytes,
     required String mimeType,
   }) async {
-    final res = await _client.uploadPhotos(
-      '/users/me/avatar',
-      [(filename: filename, bytes: bytes, mimeType: mimeType)],
-      field: 'photo',
-    );
+    final res = await _client.uploadPhotos('/users/me/avatar', [
+      (filename: filename, bytes: bytes, mimeType: mimeType),
+    ], field: 'photo');
     if (res is! Map || res['user'] is! Map) {
       throw ApiException('Malformed upload response.', status: 500);
     }
@@ -109,14 +108,13 @@ class SmartWardrobeApi {
     String search = '',
     String category = 'All',
     String sort = 'recent',
-  }) async =>
-      Map<String, dynamic>.from(
-        await _client.get('/wardrobe/items', {
-          'search': search,
-          'category': category,
-          'sort': sort,
-        }),
-      );
+  }) async => Map<String, dynamic>.from(
+    await _client.get('/wardrobe/items', {
+      'search': search,
+      'category': category,
+      'sort': sort,
+    }),
+  );
 
   Future<Map<String, dynamic>> createWardrobeItem(
     Map<String, dynamic> item,
@@ -126,10 +124,9 @@ class SmartWardrobeApi {
   Future<Map<String, dynamic>> updateWardrobeItem(
     String id,
     Map<String, dynamic> patch,
-  ) async =>
-      Map<String, dynamic>.from(
-        await _client.patch('/wardrobe/items/$id', patch),
-      );
+  ) async => Map<String, dynamic>.from(
+    await _client.patch('/wardrobe/items/$id', patch),
+  );
 
   Future<void> deleteWardrobeItem(String id) async {
     await _client.delete('/wardrobe/items/$id');
@@ -142,9 +139,7 @@ class SmartWardrobeApi {
   ) async {
     final res = await _client.uploadPhotos('/wardrobe/upload', photos);
     final files = (res as Map)['files'] as List? ?? const [];
-    return [
-      for (final f in files) Map<String, dynamic>.from(f as Map),
-    ];
+    return [for (final f in files) Map<String, dynamic>.from(f as Map)];
   }
 
   // ------------------------------------------------------------- 8.4 AI
@@ -202,14 +197,13 @@ class SmartWardrobeApi {
     List<String> itemIds, {
     String occasion = 'casual',
     double tempC = 24,
-  }) async =>
-      Map<String, dynamic>.from(
-        await _client.post('/ai/calculate-compatibility', {
-          'itemIds': itemIds,
-          'occasion': occasion,
-          'weather': {'tempC': tempC},
-        }),
-      );
+  }) async => Map<String, dynamic>.from(
+    await _client.post('/ai/calculate-compatibility', {
+      'itemIds': itemIds,
+      'occasion': occasion,
+      'weather': {'tempC': tempC},
+    }),
+  );
 
   /// The stylist turn (`POST /ai/chat`).
   ///
@@ -220,14 +214,13 @@ class SmartWardrobeApi {
     String message, {
     List<Map<String, dynamic>> history = const [],
     String? conversationId,
-  }) async =>
-      Map<String, dynamic>.from(
-        await _client.post('/ai/chat', {
-          'message': message,
-          'history': history,
-          'conversationId': ?conversationId,
-        }),
-      );
+  }) async => Map<String, dynamic>.from(
+    await _client.post('/ai/chat', {
+      'message': message,
+      'history': history,
+      'conversationId': ?conversationId,
+    }),
+  );
 
   /// Streaming variant (`POST /ai/chat/stream`): `delta` events carry text
   /// fragments, `done` carries the assembled turn. The server still answers
@@ -236,12 +229,11 @@ class SmartWardrobeApi {
     String message, {
     List<Map<String, dynamic>> history = const [],
     String? conversationId,
-  }) =>
-      _client.streamPost('/ai/chat/stream', {
-        'message': message,
-        'history': history,
-        'conversationId': ?conversationId,
-      });
+  }) => _client.streamPost('/ai/chat/stream', {
+    'message': message,
+    'history': history,
+    'conversationId': ?conversationId,
+  });
 
   /// Match a photo of an outfit someone else wears against the user's own
   /// wardrobe (`POST /ai/match-outfit`). Pass [imageBytes] (raw photo) or
@@ -271,19 +263,87 @@ class SmartWardrobeApi {
     List<String> itemIds,
     String variant, {
     double? tempC,
-  }) async =>
-      Map<String, dynamic>.from(
-        await _client.post('/ai/remix', {
-          'itemIds': itemIds,
-          'variant': variant,
-          if (tempC != null)
-            'weather': {'tempC': tempC, 'condition': tempC >= 26 ? 'sunny' : 'partly cloudy'},
-        }),
-      );
+  }) async => Map<String, dynamic>.from(
+    await _client.post('/ai/remix', {
+      'itemIds': itemIds,
+      'variant': variant,
+      if (tempC != null)
+        'weather': {
+          'tempC': tempC,
+          'condition': tempC >= 26 ? 'sunny' : 'partly cloudy',
+        },
+    }),
+  );
+
+  /// Evaluate an outfit with the Fashion Critic (`POST /ai/critique`).
+  /// Pass [itemIds] (wardrobe item IDs in the outfit) and [occasion].
+  Future<Map<String, dynamic>> critique({
+    required List<String> itemIds,
+    String? occasion,
+    List<Map<String, dynamic>> history = const [],
+    String? conversationId,
+  }) async {
+    final res = await _client.post('/ai/critique', {
+      'message': 'Evaluate this outfit.',
+      'outfit': {'itemIds': itemIds},
+      'occasion': ?occasion,
+      'history': history,
+      'conversationId': ?conversationId,
+    });
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Streaming Fashion Critic evaluation (`POST /ai/critique/stream`).
+  Stream<({String event, Map<String, dynamic> data})> critiqueStream({
+    required List<String> itemIds,
+    String? occasion,
+    List<Map<String, dynamic>> history = const [],
+    String? conversationId,
+  }) => _client.streamPost('/ai/critique/stream', {
+    'message': 'Evaluate this outfit.',
+    'outfit': {'itemIds': itemIds},
+    'occasion': ?occasion,
+    'history': history,
+    'conversationId': ?conversationId,
+  });
 
   /// What the stylist has learned about this user (`GET /ai/style-dna`).
   Future<Map<String, dynamic>> styleDna() async =>
       Map<String, dynamic>.from(await _client.get('/ai/style-dna'));
+
+  /// All learned style preferences for the current user (`GET /ai/preferences`).
+  Future<LearnedPreferences> preferences() async {
+    final res = await _client.get('/ai/preferences');
+    return LearnedPreferences.fromJson(Map<String, dynamic>.from(res as Map));
+  }
+
+  /// Update individual learned preferences (`PATCH /ai/preferences`).
+  Future<Map<String, dynamic>> updatePreferences(
+    PreferenceUpdate update,
+  ) async {
+    final res = await _client.patch('/ai/preferences', update.toJson());
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Reset all learned preferences for the current user (`DELETE /ai/preferences/reset`).
+  Future<Map<String, dynamic>> resetPreferences() async {
+    final res = await _client.delete('/ai/preferences/reset');
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Add an item to the absolute avoid list (`POST /ai/preferences/avoid`).
+  Future<Map<String, dynamic>> addAvoid(String phrase) async {
+    final res = await _client.post('/ai/preferences/avoid', {'avoid': phrase});
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Remove an item from the absolute avoid list (`DELETE /ai/preferences/avoid/:phrase`).
+  Future<Map<String, dynamic>> removeAvoid(String phrase) async {
+    final res = await _client.delete(
+      '/ai/preferences/avoid/${Uri.encodeComponent(phrase)}',
+    );
+    return Map<String, dynamic>.from(res as Map);
+  }
 
   /// Recent stylist turns, oldest first (`GET /ai/conversations`).
   Future<List<Map<String, dynamic>>> conversations({int limit = 40}) async {
@@ -311,16 +371,15 @@ class SmartWardrobeApi {
   Future<Map<String, dynamic>> packingList({
     String destination = 'Trip',
     int days = 5,
-  }) async =>
-      Map<String, dynamic>.from(
-        await _client.post('/ai/packing-list', {
-          'destination': destination,
-          'days': days,
-        }),
-      );
+  }) async => Map<String, dynamic>.from(
+    await _client.post('/ai/packing-list', {
+      'destination': destination,
+      'days': days,
+    }),
+  );
 
   // ---------------------------------------------------------- 8.5 Outfits
-  Future<List<dynamic>> recommendedOutfits({
+  Future<Map<String, dynamic>> recommendedOutfits({
     String occasion = 'casual',
     double tempC = 24,
     int count = 3,
@@ -330,7 +389,7 @@ class SmartWardrobeApi {
       'tempC': '$tempC',
       'count': '$count',
     });
-    return List<dynamic>.from((res as Map)['outfits'] as List);
+    return Map<String, dynamic>.from(res as Map);
   }
 
   Future<Map<String, dynamic>> createOutfit(
@@ -352,7 +411,8 @@ class SmartWardrobeApi {
       // outfit so the backend scores the actual selected pieces itself.
       'compatibilityScore': ?compatibilityScore,
       if (breakdown != null && breakdown.isNotEmpty) 'breakdown': breakdown,
-      if (explanation != null && explanation.isNotEmpty) 'explanation': explanation,
+      if (explanation != null && explanation.isNotEmpty)
+        'explanation': explanation,
       if (sourceOutfitId != null && sourceOutfitId.isNotEmpty)
         'sourceOutfitId': sourceOutfitId,
     };
@@ -418,9 +478,7 @@ class SmartWardrobeApi {
   /// recommendation is persisted first through [createOutfit]. Returns the
   /// outfit record the backend echoed back.
   Future<Map<String, dynamic>> saveOutfit(String outfitId) async =>
-      Map<String, dynamic>.from(
-        await _client.post('/outfits/$outfitId/save'),
-      );
+      Map<String, dynamic>.from(await _client.post('/outfits/$outfitId/save'));
 
   /// Removes the signed-in user's saved relationship to an outfit
   /// (`DELETE /outfits/:id/save`, §8.5). Idempotent and non-destructive: the
@@ -433,22 +491,19 @@ class SmartWardrobeApi {
   Future<List<dynamic>> events() async =>
       List<dynamic>.from((await _client.get('/events') as Map)['events']);
 
-  Future<List<dynamic>> weeklyPlan() async => List<dynamic>.from(
-    (await _client.get('/planner/weekly') as Map)['week'],
-  );
+  Future<List<dynamic>> weeklyPlan() async =>
+      List<dynamic>.from((await _client.get('/planner/weekly') as Map)['week']);
 
   Future<Map<String, dynamic>> regenerateWeeklyPlan({
     String occasion = 'casual',
-  }) async =>
-      Map<String, dynamic>.from(
-        await _client.post('/planner/weekly', {'occasion': occasion}),
-      );
+  }) async => Map<String, dynamic>.from(
+    await _client.post('/planner/weekly', {'occasion': occasion}),
+  );
 
   Future<Map<String, dynamic>> travelPacking({
     String destination = 'Trip',
     int days = 5,
-  }) =>
-      packingList(destination: destination, days: days);
+  }) => packingList(destination: destination, days: days);
 
   // --------------------------------------------------------- 8.7 Shopping
   Future<Map<String, dynamic>> shopRecommended() async =>
@@ -456,6 +511,38 @@ class SmartWardrobeApi {
 
   Future<void> addToWishlist(Map<String, dynamic> entry) async {
     await _client.post('/shop/wishlist', entry);
+  }
+
+  // ----------------------------------------------------- 8.8 Assistants
+  /// Wardrobe Assistant: read-only Q&A over the user's actual wardrobe records.
+  /// Returns `{reply, intent, itemsFound[], gaps[], summary, source, degraded}`.
+  /// Never creates, updates, or deletes wardrobe items.
+  Future<Map<String, dynamic>> wardrobeAssistant({
+    required String message,
+    String? conversationId,
+  }) async {
+    final res = await _client.post('/ai/wardrobe-assistant', {
+      'message': message,
+      'conversationId': ?conversationId,
+    });
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Shopping Assistant: category-level guidance grounded in real wardrobe gaps
+  /// or an explicit user request. Suggestions are not-owned and never added to
+  /// the wardrobe. Not live listings: no prices, merchants, or purchase links.
+  /// Returns `{reply, suggestions[], notLiveListings, gaps[], source, degraded}`.
+  Future<Map<String, dynamic>> shoppingAssistant({
+    required String message,
+    String? gapFocus,
+    String? conversationId,
+  }) async {
+    final res = await _client.post('/ai/shopping-assistant', {
+      'message': message,
+      'gapFocus': ?gapFocus,
+      'conversationId': ?conversationId,
+    });
+    return Map<String, dynamic>.from(res as Map);
   }
 
   // ------------------------------------------------------------ misc
