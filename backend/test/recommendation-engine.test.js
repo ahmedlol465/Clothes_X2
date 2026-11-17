@@ -386,3 +386,87 @@ test('H — identical inputs produce identical recommendations', async () => {
   assert.deepEqual(one.meta.exploration, two.meta.exploration);
   assert.deepEqual(one.meta.candidates, two.meta.candidates);
 });
+
+// ------------------------------------------------------------------- Test K: Limited wardrobes
+
+test('K — empty wardrobe returns wardrobeGap with totalItems 0 and no outfits', async () => {
+  const { outfits, meta } = await engine.recommend([], {
+    occasion: 'casual',
+    weather: { tempC: 22, condition: 'partly cloudy' },
+    count: 3,
+    styleProfile: EMPTY_PROFILE,
+    memory: memoryStore.empty(),
+  });
+  assert.deepEqual(outfits, []);
+  assert.equal(meta.reason, 'empty_wardrobe');
+  assert.ok(meta.wardrobeGap, 'wardrobeGap present even for empty wardrobe');
+  assert.equal(meta.wardrobeGap.totalItems, 0);
+});
+
+test('L — single-item wardrobe returns partial outfit with gap info', async () => {
+  const { outfits, meta } = await engine.recommend([
+    item({ id: 't1', name: 'Oxford Cotton Shirt', category: 'Tops', color: 'White', style: 'Casual', formality: 'Casual' }),
+  ], {
+    occasion: 'casual',
+    weather: { tempC: 22, condition: 'partly cloudy' },
+    count: 3,
+    styleProfile: EMPTY_PROFILE,
+    memory: memoryStore.empty(),
+  });
+  // A single top should still produce a look (incomplete, but not empty)
+  assert.ok(outfits.length >= 1, 'single-item wardrobe yields at least one look');
+  for (const outfit of outfits) {
+    assert.ok(outfit.itemIds.length >= 1, 'outfit contains the owned item');
+    assert.ok(outfit.itemIds.every((id) => id === 't1'), 'only owned items are used');
+  }
+  assert.ok(meta.wardrobeGap, 'wardrobeGap present');
+  assert.equal(meta.wardrobeGap.totalItems, 1);
+  assert.ok(meta.wardrobeGap.gaps.length > 0, 'at least one gap is reported');
+  // Every gap has a suggestion and reason
+  for (const g of meta.wardrobeGap.gaps) {
+    assert.ok(g.suggestion, 'gap has a suggestion');
+    assert.ok(g.reason, 'gap has a reason');
+  }
+});
+
+test('M — two-item wardrobe returns diverse combinations, never identical', async () => {
+  const wardrobe = [
+    item({ id: 't1', name: 'Oxford Cotton Shirt', category: 'Tops', color: 'White', style: 'Casual', formality: 'Casual' }),
+    item({ id: 't2', name: 'Beige Knit Sweater', category: 'Tops', color: 'Beige', style: 'Smart Casual', formality: 'Smart Casual' }),
+    item({ id: 'b1', name: 'Relaxed Chinos', category: 'Bottoms', color: 'Beige', style: 'Casual', formality: 'Casual' }),
+  ];
+  const { outfits } = await engine.recommend(wardrobe, {
+    occasion: 'casual',
+    weather: { tempC: 22, condition: 'partly cloudy' },
+    count: 4,
+    styleProfile: EMPTY_PROFILE,
+    memory: memoryStore.empty(),
+  });
+  assert.ok(outfits.length >= 1, 'two-item wardrobe yields at least one look');
+  const idSets = outfits.map((o) => [...o.itemIds].sort().join(','));
+  const unique = new Set(idSets);
+  assert.equal(unique.size, idSets.length, 'no duplicate outfit combinations');
+});
+
+test('N — wardrobeGap identifies missing categories and suggests additions', async () => {
+  const wardrobe = [
+    item({ id: 't1', name: 'Oxford Cotton Shirt', category: 'Tops', color: 'White', style: 'Casual', formality: 'Casual' }),
+    item({ id: 'b1', name: 'Relaxed Chinos', category: 'Bottoms', color: 'Beige', style: 'Casual', formality: 'Casual' }),
+  ];
+  const { meta } = await engine.recommend(wardrobe, {
+    occasion: 'casual',
+    weather: { tempC: 22, condition: 'partly cloudy' },
+    count: 3,
+    styleProfile: EMPTY_PROFILE,
+    memory: memoryStore.empty(),
+  });
+  assert.ok(meta.wardrobeGap, 'wardrobeGap present');
+  assert.equal(meta.wardrobeGap.totalItems, 2);
+  const gapLabels = meta.wardrobeGap.gaps.map((g) => g.gap);
+  assert.ok(gapLabels.length > 0, 'at least one gap is reported');
+  // Every gap has a suggestion and reason
+  for (const g of meta.wardrobeGap.gaps) {
+    assert.ok(g.suggestion, 'gap has a suggestion');
+    assert.ok(g.reason, 'gap has a reason');
+  }
+});

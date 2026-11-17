@@ -111,6 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 loading: _state.recommendationsLoading,
                 settled: _state.recommendationsSettled,
                 error: _state.recommendationsError,
+                wardrobeGap: _state.wardrobeGap,
                 onRetry: () => _state.loadToday(),
                 onOpen: (outfit) => _push(
                   context,
@@ -487,6 +488,7 @@ class _RecommendationRail extends StatelessWidget {
     required this.loading,
     required this.settled,
     required this.error,
+    required this.wardrobeGap,
     required this.onRetry,
     required this.onOpen,
   });
@@ -495,6 +497,7 @@ class _RecommendationRail extends StatelessWidget {
   final bool loading;
   final bool settled;
   final String? error;
+  final WardrobeGap? wardrobeGap;
   final VoidCallback onRetry;
   final ValueChanged<Outfit> onOpen;
 
@@ -538,6 +541,7 @@ class _RecommendationRail extends StatelessWidget {
     }
 
     if (outfits.isEmpty) {
+      final gap = wardrobeGap;
       return SwCard(
         key: const ValueKey('home_rec_empty'),
         padding: const EdgeInsets.all(Insets.lg),
@@ -551,12 +555,42 @@ class _RecommendationRail extends StatelessWidget {
               style: AppText.cardTitle,
             ),
             const SizedBox(height: Insets.xs),
-            Text(
-              'The stylist has nothing that fits this occasion yet. '
-              'Add a few more pieces to your wardrobe and try again.',
-              textAlign: TextAlign.center,
-              style: AppText.caption,
-            ),
+            if (gap != null && gap.totalItems == 0)
+              Text(
+                'Your wardrobe is empty. Add your first pieces to get outfit '
+                'recommendations.',
+                textAlign: TextAlign.center,
+                style: AppText.caption,
+              )
+            else if (gap != null && gap.gaps.isNotEmpty)
+              Column(
+                children: [
+                  Text(
+                    'Your wardrobe needs ${gap.gaps.length} more piece'
+                        '${gap.gaps.length > 1 ? 's' : ''} to build looks:',
+                    textAlign: TextAlign.center,
+                    style: AppText.caption,
+                  ),
+                  const SizedBox(height: Insets.sm),
+                  ...gap.gaps.take(3).map((g) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Text(
+                      '• ${g.gap} — ${g.suggestion}',
+                      textAlign: TextAlign.center,
+                      style: AppText.caption.copyWith(
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+                  )),
+                ],
+              )
+            else
+              Text(
+                'The stylist has nothing that fits this occasion yet. '
+                'Add a few more pieces to your wardrobe and try again.',
+                textAlign: TextAlign.center,
+                style: AppText.caption,
+              ),
             const SizedBox(height: Insets.lg),
             SwOutlineButton(label: 'Refresh', onTap: onRetry, expand: false),
           ],

@@ -14,8 +14,11 @@ import '../../data/app_state.dart';
 import '../../data/assets.dart';
 import '../../data/models.dart';
 import '../insights/style_dna_screen.dart';
+import 'preferences_screen.dart';
 import '../insights/wardrobe_insights_screen.dart';
 import '../shop/smart_shopping_screen.dart';
+import '../shop/shopping_assistant_screen.dart';
+import '../wardrobe/wardrobe_assistant_screen.dart';
 import 'coming_soon_screen.dart';
 import 'style_profile_screen.dart';
 
@@ -340,6 +343,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 builder: (_) => const StyleDnaScreen(),
                               ),
                             ),
+                            onPreferences: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const PreferencesScreen(),
+                              ),
+                            ),
                           ),
                           const SizedBox(height: Insets.xl),
                           Text('ACCOUNT', style: AppText.overline),
@@ -389,6 +397,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 onTap: () => Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (_) => const SmartShoppingScreen(),
+                                  ),
+                                ),
+                              ),
+                              _SettingRow(
+                                icon: SwIcon.shirt,
+                                title: 'Wardrobe Assistant',
+                                subtitle: 'Ask about what you own',
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const WardrobeAssistantScreen(),
+                                  ),
+                                ),
+                              ),
+                              _SettingRow(
+                                icon: SwIcon.shoppingCart,
+                                title: 'Shopping Assistant',
+                                subtitle: 'Category-level gap suggestions',
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const ShoppingAssistantScreen(),
                                   ),
                                 ),
                               ),
@@ -643,11 +673,13 @@ class _StyleBlueprintCard extends StatelessWidget {
     required this.profile,
     required this.onEdit,
     required this.onDna,
+    required this.onPreferences,
   });
 
   final UserProfile profile;
   final VoidCallback onEdit;
   final VoidCallback onDna;
+  final VoidCallback onPreferences;
 
   @override
   Widget build(BuildContext context) {
@@ -673,6 +705,14 @@ class _StyleBlueprintCard extends StatelessWidget {
                 onTap: onDna,
                 child: Text(
                   'View DNA',
+                  style: AppText.labelStrong.copyWith(color: AppColors.primary),
+                ),
+              ),
+              const SizedBox(width: Insets.md),
+              GestureDetector(
+                onTap: onPreferences,
+                child: Text(
+                  'Preferences',
                   style: AppText.labelStrong.copyWith(color: AppColors.primary),
                 ),
               ),

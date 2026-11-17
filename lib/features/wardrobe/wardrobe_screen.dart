@@ -12,6 +12,7 @@ import '../../data/app_state.dart';
 import '../../data/models.dart';
 import 'add_clothing_screen.dart';
 import 'item_detail_screen.dart';
+import 'wardrobe_assistant_screen.dart';
 
 /// Frame 8 - searchable, filterable grid of every catalogued garment.
 ///
@@ -93,6 +94,15 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
                       icon: SwIconButtonKind.filter,
                       onTap: () =>
                           _toast(context, 'Advanced filters coming soon.'),
+                    ),
+                    const SizedBox(width: Insets.sm),
+                    SwIconButton(
+                      icon: SwIconButtonKind.more,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const WardrobeAssistantScreen(),
+                        ),
+                      ),
                     ),
                   ],
                 ),

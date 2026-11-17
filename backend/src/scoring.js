@@ -395,6 +395,12 @@ function normaliseWeights(weights) {
 /**
  * Human-readable explanation built from the strongest and weakest factors,
  * so the "Why this outfit?" copy is derived from the actual arithmetic.
+ *
+ * The copy is factor-specific: colour harmony talks about the palette,
+ * occasion fit talks about formality, weather_match talks about the
+ * forecast, personal_preference talks about the user's declared taste, and so
+ * on. Factors that carried no signal are named but not scored, so the user
+ * sees what still needs evidence rather than a flattering constant.
  */
 function explain(items, ctx = {}, result = null) {
   const scored = result || scoreOutfit(items, ctx);
@@ -404,35 +410,96 @@ function explain(items, ctx = {}, result = null) {
   const names = list.map((i) => i.name).join(' + ');
   const colors = [...new Set(list.map((i) => i.color).filter(Boolean))];
   const palette = colors.length ? colors.join(' / ') : 'a neutral palette';
+  const occasion = tax.detectOccasions(ctx.occasion)[0] || ctx.occasion || 'the occasion';
+  const temp = ctx.weather?.tempC;
+  const condition = ctx.weather?.condition;
 
-  const strongest = scored.breakdown.slice(0, 2);
-  const weakest = scored.breakdown[scored.breakdown.length - 1];
+  const applied = scored.breakdown.filter((b) => b.applied);
+  const skipped = scored.breakdown.filter((b) => !b.applied);
+  const strongest = applied[0];
+  // Weakest by value, not by contribution position — a low-value factor buried
+  // mid-list still matters.
+  const weakest = applied.length
+    ? applied.reduce((a, b) => (b.value < a.value ? b : a))
+    : null;
 
   const reasons = [];
-  const occasion = tax.detectOccasions(ctx.occasion)[0];
-  const temp = ctx.weather?.tempC;
 
-  // Lead with the biggest genuine strength.
-  if (strongest[0]?.key === 'color_harmony') {
-    reasons.push(`${palette} reads as one deliberate palette`);
-  } else if (strongest[0]?.key === 'occasion_fit') {
-    reasons.push(`the formality lands right for ${occasion || 'the occasion'}`);
-  } else if (strongest[0]?.key === 'personal_preference') {
-    reasons.push('every piece matches the style you keep gravitating to');
-  } else if (strongest[0]?.key === 'weather_match') {
-    reasons.push('the fabrics suit the temperature');
-  } else {
-    reasons.push(`${strongest[0]?.label.toLowerCase() || 'the mix'} is the strongest signal here`);
+  // Lead with the biggest genuine strength, using factor-specific language.
+  if (strongest) {
+    switch (strongest.key) {
+      case 'color_harmony':
+        reasons.push(`${palette} reads as one deliberate palette`);
+        break;
+      case 'occasion_fit':
+        reasons.push(`the formality lands right for ${occasion}`);
+        break;
+      case 'personal_preference':
+        reasons.push('every piece matches the style you keep gravitating to');
+        break;
+      case 'weather_match':
+        reasons.push('the fabrics suit the forecast');
+        break;
+      case 'season_match':
+        reasons.push('each piece is right for the season');
+        break;
+      case 'style_compatibility':
+        reasons.push('the pieces layer naturally, not clashing');
+        break;
+      case 'recent_usage':
+        reasons.push('it rotates in pieces you have not worn in a while');
+        break;
+      case 'wardrobe_availability':
+        reasons.push('the look fills the slots a complete outfit needs');
+        break;
+      case 'user_feedback':
+        reasons.push('pieces you have rated highly before');
+        break;
+      case 'trend_compatibility':
+        reasons.push('the cut and colour read as current');
+        break;
+      case 'body_fit_preference':
+        reasons.push('the fit matches how you like to dress');
+        break;
+      default:
+        reasons.push(`${strongest.label.toLowerCase()} is the strongest signal here`);
+    }
   }
 
+  // Weather-specific advice tied to the actual forecast.
   if (temp != null) {
-    reasons.push(temp >= 26 ? 'lightweight layers handle the warmth' : 'layering handles the temperature');
+    if (condition && /snow/.test(condition)) {
+      reasons.push('layer up — this is cold-weather dressing');
+    } else if (temp >= 26) {
+      reasons.push('lightweight layers handle the warmth');
+    } else if (temp <= 14) {
+      reasons.push('layering handles the chill');
+    } else {
+      reasons.push('a mid-layer is enough for this temperature');
+    }
   }
+
+  // Rotation signal.
   if (scored.breakdown.some((b) => b.key === 'recent_usage' && b.value >= 92)) {
     reasons.push('it rotates in something you have not worn in a while');
   }
+
+  // The one genuine compromise, if any factor scored poorly.
   if (weakest && weakest.value < 62) {
     reasons.push(`the one compromise is ${weakest.label.toLowerCase()} at ${weakest.value}%`);
+  }
+
+  // Completeness: missing required slots are an honest gap.
+  const complete = completeness(list);
+  if (complete.filled < complete.required) {
+    const missing = complete.required - complete.filled;
+    reasons.push(`${missing} required slot${missing > 1 ? 's' : ''} still open`);
+  }
+
+  // Factors with no evidence yet.
+  if (skipped.length) {
+    const names_ = skipped.map((b) => b.label.toLowerCase()).join(', ');
+    reasons.push(`not yet scored: ${names_}`);
   }
 
   return `${names} — ${reasons.join(', and ')}. Overall match ${scored.match}%.`;

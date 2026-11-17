@@ -154,6 +154,8 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
                   const SizedBox(height: Insets.sm),
                 ],
                 const SizedBox(height: Insets.lg),
+                if (item.analysisStatus != null) _AnalysisCard(item: item),
+                const SizedBox(height: Insets.lg),
                 _UsageStats(item: item),
                 const SizedBox(height: Insets.lg),
                 Row(
@@ -413,6 +415,193 @@ class _UsageStats extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The AI analysis provenance for a garment: how each tag was decided, how
+/// confident the model was, and whether the gate rejected the photo.
+///
+/// Shown only when the backend actually analyzed the item — mock/demo items
+/// carry no analysis and skip this card entirely.
+class _AnalysisCard extends StatelessWidget {
+  const _AnalysisCard({required this.item});
+
+  final ClothingItem item;
+
+  Color _statusColor(String? status) {
+    switch (status) {
+      case 'analyzed':
+        return AppColors.success;
+      case 'rejected':
+        return AppColors.danger;
+      case 'uncertain':
+      case 'filename':
+        return AppColors.sun;
+      case 'heuristic':
+        return AppColors.neutral;
+      default:
+        return AppColors.textTertiary;
+    }
+  }
+
+  String _statusTitle(String? status) {
+    switch (status) {
+      case 'analyzed':
+        return 'AI analysis';
+      case 'rejected':
+        return 'Rejected by the AI gate';
+      case 'uncertain':
+        return 'Low-confidence analysis';
+      case 'filename':
+        return 'Unverified (file-name guess)';
+      case 'heuristic':
+        return 'Offline heuristic';
+      default:
+        return 'AI analysis';
+    }
+  }
+
+  String _sourceLabel(String source) {
+    switch (source) {
+      case 'clothing-vision':
+        return 'Clothing vision';
+      case 'clothing-vision+gemini':
+        return 'Clothing vision + Gemini';
+      case 'filename':
+        return 'File name (unverified)';
+      case 'heuristic':
+        return 'Offline heuristic';
+      default:
+        return source;
+    }
+  }
+
+  String _formatDate(DateTime at) {
+    final local = at.toLocal();
+    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = item.analysisStatus;
+    final color = _statusColor(status);
+    final chips = <Widget>[
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: Insets.sm, vertical: 3),
+        decoration: BoxDecoration(color: color, borderRadius: Radii.pillRadius),
+        child: Text(
+          '${status?[0].toUpperCase()}${status?.substring(1)}',
+          style: AppText.overline.copyWith(color: Colors.white, fontSize: 8),
+        ),
+      ),
+      const SizedBox(width: Insets.md),
+      Expanded(
+        child: Text(
+          item.analysisStatusLabel ?? _statusTitle(status),
+          style: AppText.bodyStrong.copyWith(color: AppColors.textPrimary),
+        ),
+      ),
+      if (item.analysisConfidence != null)
+        Text(
+          '${(item.analysisConfidence! * 100).round()}%',
+          style: AppText.bodyStrong.copyWith(color: color, fontSize: 14),
+        ),
+    ];
+
+    final rows = <Widget>[];
+    if (item.analysisSource != null) {
+      rows.add(_AnalysisRow(
+        icon: SwIcon.circleInfo,
+        label: 'Analyzed by',
+        value: _sourceLabel(item.analysisSource!),
+      ));
+    }
+    if (item.analysisConfidence != null) {
+      rows.add(_AnalysisRow(
+        icon: SwIcon.circleInfo,
+        label: 'Confidence',
+        value: '${(item.analysisConfidence! * 100).round()}%',
+      ));
+    }
+    if (item.analyzedAt != null) {
+      rows.add(_AnalysisRow(
+        icon: SwIcon.clock,
+        label: 'Analyzed at',
+        value: _formatDate(item.analyzedAt!),
+      ));
+    }
+    if (item.uncertainAttributesList.isNotEmpty) {
+      rows.add(_AnalysisRow(
+        icon: SwIcon.alert,
+        label: 'Verify these tags',
+        value: item.uncertainAttributesList.join(', '),
+      ));
+    }
+    if (item.pattern != 'Plain') {
+      rows.add(_AnalysisRow(
+        icon: SwIcon.layers,
+        label: 'Pattern',
+        value: item.pattern,
+      ));
+    }
+
+    return SwCard(
+      color: color.withValues(alpha: 0.10),
+      border: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: chips),
+          const SizedBox(height: Insets.md),
+          if (item.analysisRejected) ...[
+            SwBanner(
+              title: 'Not accepted as clothing',
+              message:
+                  item.analysisRaw?['error'] ??
+                  'The vision gate did not detect this as a garment, so its tags are not verified.',
+              tone: SwBannerTone.warning,
+              icon: SwIcon.alert,
+            ),
+            const SizedBox(height: Insets.md),
+          ],
+          for (final row in rows) ...[
+            row,
+            if (rows.indexOf(row) < rows.length - 1) const SizedBox(height: Insets.sm),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AnalysisRow extends StatelessWidget {
+  const _AnalysisRow({required this.icon, required this.label, required this.value});
+
+  final SwIcon icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwIconView(icon, size: 16, color: AppColors.textSecondary),
+        const SizedBox(width: Insets.sm),
+        Expanded(
+          child: Text(label, style: AppText.label.copyWith(fontSize: 11)),
+        ),
+        Flexible(
+          child: Text(
+            value,
+            style: AppText.body.copyWith(fontSize: 12),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
       ],
