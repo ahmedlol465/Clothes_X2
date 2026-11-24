@@ -1,7 +1,7 @@
 # SmartWardrobe backend (§5–§8)
 
 Express REST API in plain JavaScript. Data lives in **MySQL** (or, for a quick
-start without a database, in `backend/data/db.json`; the first MySQL start
+start without a database, when `DB_DRIVER` is unset, in `backend/data/db.json`; the first MySQL start
 imports that file automatically).
 
 ## Run
