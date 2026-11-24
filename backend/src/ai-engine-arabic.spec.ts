@@ -58,3 +58,22 @@ describe('chatReply Arabic restoration', () => {
     expect(r.text).not.toMatch(ARABIC);
   });
 });
+
+describe('analyzeClothing with vision unavailable', () => {
+  it('falls back to an unverified filename guess instead of throwing', async () => {
+    const err: any = new Error('disabled via CLOTHING_VISION=off');
+    err.code = 'CLOTHING_VISION_UNAVAILABLE';
+    jest.resetModules();
+    jest.doMock('./clothing-vision', () => ({
+      analyzeClothingImage: jest.fn().mockRejectedValue(err),
+    }));
+    const engine = require('./ai-engine');
+    const result = await engine.analyzeClothing({
+      filename: 'blue_shirt.jpg',
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    });
+    expect(result.success).toBe(true);
+    expect(result.verified).toBe(false);
+    jest.dontMock('./clothing-vision');
+  });
+});

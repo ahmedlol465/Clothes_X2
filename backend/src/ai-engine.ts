@@ -866,11 +866,17 @@ async function analyzeClothing(input: any = {}) {
   const bytes = imageBytesOf(input);
   if (bytes) {
     const { analyzeClothingImage } = require('./clothing-vision');
-    const result = await analyzeClothingImage(bytes, overrides);
-    if (result.success) return result;
-    // Preserve the rejection contract. A caller must not receive a clothing
-    // guess for an image we just proved is not clothing.
-    return { ...result, hint: result.hint || undefined };
+    try {
+      const result = await analyzeClothingImage(bytes, overrides);
+      if (result.success) return result;
+      // Preserve the rejection contract. A caller must not receive a clothing
+      // guess for an image we just proved is not clothing.
+      return { ...result, hint: result.hint || undefined };
+    } catch (e: any) {
+      // Vision disabled or the model missing must not block adding a piece
+      // manually: fall through to the filename guess (marked unverified).
+      if (e?.code !== 'CLOTHING_VISION_UNAVAILABLE') throw e;
+    }
   }
 
   return {
