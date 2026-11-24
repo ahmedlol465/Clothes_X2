@@ -300,6 +300,7 @@ export class StylistService {
         weather: ctx.weather,
         styleProfile: ctx.styleProfile,
         memory: ctx.memory,
+        language,
       });
       reply = fallback.text;
       intent = fallback.intent || 'chat';

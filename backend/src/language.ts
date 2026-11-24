@@ -140,3 +140,57 @@ export function getLocale(langCode: LanguageCode): string {
       return 'en';
   }
 }
+
+// -------------------------------------------------- Arabic message helpers
+// Ported from the Express-era response-contract.js so the rule engine can
+// understand and answer Arabic messages even without an LLM key.
+
+/** Strip diacritics and fold letter variants so regexes stay short. */
+export function normalizeArabic(text: unknown): string {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/ؤ/g, 'و')
+    .replace(/ئ/g, 'ي');
+}
+
+/** Arabic (and a few English loan) words → the outfit slot they name. */
+export const ARABIC_CATEGORIES: Array<[RegExp, string]> = [
+  [/(شوز|حذاء|احذيه|جزمت|جزامه|بوت|sneaker|shoe|boot)/, 'shoes'],
+  [/(توب|قميص|تيشيرت|تي شيرت|بلوز|كنزه|سويتر|هودي|shirt|tee|top)/, 'top'],
+  [/(جاكيت|بلازر|معطف|بالطو|outerwear|jacket|blazer|coat)/, 'outerwear'],
+  [/(بنطال|بنطلون|جينز|سروال|pant|jean|bottom)/, 'bottom'],
+  [/(تنوره|فستان|skirt|dress)/, 'dress'],
+  [/(جورب|sock)/, 'socks'],
+];
+
+const CATEGORY_LABELS: Record<string, Record<string, string>> = {
+  en: { shoes: 'shoes', top: 'top', outerwear: 'jacket', bottom: 'bottoms', dress: 'dress', socks: 'socks', item: 'item' },
+  ar: { shoes: 'الحذاء', top: 'القطعة العلوية', outerwear: 'الجاكيت', bottom: 'الجزء السفلي', dress: 'الفستان', socks: 'الجوارب', item: 'القطعة' },
+  'ar-EG': { shoes: 'الشوز', top: 'التوب', outerwear: 'الجاكيت', bottom: 'البنطلون', dress: 'الفستان', socks: 'الجوارب', item: 'القطعة' },
+};
+
+/** Human label for a slot in the reply's language. */
+export function categoryLabel(lang: LanguageCode, category: string): string {
+  const table = CATEGORY_LABELS[lang] || CATEGORY_LABELS.en;
+  return table[category] || table.item;
+}
+
+/** First outfit slot an Arabic message names, if any. */
+export function arabicSlot(message: unknown): string | null {
+  const ar = normalizeArabic(message);
+  for (const [pattern, slot] of ARABIC_CATEGORIES) {
+    if (pattern.test(ar)) return slot;
+  }
+  return null;
+}
+
+/** Pick the reply string for the detected language: Egyptian, else MSA, else English. */
+export function localizedReply(lang: LanguageCode, en: string, ar: string, arEg?: string): string {
+  if (lang === LANGUAGES.AR_EG) return arEg || ar || en;
+  if (lang === LANGUAGES.AR) return ar || en;
+  return en;
+}

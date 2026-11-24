@@ -104,6 +104,7 @@ export class StylistStreamingService {
         weather: ctx.weather,
         styleProfile: ctx.styleProfile,
         memory: ctx.memory,
+        language,
       });
       text = fallback.text;
       source = 'rules';

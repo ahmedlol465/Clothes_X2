@@ -1,0 +1,60 @@
+import * as aiEngine from './ai-engine';
+
+const ARABIC = /[؀-ۿ]/;
+
+const wardrobe = [
+  { id: 't1', name: 'White Oxford Shirt', category: 'Tops', color: 'white', timesWorn: 2 },
+  { id: 't2', name: 'Navy Tee', category: 'Tops', color: 'navy', timesWorn: 0 },
+  { id: 'b1', name: 'Beige Chinos', category: 'Bottoms', color: 'beige', timesWorn: 1 },
+  { id: 'b2', name: 'Blue Jeans', category: 'Bottoms', color: 'blue', timesWorn: 5 },
+  { id: 's1', name: 'White Sneakers', category: 'Shoes', color: 'white', timesWorn: 8 },
+  { id: 's2', name: 'Brown Loafers', category: 'Shoes', color: 'brown', timesWorn: 0 },
+];
+
+const ctx = {
+  wardrobe,
+  weather: { tempC: 24, condition: 'partly cloudy', summary: '24°C', city: 'Cairo' },
+  styleProfile: {},
+};
+
+describe('chatReply Arabic restoration', () => {
+  it('answers an Egyptian outfit request in Egyptian Arabic', () => {
+    const r = aiEngine.chatReply('عايز لبس للشغل بكرة', ctx);
+    expect(r.intent).toBe('build_outfit');
+    expect(r.text).toMatch(ARABIC);
+  });
+
+  it('answers a rotation request in Arabic', () => {
+    const r = aiEngine.chatReply('فاجئني بحاجة جديدة', ctx);
+    expect(r.intent).toBe('build_outfit');
+    expect(r.text).toMatch(ARABIC);
+  });
+
+  it('answers a weather question in Arabic', () => {
+    const r = aiEngine.chatReply('الجو عامل ايه النهاردة', ctx);
+    expect(r.intent).toBe('build_outfit');
+    expect(r.text).toMatch(ARABIC);
+  });
+
+  it('greets back in Arabic', () => {
+    const r = aiEngine.chatReply('اهلا', ctx);
+    expect(r.intent).toBe('chat');
+    expect(r.text).toMatch(ARABIC);
+  });
+
+  it('answers MSA in Arabic too', () => {
+    const r = aiEngine.chatReply('ماذا أرتدي اليوم؟', ctx);
+    expect(r.text).toMatch(ARABIC);
+  });
+
+  it('honors an explicit ctx.language over detection', () => {
+    const r = aiEngine.chatReply('hello', { ...ctx, language: 'ar-EG' });
+    expect(r.text).toMatch(ARABIC);
+  });
+
+  it('keeps English replies for English messages', () => {
+    const r = aiEngine.chatReply('surprise me', ctx);
+    expect(r.intent).toBe('build_outfit');
+    expect(r.text).not.toMatch(ARABIC);
+  });
+});
