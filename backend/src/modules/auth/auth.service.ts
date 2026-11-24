@@ -25,6 +25,7 @@ import {
 import { JwtPayload } from './jwt.strategy';
 import { User } from '../../database/entities/identity.entity';
 import { StyleProfile } from '../../database/entities/identity.entity';
+import { verifyGoogleIdToken } from './google-auth';
 
 function uid(prefix = 'u'): string {
   return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;

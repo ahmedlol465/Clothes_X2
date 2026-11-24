@@ -8,6 +8,7 @@ import { aiEngine, llm, memoryStore } from '../../../common/legacy/legacy-module
 
 import { StylistContextService } from './context.service';
 import { StylistConversationService } from './conversation.service';
+import { detectLanguage } from '../../../language';
 
 /**
  * Handles Server-Sent Events (SSE) streaming for the stylist chat.
@@ -64,6 +65,7 @@ export class StylistStreamingService {
     let text = '';
     let source = 'rules';
     let tokens: unknown;
+    const language = detectLanguage(message);
 
     if (llm.status().configured) {
       try {
@@ -77,6 +79,7 @@ export class StylistStreamingService {
           weather: ctx.weather,
           styleProfile: ctx.styleProfile,
           memoryDigest: memoryStore.digest(ctx.memory),
+          language,
         })) {
           if (aborter.signal.aborted) break;
           if (chunk.delta) {

@@ -33,6 +33,7 @@ import { StyleProfile, User } from '../../database/entities/identity.entity';
 import { Wardrobe, WardrobeItem } from '../../database/entities/wardrobe.entity';
 
 import { StylistConversationService } from './services/conversation.service';
+import { detectLanguage } from '../../language';
 import { StylistContextService } from './services/context.service';
 import { StylistStreamingService } from './services/streaming.service';
 
@@ -252,6 +253,7 @@ export class StylistService {
     }
 
     const ctx = await this.contextService.assembleContext(userId, message);
+    const language = detectLanguage(message);
     let source = 'rules';
     let reply = '';
     let intent = 'chat';
@@ -276,6 +278,7 @@ export class StylistService {
           memoryDigest: memoryStore.digest(ctx.memory),
           events: ctx.events,
           imageUrl: body?.dataUrl || body?.imageUrl || null,
+          language,
         });
         reply = generated.text;
         intent = generated.intent;
@@ -319,6 +322,7 @@ export class StylistService {
 
     return {
       reply,
+      language,
       outfit,
       followUp,
       intent,

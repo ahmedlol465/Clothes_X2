@@ -18,6 +18,7 @@ import {
 import { StyleProfile } from '../../database/entities/identity.entity';
 import { CreateOutfitDto } from './dto/create-outfit.dto';
 import { Wardrobe, WardrobeItem } from '../../database/entities/wardrobe.entity';
+import { applyFreshnessRotation } from '../../freshness';
 
 @Injectable()
 export class OutfitsService {
@@ -90,15 +91,22 @@ export class OutfitsService {
     return this.userWardrobeIds(userId).then((itemIds) => {
       if (itemIds.length === 0) return Promise.resolve([]);
       return this.itemRepo.find({ where: { id: In(itemIds) } });
-    }).then((items) =>
-          aiEngine.generateOutfits(items, {
+    }).then((items) => {
+          const outfits = aiEngine.generateOutfits(items, {
             occasion,
             weather,
             styleProfile: readStyleProfile(null),
             count,
-          }),
-        )
-        .then((outfits) => ({ outfits, weather, occasion }));
+          });
+          return {
+            outfits: applyFreshnessRotation(
+              outfits,
+              new Map(items.map((item) => [item.id, item])),
+            ),
+            weather,
+            occasion,
+          };
+        });
   }
 
   async list(userId: string, query: Record<string, unknown>) {

@@ -22,6 +22,7 @@
  *   • `describeOutfit` turns a photo into a structured reference spec.
  */
 import * as weatherService from './weather';
+import { getLanguagePrompt, type LanguageCode } from './language';
 
 const TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) || 25000;
 
@@ -383,7 +384,7 @@ const STYLIST_SYSTEM =
  */
 async function stylistChat({
   message, history = [], wardrobe = [], weather, styleProfile = {},
-  memoryDigest = '', events = [], imageUrl = null,
+  memoryDigest = '', events = [], imageUrl = null, language = 'en',
 }) {
   const catalog = catalogLines(wardrobe) || '(the wardrobe is empty — tell the user to add items)';
   const priorTurns = recentTurns(history);
@@ -403,7 +404,7 @@ async function stylistChat({
   if (imageUrl) userParts.push('The user attached a photo. Describe it briefly inside "text" and pick catalog items that recreate it.');
 
   const { text, tokens } = await complete({
-    system: STYLIST_SYSTEM,
+    system: STYLIST_SYSTEM + (language !== 'en' ? getLanguagePrompt(language as LanguageCode) : ''),
     user: userParts.join('\n\n'),
     maxTokens: 500,
     temperature: 0.75,
@@ -448,11 +449,11 @@ function arr(v) {
  *
  * @returns {AsyncGenerator<{delta?:string, done?:boolean, text?:string, tokens?:object}>}
  */
-async function* streamChat({ message, history = [], wardrobe = [], weather, styleProfile = {}, memoryDigest = '' }) {
+async function* streamChat({ message, history = [], wardrobe = [], weather, styleProfile = {}, memoryDigest = '', language = 'en' }) {
   const p = assertProvider();
   const catalog = catalogLines(wardrobe) || '(the wardrobe is empty)';
   const priorTurns = recentTurns(history);
-  const system = STYLIST_SYSTEM.replace(
+  let system = STYLIST_SYSTEM.replace(
     'Reply with ONLY one JSON object, no markdown, shaped exactly:\n' +
     '{"text":"<the reply, 2-4 sentences>",' +
     '"intent":"build_outfit|remix|explain|opinion|learn|chat",' +
@@ -465,6 +466,8 @@ async function* streamChat({ message, history = [], wardrobe = [], weather, styl
     'No JSON, no markdown, no bullet points. Refer to garments by their NAME only; ' +
     'never print catalog ids, they are not for the reader.',
   );
+
+  if (language !== 'en') system += getLanguagePrompt(language as LanguageCode);
 
   const user = [
     `TODAY: ${weather?.summary || 'unknown'}`,
