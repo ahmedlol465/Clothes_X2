@@ -11,7 +11,7 @@
  * How it works
  * ------------
  * It does not hand-roll a downloader. It requires the application's own loaders
- * (`src/clothing-vision/encoder.js` and `src/retrieval.js`) and lets them
+ * (`src/services/clothing-vision/encoder.js` and `src/services/retrieval.js`) and lets them
  * resolve the models exactly as the server would. transformers.js:
  *   - leaves already-present files untouched (no re-download, no re-quantize)
  *   - downloads only what is missing, into `backend/.model-cache`
@@ -82,7 +82,7 @@ async function fetch() {
   log(`cache dir: ${CACHE_DIR}`);
 
   log('loading Marqo/marqo-fashionCLIP (clothing analysis)...');
-  const encoder = require('../src/clothing-vision/encoder');
+  const encoder = require('../src/services/clothing-vision/encoder');
   if (!(await encoder.init())) {
     log(`ERROR: Marqo/marqo-fashionCLIP failed to load: ${encoder.status().error}`);
     return false;
@@ -90,7 +90,7 @@ async function fetch() {
   await encoder.bank(); // also builds the ~1000-prompt text bank (needs text tower)
 
   log('loading Xenova/all-MiniLM-L6-v2 (semantic retrieval)...');
-  const retrieval = require('../src/retrieval');
+  const retrieval = require('../src/services/retrieval');
   const okMini = await retrieval.warmup();
   if (!okMini) {
     const rst = await retrieval.status();

@@ -15,7 +15,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const memoryStore = require('../src/style-memory');
+const memoryStore = require('../src/services/style-memory');
 
 const RATE_CHAT = 0.04;
 

@@ -16,8 +16,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const history = require('../src/recommendation-history');
-const memoryStore = require('../src/style-memory');
+const history = require('../src/services/recommendation-history');
+const memoryStore = require('../src/services/style-memory');
 
 /** A minimal, isolated db in the shape the helper expects. */
 function makeDb() {

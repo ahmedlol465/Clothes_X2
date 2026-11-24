@@ -25,9 +25,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const history = require('../src/recommendation-history');
-const memoryStore = require('../src/style-memory');
-const engine = require('../src/recommendation-engine');
+const history = require('../src/services/recommendation-history');
+const memoryStore = require('../src/services/style-memory');
+const engine = require('../src/services/recommendation-engine');
 
 // ------------------------------------------------------------------ helpers
 

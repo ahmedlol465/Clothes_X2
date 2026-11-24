@@ -14,10 +14,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const engine = require('../src/recommendation-engine');
-const tax = require('../src/taxonomy');
-const scoring = require('../src/scoring');
-const memoryStore = require('../src/style-memory');
+const engine = require('../src/services/recommendation-engine');
+const tax = require('../src/services/taxonomy');
+const scoring = require('../src/services/scoring');
+const memoryStore = require('../src/services/style-memory');
 
 function item(spec) {
   return {

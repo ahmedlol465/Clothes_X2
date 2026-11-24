@@ -1,22 +1,62 @@
 # SmartWardrobe backend (§5–§8)
 
-Modular REST API (Express runtime, NestJS-style module layout). No database
-server needed — data persists to `backend/data/db.json` (seeded from the
-Flutter mock data so the UI looks identical on first run).
+Express REST API in plain JavaScript. Data lives in **MySQL** (or, for a quick
+start without a database, when `DB_DRIVER` is unset, in `backend/data/db.json`; the first MySQL start
+imports that file automatically).
 
 ## Run
 
 ```bash
 cd backend
+cp .env.example .env          # then edit
 npm install
-npm run setup:models   # one-time: download AI models into .model-cache (see below)
+npm run setup:models          # one-time: download AI models into .model-cache (see below)
 npm start
-# → http://localhost:3001  (endpoint index at GET /docs)
+# -> http://localhost:3001  (endpoint index at GET /docs)
 ```
 
-The Flutter app auto-connects (Android emulator: `10.0.2.2:3001`,
-desktop/iOS/Chrome: `localhost:3001`). If the backend is down, the app falls back
-to bundled mock data and shows an "Offline demo" badge.
+Needs Node 22.5 or newer.
+
+### With MySQL
+
+```bash
+docker compose up -d db       # MySQL 8.4 on localhost:3306
+# backend/.env
+DB_DRIVER=mysql
+DB_HOST=127.0.0.1  DB_PORT=3306
+DB_USER=smartwardrobe  DB_PASSWORD=smartwardrobe  DB_NAME=smartwardrobe
+npm start                     # logs: [db] mysql 127.0.0.1/smartwardrobe
+```
+
+Without Docker, point `DB_*` at any MySQL 8 / MariaDB server (the database is
+created if the user may create it). Records are stored one row each in
+`sw_records(collection, position, data JSON)`; writes happen in the background
+and are flushed on Ctrl+C / SIGTERM. Passwords are bcrypt; older SHA-256
+hashes in an imported `db.json` are upgraded the first time that user logs in.
+
+### Tests
+
+```bash
+npm test                      # node --test, no database or models needed
+```
+
+## Folder layout
+
+```
+backend/
+  server.js                 entry point: env, storage init, listen
+  src/app.js                builds the Express app (CORS, JSON, /storage, routers)
+  src/routes/               auth, users, wardrobe, ai, outfits, planner, shop, admin, misc
+  src/middleware/auth.js    bearer auth, session expiry, admin guard
+  src/lib/                  style profile, uploads, stylist chat helpers, shared state
+  src/services/             AI engine, scoring, learning, retrieval, weather, vision, LLM calls
+  src/data/store.js         persistence (MySQL or JSON file)
+  scripts/                  model download and vision self-test
+  test/                     node:test suites
+  archive/nest-skeleton/    earlier, unconnected NestJS + TypeORM draft (kept for reference)
+```
+
+Admin routes (`/admin/*`) need a login whose email is listed in `ADMIN_EMAILS`.
 
 ## Local AI models (backend/.model-cache)
 
@@ -25,8 +65,8 @@ The Express runtime analyzes garment photos **locally** with transformers.js
 
 | Model | Purpose | Loader |
 | --- | --- | --- |
-| `Marqo/marqo-fashionCLIP` | clothing/non-clothing gate + all attributes (512-dim) | `src/clothing-vision/encoder.js` |
-| `Xenova/all-MiniLM-L6-v2` | semantic retrieval (384-dim) | `src/retrieval.js` |
+| `Marqo/marqo-fashionCLIP` | clothing/non-clothing gate + all attributes (512-dim) | `src/services/clothing-vision/encoder.js` |
+| `Xenova/all-MiniLM-L6-v2` | semantic retrieval (384-dim) | `src/services/retrieval.js` |
 
 Both load lazily from `backend/.model-cache` (set explicitly by both loaders).
 Weights are ignored by git; on a fresh clone run `npm run setup:models` (reuses
@@ -95,14 +135,14 @@ GEMINI_API_KEY=…        # https://aistudio.google.com/apikey  (default)
 
 | File | Responsibility |
 | --- | --- |
-| `src/taxonomy.js` | hue/harmony, formality scale, occasion targets, fabric warmth, season fit, slot definitions |
-| `src/scoring.js` | the 11 factors, signal-aware renormalisation, completeness gate, logistic calibration, `explain()` |
-| `src/style-memory.js` | per-attribute learning, chat-sentiment mining, confidence, `factorWeights()`, `styleDna()` |
-| `src/retrieval.js` | optional MiniLM embeddings with a lexical fallback, category-balanced ranking |
-| `src/weather.js` | keyless Open-Meteo, OWM fallback, seasonal estimate, caching |
-| `src/vision.js` | reference-outfit spec parsing and matching against the wardrobe |
-| `src/llm.js` | provider calls: structured chat, SSE streaming, outfit description |
-| `src/ai-engine.js` | beam search, remixes, occasion detection, offline chat, gaps, packing |
+| `src/services/taxonomy.js` | hue/harmony, formality scale, occasion targets, fabric warmth, season fit, slot definitions |
+| `src/services/scoring.js` | the 11 factors, signal-aware renormalisation, completeness gate, logistic calibration, `explain()` |
+| `src/services/style-memory.js` | per-attribute learning, chat-sentiment mining, confidence, `factorWeights()`, `styleDna()` |
+| `src/services/retrieval.js` | optional MiniLM embeddings with a lexical fallback, category-balanced ranking |
+| `src/services/weather.js` | keyless Open-Meteo, OWM fallback, seasonal estimate, caching |
+| `src/services/vision.js` | reference-outfit spec parsing and matching against the wardrobe |
+| `src/services/llm.js` | provider calls: structured chat, SSE streaming, outfit description |
+| `src/services/ai-engine.js` | beam search, remixes, occasion detection, offline chat, gaps, packing |
 
 Scoring notes: a factor with no evidence (no style profile, no ratings) is
 **excluded and the weights renormalised** rather than contributing a constant,
@@ -126,5 +166,4 @@ uvicorn main:app --port 8000
 ```
 
 `/ai/chat` and `/ai/generate-outfit` no longer depend on it — they use the
-in-process engine. Auth is demo-grade SHA-256 — swap for `@nestjs/jwt` +
-bcrypt + PostgreSQL per §6 before production.
+in-process engine.

@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const lang = require('../src/language');
+const lang = require('../src/services/language');
 
 test('detectLanguage returns en for English messages', () => {
   const cases = [

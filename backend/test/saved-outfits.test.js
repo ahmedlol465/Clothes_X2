@@ -26,7 +26,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const saved = require('../src/saved-outfits');
+const saved = require('../src/services/saved-outfits');
 
 // ------------------------------------------------------------------ helpers
 

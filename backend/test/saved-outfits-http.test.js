@@ -38,8 +38,8 @@ const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-saved-http-'));
 process.env.SMARTWARDROBE_DATA_DIR = TMP_DIR;
 
 const app = require('../server');
-const store = require('../src/store');
-const savedOutfits = require('../src/saved-outfits');
+const store = require('../src/data/store');
+const savedOutfits = require('../src/services/saved-outfits');
 
 const REAL_DB = path.join(__dirname, '..', 'data', 'db.json');
 const realBefore = fs.existsSync(REAL_DB) ? fs.statSync(REAL_DB) : null;

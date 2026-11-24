@@ -17,8 +17,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const vision = require('../src/clothing-vision');
-const encoder = require('../src/clothing-vision/encoder');
+const vision = require('../src/services/clothing-vision');
+const encoder = require('../src/services/clothing-vision/encoder');
 
 const ROOT = path.join(__dirname, '..', '..');
 const FIXTURES = path.join(__dirname, '..', 'test', 'fixtures', 'non-clothing');

@@ -22,9 +22,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const engine = require('../src/recommendation-engine');
-const memoryStore = require('../src/style-memory');
-const scoring = require('../src/scoring');
+const engine = require('../src/services/recommendation-engine');
+const memoryStore = require('../src/services/style-memory');
+const scoring = require('../src/services/scoring');
 
 function item(spec) {
   return {
