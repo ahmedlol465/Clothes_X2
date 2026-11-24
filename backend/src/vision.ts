@@ -28,6 +28,17 @@ const SLOT_LABEL = {
   accessory: 'Accessory',
 };
 
+function normalizeSlot(value) {
+  const q = tax.normalize(value);
+  if (!q) return null;
+  if (/outerwear|jacket|blazer|coat|hoodie|layer/.test(q)) return 'outerwear';
+  if (/shoe|sneaker|boot|loafer|heel|sandal/.test(q)) return 'shoes';
+  if (/pant|jean|trouser|chino|skirt|short|bottom/.test(q)) return 'bottom';
+  if (/shirt|blouse|tee|top|polo|sweater|knit/.test(q)) return 'top';
+  if (/accessor|belt|scarf|hat|cap|bag|watch|sunglass|necktie/.test(q)) return 'accessory';
+  return tax.slotOf({ category: q }) || null;
+}
+
 /**
  * Normalise whatever the vision model returned into
  * `{ title, occasion, notes, slots: [{ slot, garment, color, material, formality }] }`.
@@ -53,8 +64,9 @@ function normaliseSpec(raw) {
   slots = slots
     .map((s) => {
       if (!s || typeof s !== 'object') return null;
-      const slot = tax.detectOccasions(s.slot || s.role || s.layer || '')[0];
+      const declaredSlot = s.slot || s.role || s.layer || '';
       const garment = String(s.garment || s.item || s.name || s.type || '').trim();
+      const slot = normalizeSlot(declaredSlot) || normalizeSlot(garment);
       if (!garment) return null;
       return {
         slot: slot || null,
@@ -230,11 +242,11 @@ function matchSpec(spec, wardrobe = [], opts = {}) {
   const used = new Set();
 
   for (const request of requests) {
-    const slot = request.slot || null;
+    const slot = normalizeSlot(request.slot) || normalizeSlot(request.garment);
+    const normalizedRequest = { ...request, slot };
     let best = null;
-    // Try the declared slot first, then widen so a missing category still fills.
-    for (const candidateSlot of slot ? [slot, ...tax.requiredSlots(), ...TARGET_SLOTS] : TARGET_SLOTS) {
-      const attempt = matchSlot(request, wardrobe.filter((i) => !used.has(i.id)), candidateSlot, opts);
+    for (const candidateSlot of slot ? [slot] : TARGET_SLOTS) {
+      const attempt = matchSlot(normalizedRequest, wardrobe.filter((i) => !used.has(i.id)), candidateSlot, opts);
       if (attempt.item && (!best || attempt.score > best.score)) best = attempt;
       if (best && best.score >= 70 && slot) break;
     }
@@ -299,6 +311,7 @@ export {
   attributeAffinity,
   specFromFilename,
   describeMatch,
+  normalizeSlot,
   TARGET_SLOTS,
   SLOT_LABEL,
 };
