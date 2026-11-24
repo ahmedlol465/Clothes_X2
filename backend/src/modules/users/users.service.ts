@@ -27,7 +27,7 @@ function toLegacyUser(user: User, styleProfile: StyleProfile | null): LegacyUser
   const rawSizes = (dimensions.sizes as Record<string, unknown> | undefined) ?? {};
   return {
     id: user.id,
-    name: user.email.split('@')[0],
+    name: user.name ?? user.email.split('@')[0],
     email: user.email,
     passwordHash: user.passwordHash ?? null,
     createdAt: user.createdAt ? user.createdAt.toISOString() : new Date().toISOString(),

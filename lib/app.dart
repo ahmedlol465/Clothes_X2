@@ -53,6 +53,76 @@ abstract final class Routes {
   static const String styleAvatar = '/style-avatar';
 }
 
+
+/// Route table shared by the root [MaterialApp] and the per-tab navigators in
+/// MainShell, so both resolve the same pages for the same route names.
+final Map<String, WidgetBuilder> appRouteTable = {
+  Routes.splash: (_) => SplashScreen(),
+  Routes.onboarding: (_) => const OnboardingScreen(),
+  Routes.login: (_) => LoginScreen(),
+  Routes.signUp: (_) => SignUpScreen(),
+  Routes.shell: (_) => MainShell(),
+  Routes.addClothing: (_) => AddClothingScreen(),
+  Routes.styleProfile: (_) => StyleProfileScreen(),
+  Routes.styleDna: (_) => const StyleDnaScreen(),
+  Routes.wardrobeInsights: (_) => WardrobeInsightsScreen(),
+  Routes.smartShopping: (_) => SmartShoppingScreen(),
+  Routes.discover: (_) => const DiscoverScreen(),
+  Routes.travelPlanner: (_) => TravelPlannerScreen(),
+  Routes.outfitPlanner: (_) => OutfitPlannerScreen(),
+  Routes.outfitHistory: (_) => const OutfitHistoryScreen(),
+  Routes.createOutfit: (_) => const CreateOutfitScreen(),
+  Routes.stylist: (_) => StylistScreen(),
+  Routes.styleAvatar: (_) => const StyleAvatarScreen(),
+};
+
+/// Resolves a named route to its page, including routes that carry arguments.
+/// Returns null when the name is unknown so callers can fall back.
+Route<dynamic>? resolveAppRoute(RouteSettings settings) {
+  final builder = appRouteTable[settings.name];
+  if (builder != null) {
+    return MaterialPageRoute(settings: settings, builder: builder);
+  }
+  switch (settings.name) {
+    case Routes.itemDetail:
+      final args = settings.arguments as ClothingItem?;
+      if (args == null) return null;
+      return MaterialPageRoute(
+        settings: settings,
+        builder: (_) => ItemDetailScreen(item: args),
+      );
+    case Routes.analyzing:
+      final args = settings.arguments as Map<String, dynamic>?;
+      return MaterialPageRoute(
+        settings: settings,
+        builder: (_) => AnalyzingScreen(
+          name: args?['name'] as String? ?? 'New Garment',
+          filename: args?['filename'] as String? ?? 'upload.jpg',
+          image: args?['image'] as String? ?? Img.teeWhite,
+        ),
+      );
+    case Routes.comingSoon:
+      final args = settings.arguments as Map<String, dynamic>?;
+      if (args == null) return null;
+      return MaterialPageRoute(
+        settings: settings,
+        builder: (_) => ComingSoonScreen(
+          title: args['title'] as String? ?? 'Coming Soon',
+          subtitle: args['subtitle'] as String? ?? '',
+          icon: args['icon'] as SwIcon? ?? SwIcon.sparkle,
+        ),
+      );
+    case Routes.perfectMatch:
+      final args = settings.arguments as Outfit?;
+      return MaterialPageRoute(
+        settings: settings,
+        builder: (_) => PerfectMatchScreen(outfit: args),
+      );
+    default:
+      return null;
+  }
+}
+
 class SmartWardrobeApp extends StatelessWidget {
   const SmartWardrobeApp({super.key});
 
@@ -63,65 +133,8 @@ class SmartWardrobeApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
       initialRoute: Routes.splash,
-routes: {
-        Routes.splash: (_) => SplashScreen(),
-        Routes.onboarding: (_) => const OnboardingScreen(),
-        Routes.login: (_) => LoginScreen(),
-        Routes.signUp: (_) => LoginScreen(), // No separate signup screen
-        Routes.shell: (_) => MainShell(),
-        Routes.addClothing: (_) => AddClothingScreen(),
-        Routes.styleProfile: (_) => StyleProfileScreen(),
-        Routes.styleDna: (_) => const StyleDnaScreen(),
-        Routes.wardrobeInsights: (_) => WardrobeInsightsScreen(),
-        Routes.smartShopping: (_) => SmartShoppingScreen(),
-        Routes.discover: (_) => const DiscoverScreen(),
-        Routes.travelPlanner: (_) => TravelPlannerScreen(),
-        Routes.outfitPlanner: (_) => OutfitPlannerScreen(),
-        Routes.outfitHistory: (_) => const OutfitHistoryScreen(),
-        Routes.createOutfit: (_) => const CreateOutfitScreen(),
-        Routes.stylist: (_) => StylistScreen(),
-        Routes.styleAvatar: (_) => const StyleAvatarScreen(),
-      },
-      onGenerateRoute: (settings) {
-        switch (settings.name) {
-          case Routes.itemDetail:
-            final args = settings.arguments as ClothingItem?;
-            if (args == null) return _errorRoute();
-            return MaterialPageRoute(
-              settings: settings,
-              builder: (_) => ItemDetailScreen(item: args),
-            );
-          case Routes.analyzing:
-            final args = settings.arguments as Map<String, dynamic>?;
-            return MaterialPageRoute(
-              settings: settings,
-              builder: (_) => AnalyzingScreen(
-                name: args?['name'] as String? ?? 'New Garment',
-                filename: args?['filename'] as String? ?? 'upload.jpg',
-                image: args?['image'] as String? ?? Img.teeWhite,
-              ),
-            );
-          case Routes.comingSoon:
-            final args = settings.arguments as Map<String, dynamic>?;
-            if (args == null) return _errorRoute();
-            return MaterialPageRoute(
-              settings: settings,
-              builder: (_) => ComingSoonScreen(
-                title: args['title'] as String? ?? 'Coming Soon',
-                subtitle: args['subtitle'] as String? ?? '',
-                icon: args['icon'] as SwIcon? ?? SwIcon.sparkle,
-              ),
-            );
-          case Routes.perfectMatch:
-            final args = settings.arguments as Outfit?;
-            return MaterialPageRoute(
-              settings: settings,
-              builder: (_) => PerfectMatchScreen(outfit: args),
-            );
-          default:
-            return _errorRoute();
-        }
-      },
+routes: appRouteTable,
+      onGenerateRoute: (settings) => resolveAppRoute(settings) ?? _errorRoute(),
       builder: (context, child) {
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: const SystemUiOverlayStyle(
