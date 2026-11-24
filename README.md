@@ -74,7 +74,8 @@ lib/
   data/
     assets.dart                semantic asset paths
     models.dart                ClothingItem, Outfit, ChatMessage, ...
-    mock_data.dart             every string and record from the design
+    dto/mappers.dart           JSON -> model mapping for every API payload
+    controllers/               per-feature state loaded from the backend API
   features/                    one folder per tab, screens grouped by area
 ```
 
@@ -112,18 +113,19 @@ npm install
 npm run setup:models        # downloads Marqo/marqo-fashionCLIP + all-MiniLM-L6-v2
                             # into backend/.model-cache (exists → skipped, never overwritten)
 
-# C. Node backend (the app talks to this on :3001)
-npm start                   # → http://localhost:3001  (endpoint index at GET /docs)
+# C. Node backend (the app talks to this on :3002)
+npm run dev                 # NestJS, watches src/ → http://localhost:3002/api
+                            # Swagger UI: http://localhost:3002/docs
 
 # D. Flutter app (second terminal, from the repo root)
 flutter pub get
 flutter run
 
 # E. API URL
-#   Chrome / desktop / iOS sim        → localhost:3001 (default)
-#   Android emulator                 → flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3001
+#   Chrome / desktop / iOS sim        → localhost:3002 (default)
+#   Android emulator                 → flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3002
 #   Physical Android device (same Wi-Fi) → use YOUR PC's LAN IP, do NOT commit it:
-#     flutter run --dart-define=API_BASE_URL=http://<your-pc-lan-ip>:3001
+#     flutter run --dart-define=API_BASE_URL=http://<your-pc-lan-ip>:3002
 ```
 
 ### The AI models behind `npm run setup:models`
@@ -174,8 +176,8 @@ unaffected.
 
 ### Test Add Clothes from your phone (same Wi-Fi)
 1. Find your PC's LAN IP (`ipconfig` → IPv4, e.g. `192.168.1.5`).
-2. Keep the backend running (`npm start` in `backend/`).
-3. Run: `flutter run --dart-define=API_BASE_URL=http://192.168.1.5:3001`
+2. Keep the backend running (`npm run dev` in `backend/`).
+3. Run: `flutter run --dart-define=API_BASE_URL=http://192.168.1.5:3002`
 4. Open **Add** → Take Photo / Gallery / Upload Multiple → Save.
    Photos upload to `backend/storage/` (gitignored) and are analyzed on
    their real pixels: Gemini vision when `GEMINI_API_KEY` is set in
@@ -184,43 +186,46 @@ unaffected.
 The app opens on the splash screen, then onboarding → sign in. **Explore the
 demo** on the login screen skips straight into the tabbed app.
 
-Login with the seeded account `karim@fashiontech.com` / `wardrobe2024`.
-Every screen reads from the backend and falls back to the bundled catalogue
-when it is unreachable, so the app works with or without `npm start` —
-but start it to get real wardrobe CRUD, AI chat, outfit scores, planner,
-packing, shopping gaps and insights.
+Login with the seeded account `karim@fashiontech.com` / `wardrobe2024`
+(inserted by the idempotent seed on an empty database, or with `npm run seed`).
+Every screen loads its data from the backend API, which reads TypeORM — there
+is no bundled catalogue and no mock fallback. With the backend down the app
+shows honest offline/empty states instead of demo records.
 
 ## Backend
 
+The canonical API is the NestJS app in `backend/src/` (port 3002), backed by
+TypeORM. All application data lives in the database: PostgreSQL/MySQL when
+configured, otherwise the embedded SQLite file (`backend/data/smartwardrobe.sqlite`).
+Only uploaded binary images live in file storage (`backend/storage/`).
+
 ```
 backend/
-  server.js          REST API — §8.1 auth, §8.2 users, §8.3 wardrobe
-                     (+ POST /wardrobe/upload; files in backend/storage/,
-                     served at GET /storage/*), §8.4 AI, §8.5 outfits,
-                     §8.6 planner, §8.7 shopping, §8.8 admin, plus
-                     GET /weather/current, /health, /docs
-  src/taxonomy.js    colour harmony, formality scale, occasion targets,
-                     fabric warmth, season fit, garment slots
-  src/scoring.js     the 11 match factors with signal-aware weights, the
-                     completeness gate, and the explanation generator
-  src/style-memory.js  learns taste from ratings and chat, exposes it as
-                     factor weights and a Style DNA summary
-  src/retrieval.js   semantic retrieval (optional local MiniLM embeddings)
-                     with a lexical fallback
-  src/weather.js     keyless live weather (Open-Meteo) + seasonal estimate
-  src/vision.js      "advanced clothes": photo of a look → matched to the
-                     wardrobe, with an explicit list of what is missing
-  src/llm.js         LLM providers — structured chat, SSE streaming, vision
-  src/ai-engine.js   AI pipeline §9 — beam search over the wardrobe, remixes,
-                     occasion detection, offline chat, gaps, packing
-  src/store.js       file-backed store (backend/data/db.json, seeded from mock data)
+  src/
+    main.ts              bootstrap: validation, Swagger, CORS, rate limit
+    app.module.ts        module composition + global auth guards
+    modules/             one folder per API area
+      auth/              §8.1 register, login, refresh, logout
+      users/             §8.2 profile, avatar, style profile
+      wardrobe/          §8.3 CRUD, uploads, batch import
+      ai/                §8.4 Python clothing-analysis client
+      outfits/           §8.5 recommendations, feedback, favorites
+      planner/           §8.6 weekly plan, events, travel packing
+      shop/              §8.7 recommendations, wishlist, before-you-buy
+      admin/             §8.8 dashboard, users, AI performance
+      stylist/           chat, streaming, photo match, remix, Style DNA
+      weather/           live Open-Meteo conditions
+    common/              guards, filters, interceptors, cache, storage, DTOs
+    database/            TypeORM entities, migrations, seed, SQLite fallback
+    config/              typed configuration factories
+  test/                  unit specs + HTTP e2e smoke test
 ai-service/
-  main.py            FastAPI mirror of POST /ai/* (§6.3). Optional:
-                     AI_SERVICE_URL=http://localhost:8000 npm start
-lib/core/api/        Flutter side: ApiConfig, ApiClient (package:http +
-                     multipart upload, works on mobile + web),
-                     SmartWardrobeApi (typed §8 wrapper)
-lib/data/app_state.dart  central ChangeNotifier store with offline fallback
+  main.py                FastAPI clothing-analysis sidecar
+                         (AI_SERVICE_URL=http://localhost:8000; optional)
+lib/core/api/            Flutter side: ApiConfig, ApiClient (package:http +
+                         multipart upload, works on mobile + web),
+                         SmartWardrobeApi (typed §8 wrapper)
+lib/data/                models, DTO mappers, repositories, AppState facade
 ```
 
 ## Tests

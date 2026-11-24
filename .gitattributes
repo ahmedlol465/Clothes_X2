@@ -1,0 +1,25 @@
+# Normalise every text file to LF so Windows checkouts do not rewrite the
+# whole repository. Run `git add --renormalize .` once after changing this file.
+* text=auto eol=lf
+
+# Shell / build scripts must keep LF even on Windows.
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Binary assets must never be converted or merged as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.onnx binary
+*.pt binary
+*.pth binary
+*.safetensors binary
+*.sqlite binary
+*.sqlite3 binary

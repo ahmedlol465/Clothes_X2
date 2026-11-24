@@ -24,7 +24,7 @@ const ACCEPTED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_BYTES = 12 * 1024 * 1024;
 
 @ApiTags('AI')
-@Controller('ai')
+@Controller('ai-analysis')
 export class AiController {
   constructor(private readonly ai: AiService) {}
 

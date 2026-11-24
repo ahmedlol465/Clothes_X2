@@ -107,8 +107,16 @@ export class SqliteDatabase {
   readonly memory: boolean;
 
   constructor(filename: string, _options: Record<string, unknown> = {}) {
-    const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
-    this.handle = new DatabaseSync(filename);
+    let sqlite: typeof import('node:sqlite');
+    try {
+      sqlite = require('node:sqlite') as typeof import('node:sqlite');
+    } catch {
+      throw new Error(
+        'Embedded SQLite needs Node.js 22.5+ (node:sqlite). ' +
+          'Use Node 22 (see .nvmrc) or set DB_TYPE=postgres/mysql.',
+      );
+    }
+    this.handle = new sqlite.DatabaseSync(filename);
     this.name = filename;
     this.memory = filename === ':memory:';
   }

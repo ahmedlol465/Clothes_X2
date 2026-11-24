@@ -7,6 +7,7 @@ import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
+import '../../data/controllers/account_controller.dart';
 import '../../data/models.dart';
 
 /// "My Style Profile" — loads the authenticated user's style blueprint from
@@ -22,7 +23,15 @@ import '../../data/models.dart';
 /// The email is displayed read-only on purpose — changing it needs a
 /// verification flow that does not exist yet.
 class StyleProfileScreen extends StatefulWidget {
-  const StyleProfileScreen({super.key});
+  const StyleProfileScreen._(this._accountController);
+
+  factory StyleProfileScreen({Key? key, AccountController? accountController}) {
+    return StyleProfileScreen._(
+      accountController ?? AppState.instance.accountController,
+    );
+  }
+
+  final AccountController _accountController;
 
   @override
   State<StyleProfileScreen> createState() => _StyleProfileScreenState();
@@ -90,15 +99,15 @@ class _StyleProfileScreenState extends State<StyleProfileScreen> {
       _error = null;
     });
 
-    final ok = await AppState.instance.loadProfile();
+    final ok = await widget._accountController.loadProfile();
     if (!mounted) return;
 
-    final profile = AppState.instance.profile;
+    final profile = widget._accountController.profile;
     if (!ok || profile == null) {
       setState(() {
         _loading = false;
         _error =
-            AppState.instance.profileError ?? 'Could not load your style profile.';
+            widget._accountController.profileError ?? 'Could not load your style profile.';
       });
       return;
     }
@@ -138,7 +147,7 @@ class _StyleProfileScreenState extends State<StyleProfileScreen> {
       _error = null;
     });
 
-    final current = AppState.instance.profile;
+    final current = widget._accountController.profile;
     if (current == null) {
       setState(() {
         _saving = false;
@@ -167,10 +176,10 @@ class _StyleProfileScreenState extends State<StyleProfileScreen> {
 
     // Name goes through its own endpoint; the style fields through the style
     // profile endpoint. Both are scoped to the token's own account.
-    UserProfile? saved = await AppState.instance.saveStyleProfile(draft);
+    UserProfile? saved = await widget._accountController.saveStyleProfile(draft);
     final nameChanged = _name.text.trim() != current.name;
     if (saved != null && nameChanged) {
-      saved = await AppState.instance.updateName(_name.text.trim());
+      saved = await widget._accountController.updateName(_name.text.trim());
     }
 
     if (!mounted) return;
@@ -198,7 +207,7 @@ class _StyleProfileScreenState extends State<StyleProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final profile = AppState.instance.profile;
+    final profile = widget._accountController.profile;
 
     return SwScreen(
       bottomBar: _loading || _saving

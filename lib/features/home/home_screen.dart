@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../app.dart';
+import '../../core/app_copy.dart';
 import '../../core/icons/sw_icon.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
@@ -7,156 +9,213 @@ import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
+import '../../data/controllers/account_controller.dart';
+import '../../data/controllers/outfits_controller.dart';
+import '../../data/controllers/planner_controller.dart';
+import '../../data/controllers/wardrobe_controller.dart';
+import '../../data/backend_status.dart';
 import '../../data/assets.dart';
-import '../../data/mock_data.dart';
 import '../../data/models.dart';
-import '../outfits/outfit_planner_screen.dart';
-import '../outfits/perfect_match_screen.dart';
 import '../shell/main_shell.dart';
-import '../wardrobe/add_clothing_screen.dart';
-import '../wardrobe/item_detail_screen.dart';
 
 /// Frame 7 - the dashboard shown after sign in.
 ///
 /// The hero outfit and weather load from the backend
-/// (`GET /outfits/recommended`, `GET /weather/current`) and fall back
-/// to the bundled content offline.
+/// (`GET /outfits/recommended`, `GET /weather/current`). Nothing is invented
+/// when those calls fail; the cards show an honest empty state.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.onOpenTab});
+  const HomeScreen({
+    super.key,
+    required this.onOpenTab,
+    this.outfitsController,
+    this.wardrobeController,
+    this.plannerController,
+    this.accountController,
+    this.backendStatus,
+  });
 
   final ValueChanged<ShellTab> onOpenTab;
+  final OutfitsController? outfitsController;
+  final WardrobeController? wardrobeController;
+  final PlannerController? plannerController;
+  final AccountController? accountController;
+  final BackendStatus? backendStatus;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _state = AppState.instance;
+  late final OutfitsController _outfitsController;
+  late final WardrobeController _wardrobeController;
+  late final PlannerController _plannerController;
+  late final AccountController _accountController;
+  late final BackendStatus _backendStatus;
 
   @override
   void initState() {
     super.initState();
-    _state.loadToday();
-    _state.loadWardrobe();
+    _outfitsController = widget.outfitsController ?? AppState.instance.outfitsController;
+    _wardrobeController = widget.wardrobeController ?? AppState.instance.wardrobeController;
+    _plannerController = widget.plannerController ?? AppState.instance.plannerController;
+    _accountController = widget.accountController ?? AppState.instance.accountController;
+    _backendStatus = widget.backendStatus ?? AppState.instance.backendStatus;
+    _outfitsController.loadToday();
+    _wardrobeController.load();
+    _plannerController.loadEvents();
   }
 
-  void _push(BuildContext context, Widget screen) {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+  void _push(BuildContext context, String routeName, {Object? arguments}) {
+    Navigator.of(context).pushNamed(routeName, arguments: arguments);
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: _state,
-      builder: (context, _) => SwScreen(
-        scroll: true,
-        padding: const EdgeInsets.only(bottom: Insets.xxl),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const _Greeting(),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-              child: _WeatherPill(
-                weather: _state.weather,
-                online: _state.backendOnline,
-                onRetry: _state.loadToday,
+      listenable: Listenable.merge([
+        _outfitsController,
+        _wardrobeController,
+        _plannerController,
+        _accountController,
+        _backendStatus,
+      ]),
+      builder: (context, _) {
+        final profile = _accountController.profile;
+        final today = _outfitsController.today;
+        final event = _plannerController.events.isEmpty
+            ? null
+            : _plannerController.events.first;
+        return SwScreen(
+          scroll: true,
+          padding: const EdgeInsets.only(bottom: Insets.xxl),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _Greeting(
+                name: profile?.name ?? 'there',
+                avatarUrl: profile?.avatarUrl,
               ),
-            ),
-            const SizedBox(height: Insets.xl),
-
-            // Today's AI selection -------------------------------------------
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text("Today's AI Selection", style: AppText.h4),
-                  ),
-                  SwMatchBadge(match: _state.todayOutfit.match),
-                ],
-              ),
-            ),
-            const SizedBox(height: Insets.md),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-              child: _SelectionCard(
-                outfit: _state.todayOutfit,
-                onView: () => _push(
-                  context,
-                  PerfectMatchScreen(outfit: _state.todayOutfit),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: _WeatherPill(
+                  weather: _outfitsController.weather,
+                  online: _backendStatus.online,
+                  onRetry: _outfitsController.loadToday,
                 ),
               ),
-            ),
-            const SizedBox(height: Insets.sectionGap),
+              const SizedBox(height: Insets.xl),
 
-            // Quick actions ---------------------------------------------------
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Quick Actions', style: AppText.h4),
-                  const SizedBox(height: Insets.md),
-                  GridView.count(
-                    crossAxisCount: 2,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    mainAxisSpacing: Insets.md,
-                    crossAxisSpacing: Insets.md,
-                    childAspectRatio: 2.55,
-                    children: [
-                      _QuickAction(
-                        icon: SwIcon.plus,
-                        label: 'Add Clothes',
-                        onTap: () => _push(context, const AddClothingScreen()),
-                      ),
-                      _QuickAction(
-                        icon: SwIcon.sparkle,
-                        label: 'AI Stylist',
-                        onTap: () => widget.onOpenTab(ShellTab.stylist),
-                      ),
-                      _QuickAction(
-                        icon: SwIcon.calendar,
-                        label: 'Plan Outfit',
-                        onTap: () => _push(context, const OutfitPlannerScreen()),
-                      ),
-                      _QuickAction(
-                        icon: SwIcon.shirt,
-                        label: 'My Wardrobe',
-                        onTap: () => widget.onOpenTab(ShellTab.wardrobe),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: Insets.md),
-                  _UpcomingEvent(
-                    onTap: () => _push(context, const OutfitPlannerScreen()),
-                  ),
-                ],
+              // Today's AI selection -------------------------------------------
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text("Today's AI Selection", style: AppText.h4),
+                    ),
+                    if (today != null) SwMatchBadge(match: today.match),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: Insets.sectionGap),
+              const SizedBox(height: Insets.md),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: _SelectionCard(
+                  outfit: today,
+                  onView: today == null
+                      ? null
+                      : () => _push(
+                            context,
+                            Routes.perfectMatch,
+                            arguments: today,
+                          ),
+                ),
+              ),
+              const SizedBox(height: Insets.sectionGap),
 
-            // Recently added -------------------------------------------------
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-              child: SwSectionHeader(
-                title: 'Recently Added',
-                actionLabel: 'See all',
-                onAction: () => widget.onOpenTab(ShellTab.wardrobe),
+              // Quick actions ---------------------------------------------------
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Quick Actions', style: AppText.h4),
+                    const SizedBox(height: Insets.md),
+                    GridView.count(
+                      crossAxisCount: 2,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      mainAxisSpacing: Insets.md,
+                      crossAxisSpacing: Insets.md,
+                      childAspectRatio: 2.55,
+                      children: [
+                        _QuickAction(
+                          icon: SwIcon.plus,
+                          label: 'Add Clothes',
+                          onTap: () => _push(context, Routes.addClothing),
+                        ),
+                        _QuickAction(
+                          icon: SwIcon.sparkle,
+                          label: 'AI Stylist',
+                          onTap: () => widget.onOpenTab(ShellTab.stylist),
+                        ),
+                        _QuickAction(
+                          icon: SwIcon.calendar,
+                          label: 'Plan Outfit',
+                          onTap: () => _push(context, Routes.outfitPlanner),
+                        ),
+                        _QuickAction(
+                          icon: SwIcon.shirt,
+                          label: 'My Wardrobe',
+                          onTap: () => widget.onOpenTab(ShellTab.wardrobe),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: Insets.md),
+                    if (event != null)
+                      _UpcomingEvent(
+                        event: event,
+                        onTap: () => _push(context, Routes.outfitPlanner),
+                      ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: Insets.xs),
-            RecentlyAddedRail(items: _state.wardrobe),
-          ],
-        ),
-      ),
+              const SizedBox(height: Insets.sectionGap),
+
+              // Recently added -------------------------------------------------
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: SwSectionHeader(
+                  title: 'Recently Added',
+                  actionLabel: 'See all',
+                  onAction: () => widget.onOpenTab(ShellTab.wardrobe),
+                ),
+              ),
+              const SizedBox(height: Insets.xs),
+              if (_wardrobeController.items.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                  child: Text(AppCopy.emptyWardrobe, style: AppText.caption),
+                )
+              else
+                RecentlyAddedRail(
+                  items: _wardrobeController.items,
+                  onTap: (item) =>
+                      _push(context, Routes.itemDetail, arguments: item),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
 
 class _Greeting extends StatelessWidget {
-  const _Greeting();
+  const _Greeting({required this.name, this.avatarUrl});
+
+  final String name;
+  final String? avatarUrl;
 
   static String _greetingFor(DateTime now) {
     final hour = now.hour;
@@ -168,6 +227,7 @@ class _Greeting extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final firstName = name.trim().isEmpty ? 'there' : name.trim().split(' ').first;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         Insets.gutter,
@@ -187,7 +247,7 @@ class _Greeting extends StatelessWidget {
                 Text.rich(
                   TextSpan(
                     children: [
-                      TextSpan(text: MockData.userName),
+                      TextSpan(text: firstName),
                       const TextSpan(text: '  '),
                       const WidgetSpan(
                         alignment: PlaceholderAlignment.middle,
@@ -203,7 +263,13 @@ class _Greeting extends StatelessWidget {
               ],
             ),
           ),
-          SwAvatar(image: Img.avatarKarim, size: 44, name: MockData.userName),
+          SwAvatar(
+            image: avatarUrl == null || avatarUrl!.trim().isEmpty
+                ? Img.avatarKarim
+                : avatarUrl!,
+            size: 44,
+            name: firstName,
+          ),
         ],
       ),
     );
@@ -295,12 +361,29 @@ String _advice(Map<String, dynamic>? weather) {
 class _SelectionCard extends StatelessWidget {
   const _SelectionCard({required this.outfit, required this.onView});
 
-  final Outfit outfit;
-  final VoidCallback onView;
+  final Outfit? outfit;
+  final VoidCallback? onView;
 
   @override
   Widget build(BuildContext context) {
     final outfit = this.outfit;
+    if (outfit == null) {
+      return SwCard(
+        padding: const EdgeInsets.all(Insets.lg),
+        child: Row(
+          children: [
+            const SwIconBadge(icon: SwIcon.sparkle, size: 38, iconSize: 18),
+            const SizedBox(width: Insets.md),
+            Expanded(
+              child: Text(
+                'No recommendation yet. Add a few garments and pull to refresh.',
+                style: AppText.caption,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     return SwCard(
       padding: EdgeInsets.zero,
@@ -386,12 +469,15 @@ class _QuickAction extends StatelessWidget {
 
 /// Highlighted next event card.
 class _UpcomingEvent extends StatelessWidget {
-  const _UpcomingEvent({required this.onTap});
+  const _UpcomingEvent({required this.event, required this.onTap});
 
+  final Map<String, dynamic> event;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final title = '${event['title'] ?? 'Upcoming event'}';
+    final when = '${event['startsAtRaw'] ?? event['startsAt'] ?? ''}';
     return SwCard(
       onTap: onTap,
       padding: const EdgeInsets.all(Insets.md),
@@ -403,9 +489,11 @@ class _UpcomingEvent extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('University Presentation', style: AppText.cardTitle),
-                const SizedBox(height: 2),
-                Text('Tomorrow • 10:00 AM', style: AppText.caption),
+                Text(title, style: AppText.cardTitle),
+                if (when.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(when, style: AppText.caption),
+                ],
               ],
             ),
           ),
@@ -431,9 +519,10 @@ class _UpcomingEvent extends StatelessWidget {
 
 /// Horizontal rail of newly catalogued garments.
 class RecentlyAddedRail extends StatelessWidget {
-  const RecentlyAddedRail({super.key, required this.items});
+  const RecentlyAddedRail({super.key, required this.items, required this.onTap});
 
   final List<ClothingItem> items;
+  final void Function(ClothingItem) onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -449,9 +538,7 @@ class RecentlyAddedRail extends StatelessWidget {
         itemBuilder: (context, i) {
           final ClothingItem item = rail[i];
           return GestureDetector(
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => ItemDetailScreen(item: item)),
-            ),
+            onTap: () => onTap(item),
             child: SizedBox(
               width: 132,
               child: Column(

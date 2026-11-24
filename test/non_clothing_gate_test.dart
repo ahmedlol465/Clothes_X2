@@ -1,6 +1,8 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:smartwardrobe/core/api/api_client.dart';
 import 'package:smartwardrobe/data/app_state.dart';
 
@@ -17,7 +19,25 @@ import 'package:smartwardrobe/data/app_state.dart';
 /// Skips gracefully when the backend is not running (same convention as
 /// `backend_contract_test.dart`).
 void main() {
-  final base = Platform.environment['API_BASE_URL'] ?? 'http://localhost:3001';
+  // Widget tests default to TargetPlatform.android, which makes ApiConfig
+  // resolve the Android-emulator host (10.0.2.2) instead of this machine.
+  // These tests talk to a local backend, so pin the desktop platform.
+  setUpAll(() async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    // Token persistence needs a plugin; give it the in-memory test store.
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // Wardrobe upload/analysis are user-scoped, so sign in as the demo user
+    // before driving the app path.
+    final signedIn = await AppState.instance.accountController.login(
+      'karim@fashiontech.com',
+      'wardrobe2024',
+    );
+    expect(signedIn, isTrue, reason: 'demo credentials must work');
+  });
+  tearDownAll(() => debugDefaultTargetPlatformOverride = null);
+
+  final base =
+      Platform.environment['API_BASE_URL'] ?? 'http://localhost:3002/api';
 
   Future<bool> backendUp() async {
     final client = HttpClient();
@@ -83,7 +103,7 @@ void main() {
         reason: '$fixture must be rejected, not staged as default clothing',
       );
     }
-  });
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('clothing: a real garment still stages as clothing-vision', () async {
     if (!await backendUp()) {
@@ -121,5 +141,5 @@ void main() {
       }
     }
     fail('no clothing asset staged successfully');
-  });
+  }, timeout: const Timeout(Duration(minutes: 5)));
 }

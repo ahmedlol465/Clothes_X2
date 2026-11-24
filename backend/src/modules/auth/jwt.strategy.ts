@@ -1,12 +1,12 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
-import { InjectRepository } from '@nestjs/typeorm';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { AuthenticatedUser } from '../../common/decorators/auth.decorators';
-import { User } from '../../database/entities';
+import { User } from '../../database/entities/identity.entity';
 
 export interface JwtPayload {
   /** `sub` = user id, `ver` = user's tokenVersion for refresh invalidation. */
@@ -21,7 +21,7 @@ export interface JwtPayload {
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(
     config: ConfigService,
-    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(User) private readonly userRepo: Repository<User>,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -35,18 +35,18 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('Refresh tokens cannot access the API');
     }
 
-    const user = await this.users.findOne({ where: { id: payload.sub } });
+    const user = await this.userRepo.findOne({ where: { id: payload.sub } });
     if (!user) throw new UnauthorizedException('Account no longer exists');
 
-    if (user.tokenVersion !== payload.ver) {
+    if ((user.tokenVersion ?? 0) !== payload.ver) {
       throw new UnauthorizedException('Session expired, please sign in again');
     }
 
     return {
       id: user.id,
       email: user.email,
-      role: user.role,
-      tokenVersion: user.tokenVersion,
+      role: user.role as AuthenticatedUser['role'],
+      tokenVersion: user.tokenVersion ?? 0,
     };
   }
 }

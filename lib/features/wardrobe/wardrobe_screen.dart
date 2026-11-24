@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../app.dart';
 import '../../core/icons/sw_icon.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
@@ -9,16 +10,23 @@ import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
+import '../../data/backend_status.dart';
+import '../../data/controllers/wardrobe_controller.dart';
 import '../../data/models.dart';
-import 'add_clothing_screen.dart';
-import 'item_detail_screen.dart';
 
 /// Frame 8 - searchable, filterable grid of every catalogued garment.
 ///
-/// Data comes from the backend (`GET /wardrobe/items`) via [AppState] and
-/// falls back to the bundled catalogue when the backend is unreachable.
+/// Data comes from the backend (`GET /wardrobe/items`) via [WardrobeController]
+/// and falls back to the bundled catalogue when the backend is unreachable.
 class WardrobeScreen extends StatefulWidget {
-  const WardrobeScreen({super.key});
+  const WardrobeScreen({
+    super.key,
+    this.wardrobeController,
+    this.backendStatus,
+  });
+
+  final WardrobeController? wardrobeController;
+  final BackendStatus? backendStatus;
 
   @override
   State<WardrobeScreen> createState() => _WardrobeScreenState();
@@ -26,21 +34,24 @@ class WardrobeScreen extends StatefulWidget {
 
 class _WardrobeScreenState extends State<WardrobeScreen> {
   final _search = TextEditingController();
-  final _state = AppState.instance;
   String _filter = 'All';
   Timer? _debounce;
+  late final WardrobeController _wardrobeController;
+  late final BackendStatus _backendStatus;
 
   @override
   void initState() {
     super.initState();
     _search.addListener(_onSearch);
+    _wardrobeController = widget.wardrobeController ?? AppState.instance.wardrobeController;
+    _backendStatus = widget.backendStatus ?? AppState.instance.backendStatus;
     // Defer the first load until after the first frame: loadWardrobe()
     // notifies listeners synchronously and initState runs during the build
     // phase, which would make an already-mounted ListenableBuilder (on a
     // screen below this one, or a sibling tab) request a build mid-build
     // (setState/markNeedsBuild called during build).
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _state.loadWardrobe();
+      if (mounted) _wardrobeController.load();
     });
   }
 
@@ -59,13 +70,11 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
   }
 
   void _reload() {
-    _state.loadWardrobe(search: _search.text.trim(), category: _filter);
+    _wardrobeController.load(search: _search.text.trim(), category: _filter);
   }
 
   Future<void> _openAdd() async {
-    await Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => const AddClothingScreen()));
+    await Navigator.of(context).pushNamed(Routes.addClothing);
     if (mounted) _reload();
   }
 
@@ -74,9 +83,12 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
     return SwScreen(
       bottomBar: _AddClothesBar(onTap: _openAdd),
       child: ListenableBuilder(
-        listenable: _state,
+        listenable: Listenable.merge([
+          _wardrobeController,
+          _backendStatus,
+        ]),
         builder: (context, _) {
-          final items = _state.wardrobe;
+          final items = _wardrobeController.items;
           return Column(
             children: [
               Padding(
@@ -104,7 +116,7 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
               ),
               const SizedBox(height: Insets.md),
               _FilterBar(
-                filters: _state.wardrobeFilters,
+                filters: _wardrobeController.filters,
                 selected: _filter,
                 onSelect: (v) {
                   setState(() => _filter = v);
@@ -113,7 +125,7 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
               ),
               const SizedBox(height: Insets.lg),
               Expanded(
-                child: _state.wardrobeLoading && items.isEmpty
+                child: _wardrobeController.loading && items.isEmpty
                     ? const Center(
                         child: CircularProgressIndicator(
                           valueColor: AlwaysStoppedAnimation(
@@ -233,8 +245,7 @@ class _GridCell extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () => Navigator.of(context)
-          .push(MaterialPageRoute(
-              builder: (_) => ItemDetailScreen(item: item)))
+          .pushNamed(Routes.itemDetail, arguments: item)
           .then((_) => onOpen()),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

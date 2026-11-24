@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
+import '../../core/app_info.dart';
 import '../../core/icons/sw_icon.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../data/app_state.dart';
-import '../../data/mock_data.dart';
+import '../../data/controllers/account_controller.dart';
 
 /// Frame 1 - the branded splash shown while the app boots.
 ///
@@ -15,7 +16,15 @@ import '../../data/mock_data.dart';
 /// `GET /users/me` while the wordmark is on screen, so a returning user lands
 /// in the app and a signed-out one lands on Login.
 class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key});
+  const SplashScreen._(this._accountController);
+
+  factory SplashScreen({Key? key, AccountController? accountController}) {
+    return SplashScreen._(
+      accountController ?? AppState.instance.accountController,
+    );
+  }
+
+  final AccountController _accountController;
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -41,7 +50,7 @@ class _SplashScreenState extends State<SplashScreen> {
   /// display time has passed. Routing on a bare timer would strand a valid
   /// user on onboarding whenever the network is slower than the animation.
   Future<void> _boot() async {
-    await AppState.instance.restoreSession();
+    await widget._accountController.restoreSession();
     await Future<void>.delayed(_minimumSplash);
     _route();
   }
@@ -50,7 +59,7 @@ class _SplashScreenState extends State<SplashScreen> {
   void _route() {
     if (!mounted || _routed) return;
     _routed = true;
-    if (AppState.instance.isAuthenticated) {
+    if (widget._accountController.isAuthenticated) {
       Navigator.of(context).pushReplacementNamed(Routes.shell);
       return;
     }
@@ -84,7 +93,7 @@ class _SplashScreenState extends State<SplashScreen> {
             bottom: 28,
             child: Center(
               child: Text(
-                MockData.appVersion,
+                AppInfo.version,
                 style: AppText.caption.copyWith(fontSize: 11),
               ),
             ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../app.dart';
 import '../../core/icons/sw_icon.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
@@ -7,36 +8,42 @@ import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
+import '../../data/controllers/wardrobe_controller.dart';
 import '../../data/models.dart';
-import '../stylist/stylist_screen.dart';
 
 /// Frame 21 - data driven overview of the closet.
 ///
 /// Stats, most-worn and never-worn rows are computed from the live wardrobe.
 class WardrobeInsightsScreen extends StatefulWidget {
-  const WardrobeInsightsScreen({super.key});
+  const WardrobeInsightsScreen._(this._wardrobeController);
+
+  factory WardrobeInsightsScreen({Key? key, WardrobeController? wardrobeController}) {
+    return WardrobeInsightsScreen._(
+      wardrobeController ?? AppState.instance.wardrobeController,
+    );
+  }
+
+  final WardrobeController _wardrobeController;
 
   @override
   State<WardrobeInsightsScreen> createState() => _WardrobeInsightsScreenState();
 }
 
 class _WardrobeInsightsScreenState extends State<WardrobeInsightsScreen> {
-  final _state = AppState.instance;
-
   @override
   void initState() {
     super.initState();
     // Same deferral as WardrobeScreen: loadWardrobe() notifies synchronously
     // during the build phase when this pushed route is being built.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _state.loadWardrobe();
+      if (mounted) widget._wardrobeController.load();
     });
   }
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: _state,
+      listenable: widget._wardrobeController,
       builder: (context, _) => SwScreen(
         scroll: true,
         padding: const EdgeInsets.only(bottom: Insets.xxl),
@@ -75,11 +82,11 @@ class _WardrobeInsightsScreenState extends State<WardrobeInsightsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _StatStrip(items: _state.wardrobe),
+                  _StatStrip(items: widget._wardrobeController.items),
                   const SizedBox(height: Insets.sectionGap),
                   Text('Most Worn Items', style: AppText.h4),
                   const SizedBox(height: Insets.md),
-                  _MostWornRow(items: _state.wardrobe),
+                  _MostWornRow(items: widget._wardrobeController.items),
                   const SizedBox(height: Insets.lg),
                   const SwBanner(
                     tone: SwBannerTone.warning,
@@ -92,10 +99,8 @@ class _WardrobeInsightsScreenState extends State<WardrobeInsightsScreen> {
                   Text('Never Worn', style: AppText.h4),
                   const SizedBox(height: Insets.md),
                   _NeverWornCard(
-                    items: _state.wardrobe,
-                    onAsk: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const StylistScreen()),
-                    ),
+                    items: widget._wardrobeController.items,
+                    onAsk: () => Navigator.of(context).pushNamed(Routes.stylist),
                   ),
                 ],
               ),

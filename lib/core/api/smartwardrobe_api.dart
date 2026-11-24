@@ -285,6 +285,15 @@ class SmartWardrobeApi {
   Future<Map<String, dynamic>> styleDna() async =>
       Map<String, dynamic>.from(await _client.get('/ai/style-dna'));
 
+  /// DB-backed style breakdown used by the Style DNA tab
+  /// (`GET /insights/style-dna`).
+  Future<Map<String, dynamic>> styleDnaInsights() async =>
+      Map<String, dynamic>.from(await _client.get('/insights/style-dna'));
+
+  /// Editorial content for the Discover tab (`GET /content/discover`).
+  Future<Map<String, dynamic>> discoverContent() async =>
+      Map<String, dynamic>.from(await _client.get('/content/discover'));
+
   /// Recent stylist turns, oldest first (`GET /ai/conversations`).
   Future<List<Map<String, dynamic>>> conversations({int limit = 40}) async {
     final res = await _client.get('/ai/conversations', {'limit': '$limit'});

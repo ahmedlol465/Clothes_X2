@@ -24,7 +24,15 @@ export class ShoppingItem {
   @Column({ length: 255, nullable: true })
   imageUrl: string | null;
 
-  @Column({ type: 'float' })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    transformer: {
+      to: (value: number | null) => value === null ? null : value,
+      from: (value: string | null) => value === null ? null : Number(value),
+    },
+  })
   price: number;
 
   @Column({ length: 3, default: 'USD' })
@@ -46,10 +54,10 @@ export class ShoppingItem {
   @Column({ type: 'text', nullable: true })
   reason: string | null;
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   compatibleColors: string[];
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   gapTags: string[] | null;
 
   @Column({ default: false })
@@ -90,16 +98,43 @@ export class WishlistItem {
   @Column({ length: 255, nullable: true })
   imageUrl: string | null;
 
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: {
+      to: (value: number | null) => value === null ? null : value,
+      from: (value: string | null) => value === null ? null : Number(value),
+    },
+  })
   price: number | null;
 
   @Column({ length: 255, nullable: true })
   productUrl: string | null;
 
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: {
+      to: (value: number | null) => value === null ? null : value,
+      from: (value: string | null) => value === null ? null : Number(value),
+    },
+  })
   lowestPrice: number | null;
 
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: {
+      to: (value: number | null) => value === null ? null : value,
+      from: (value: string | null) => value === null ? null : Number(value),
+    },
+  })
   targetPrice: number | null;
 
   @Column({ default: false })
@@ -135,7 +170,15 @@ export class Purchase {
   @Column({ length: 200 })
   itemName: string;
 
-  @Column({ type: 'float' })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    transformer: {
+      to: (value: number | null) => value === null ? null : value,
+      from: (value: string | null) => value === null ? null : Number(value),
+    },
+  })
   price: number;
 
   @Column({ length: 3, default: 'USD' })
@@ -147,8 +190,11 @@ export class Purchase {
   @Column({ length: 40, nullable: true })
   category: string | null;
 
-  @Column({ type: 'date' })
-  purchasedOn: string;
+  @Column({ type: 'date', nullable: true })
+  purchasedOn: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  purchasedOnRaw: string | null;
 
   @Column({ length: 120, nullable: true })
   store: string | null;

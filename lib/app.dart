@@ -1,12 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'core/theme/app_colors.dart';
-import 'core/theme/app_theme.dart';
 import 'features/auth/login_screen.dart';
 import 'features/onboarding/onboarding_screen.dart';
 import 'features/shell/main_shell.dart';
 import 'features/splash/splash_screen.dart';
+import 'features/wardrobe/add_clothing_screen.dart';
+import 'features/wardrobe/item_detail_screen.dart';
+import 'features/wardrobe/analyzing_screen.dart';
+import 'features/outfits/outfit_planner_screen.dart';
+import 'features/outfits/perfect_match_screen.dart';
+import 'features/outfits/outfit_history_screen.dart';
+import 'features/travel/travel_planner_screen.dart';
+import 'features/insights/wardrobe_insights_screen.dart';
+import 'features/insights/style_dna_screen.dart';
+import 'features/profile/style_profile_screen.dart';
+import 'features/profile/coming_soon_screen.dart';
+import 'features/shop/smart_shopping_screen.dart';
+import 'features/stylist/stylist_screen.dart';
+import 'features/stylist/create_outfit_screen.dart';
+import 'features/stylist/style_avatar_screen.dart';
+import 'features/discover/discover_screen.dart';
+
+import 'core/theme/app_colors.dart';
+import 'core/theme/app_theme.dart';
+import 'data/assets.dart';
+import 'data/models.dart';
+import 'core/icons/sw_icon.dart';
 
 /// Named routes for every screen in the app.
 abstract final class Routes {
@@ -15,6 +35,22 @@ abstract final class Routes {
   static const String login = '/login';
   static const String signUp = '/signup';
   static const String shell = '/shell';
+  static const String addClothing = '/add-clothing';
+  static const String itemDetail = '/item-detail';
+  static const String analyzing = '/analyzing';
+  static const String styleProfile = '/style-profile';
+  static const String comingSoon = '/coming-soon';
+  static const String styleDna = '/style-dna';
+  static const String wardrobeInsights = '/wardrobe-insights';
+  static const String smartShopping = '/smart-shopping';
+  static const String discover = '/discover';
+  static const String perfectMatch = '/perfect-match';
+  static const String travelPlanner = '/travel-planner';
+  static const String outfitPlanner = '/outfit-planner';
+  static const String outfitHistory = '/outfit-history';
+  static const String createOutfit = '/create-outfit';
+  static const String stylist = '/stylist';
+  static const String styleAvatar = '/style-avatar';
 }
 
 class SmartWardrobeApp extends StatelessWidget {
@@ -27,12 +63,64 @@ class SmartWardrobeApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
       initialRoute: Routes.splash,
-      routes: {
-        Routes.splash: (_) => const SplashScreen(),
+routes: {
+        Routes.splash: (_) => SplashScreen(),
         Routes.onboarding: (_) => const OnboardingScreen(),
-        Routes.login: (_) => const LoginScreen(),
-        Routes.signUp: (_) => const SignUpScreen(),
-        Routes.shell: (_) => const MainShell(),
+        Routes.login: (_) => LoginScreen(),
+        Routes.signUp: (_) => LoginScreen(), // No separate signup screen
+        Routes.shell: (_) => MainShell(),
+        Routes.addClothing: (_) => AddClothingScreen(),
+        Routes.styleProfile: (_) => StyleProfileScreen(),
+        Routes.styleDna: (_) => const StyleDnaScreen(),
+        Routes.wardrobeInsights: (_) => WardrobeInsightsScreen(),
+        Routes.smartShopping: (_) => SmartShoppingScreen(),
+        Routes.discover: (_) => const DiscoverScreen(),
+        Routes.travelPlanner: (_) => TravelPlannerScreen(),
+        Routes.outfitPlanner: (_) => OutfitPlannerScreen(),
+        Routes.outfitHistory: (_) => const OutfitHistoryScreen(),
+        Routes.createOutfit: (_) => const CreateOutfitScreen(),
+        Routes.stylist: (_) => StylistScreen(),
+        Routes.styleAvatar: (_) => const StyleAvatarScreen(),
+      },
+      onGenerateRoute: (settings) {
+        switch (settings.name) {
+          case Routes.itemDetail:
+            final args = settings.arguments as ClothingItem?;
+            if (args == null) return _errorRoute();
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => ItemDetailScreen(item: args),
+            );
+          case Routes.analyzing:
+            final args = settings.arguments as Map<String, dynamic>?;
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => AnalyzingScreen(
+                name: args?['name'] as String? ?? 'New Garment',
+                filename: args?['filename'] as String? ?? 'upload.jpg',
+                image: args?['image'] as String? ?? Img.teeWhite,
+              ),
+            );
+          case Routes.comingSoon:
+            final args = settings.arguments as Map<String, dynamic>?;
+            if (args == null) return _errorRoute();
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => ComingSoonScreen(
+                title: args['title'] as String? ?? 'Coming Soon',
+                subtitle: args['subtitle'] as String? ?? '',
+                icon: args['icon'] as SwIcon? ?? SwIcon.sparkle,
+              ),
+            );
+          case Routes.perfectMatch:
+            final args = settings.arguments as Outfit?;
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => PerfectMatchScreen(outfit: args),
+            );
+          default:
+            return _errorRoute();
+        }
       },
       builder: (context, child) {
         return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -48,4 +136,10 @@ class SmartWardrobeApp extends StatelessWidget {
       },
     );
   }
+
+  static Route<dynamic> _errorRoute() => MaterialPageRoute(
+        builder: (_) => const Scaffold(
+          body: Center(child: Text('Route not found')),
+        ),
+      );
 }

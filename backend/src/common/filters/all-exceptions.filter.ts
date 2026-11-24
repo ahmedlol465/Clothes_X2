@@ -23,13 +23,17 @@ export class AllExceptionsFilter implements ExceptionFilter {
         ? exception.getStatus()
         : HttpStatus.INTERNAL_SERVER_ERROR;
 
-    let message: string | string[] =
+    let message: string | string[] | Record<string, unknown> =
       exception instanceof HttpException
-        ? exception.getResponse()
+        ? (exception.getResponse() as string | string[] | Record<string, unknown>)
         : 'Internal server error';
 
     if (typeof message === 'object' && message !== null) {
-      message = (message as { message?: string | string[] }).message ?? 'Request failed';
+      const payload = message as { message?: string | string[]; error?: unknown };
+      message =
+        payload.message ??
+        (typeof payload.error === 'string' ? payload.error : undefined) ??
+        'Request failed';
     }
 
     if (status >= 500) {
@@ -39,10 +43,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       );
     }
 
+    // The Flutter client reads `error`; keep it human-readable instead of the
+    // HTTP status name so the UI can show the actual validation problem.
+    const human = Array.isArray(message) ? message.join(', ') : message;
+
     response.status(status).json({
       statusCode: status,
-      error: HttpStatus[status] ?? 'Error',
-      message,
+      error: human,
+      message: human,
       path: request.url,
       timestamp: new Date().toISOString(),
     });

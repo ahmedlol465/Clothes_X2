@@ -43,6 +43,19 @@ export const databaseConfig = registerAs('database', () => {
     };
   }
 
+  if (type === 'mysql' || type === 'mariadb') {
+    return {
+      ...common,
+      type: 'mysql' as const,
+      host: process.env.DB_HOST ?? '127.0.0.1',
+      port: int(process.env.DB_PORT, 3306),
+      username: process.env.DB_USERNAME ?? 'root',
+      password: process.env.DB_PASSWORD ?? '',
+      database: process.env.DB_NAME ?? 'smartwardrobe',
+      charset: 'utf8mb4',
+    };
+  }
+
   return {
     ...common,
     type: 'better-sqlite3' as const,
@@ -63,13 +76,32 @@ export const redisConfig = registerAs('redis', () => ({
   keyPrefix: process.env.REDIS_KEY_PREFIX ?? 'sw:',
 }));
 
-export const jwtConfig = registerAs('jwt', () => ({
-  accessSecret: process.env.JWT_ACCESS_SECRET ?? 'smartwardrobe-dev-access-secret',
-  refreshSecret: process.env.JWT_REFRESH_SECRET ?? 'smartwardrobe-dev-refresh-secret',
-  accessTtl: process.env.JWT_ACCESS_TTL ?? '15m',
-  refreshTtl: process.env.JWT_REFRESH_TTL ?? '30d',
-  bcryptRounds: int(process.env.BCRYPT_ROUNDS, 10),
-}));
+export const jwtConfig = registerAs('jwt', () => {
+  const accessSecret = process.env.JWT_ACCESS_SECRET;
+  const refreshSecret = process.env.JWT_REFRESH_SECRET;
+
+  if (!accessSecret || !refreshSecret) {
+    const env = process.env.NODE_ENV ?? 'development';
+    if (env === 'production') {
+      throw new Error(
+        'JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be set in production. ' +
+        'Generate strong secrets (e.g. `openssl rand -hex 32`) and configure them.',
+      );
+    }
+    console.warn(
+      '[jwt] WARNING: JWT_ACCESS_SECRET / JWT_REFRESH_SECRET not set. ' +
+        'Using insecure development defaults. Do not deploy to production with these values.',
+    );
+  }
+
+  return {
+    accessSecret: accessSecret ?? 'smartwardrobe-dev-access-secret',
+    refreshSecret: refreshSecret ?? 'smartwardrobe-dev-refresh-secret',
+    accessTtl: process.env.JWT_ACCESS_TTL ?? '15m',
+    refreshTtl: process.env.JWT_REFRESH_TTL ?? '30d',
+    bcryptRounds: int(process.env.BCRYPT_ROUNDS, 10),
+  };
+});
 
 export const storageConfig = registerAs('storage', () => ({
   driver: process.env.STORAGE_DRIVER ?? 'local',
@@ -100,6 +132,12 @@ export const aiConfig = registerAs('ai', () => ({
   timeoutMs: int(process.env.AI_SERVICE_TIMEOUT_MS, 20000),
   /** `rule-engine` keeps everything in-process; `http` proxies to FastAPI. */
   mode: process.env.AI_MODE ?? 'rule-engine',
+  /**
+   * Which clothing analyzer wardrobe/stylist use.
+   * `local` (default) = transformers.js; `python` = FastAPI with local fallback;
+   * `auto` = python when AI_MODE=http, else local.
+   */
+  analyzer: process.env.AI_ANALYZER ?? 'local',
   minMatchScore: int(process.env.AI_MIN_MATCH_SCORE, 55),
   maxRecommendations: int(process.env.AI_MAX_RECOMMENDATIONS, 12),
   /**

@@ -5,14 +5,16 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import * as bcrypt from 'bcryptjs';
 import { DataSource, Repository } from 'typeorm';
+import * as bcrypt from 'bcryptjs';
+import * as crypto from 'node:crypto';
 
 import { CacheService } from '../../common/cache/cache.service';
+import { profilePayload } from '../../common/legacy/legacy-style';
+import { LegacyUser } from '../../common/legacy/legacy.types';
 import { UserRole } from '../../common/vocabularies';
-import { StyleProfile, User, UserProfile, Wardrobe } from '../../database/entities';
 import {
   AuthResponseDto,
   LoginDto,
@@ -20,124 +22,164 @@ import {
   SocialAuthDto,
 } from './dto/auth.dto';
 import { JwtPayload } from './jwt.strategy';
+import { User } from '../../database/entities/identity.entity';
+import { StyleProfile } from '../../database/entities/identity.entity';
+
+function uid(prefix = 'u'): string {
+  return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
+}
+
+function userToLegacyUser(user: User, styleProfile: StyleProfile | null): LegacyUser {
+  const dimensions = (styleProfile?.dimensions ?? {}) as Record<string, unknown>;
+  const sizes = dimensions.sizes as Record<string, unknown> | undefined;
+  return {
+    id: user.id,
+    name: user.name ?? user.email.split('@')[0],
+    email: user.email,
+    passwordHash: user.passwordHash ?? null,
+    createdAt: user.createdAt?.toISOString() ?? new Date().toISOString(),
+    avatarUrl: user.avatarUrl ?? null,
+    styleProfile: {
+      favoriteColors: Array.isArray(dimensions.favoriteColors) ? dimensions.favoriteColors : [],
+      preferredStyles: Array.isArray(dimensions.preferredStyles) ? dimensions.preferredStyles : [],
+      avoidedColors: Array.isArray(dimensions.avoidedColors) ? dimensions.avoidedColors : [],
+      heightCm: typeof dimensions.heightCm === 'number' ? dimensions.heightCm : null,
+      weightKg: typeof dimensions.weightKg === 'number' ? dimensions.weightKg : null,
+      fitPreference: typeof dimensions.fitPreference === 'string' ? dimensions.fitPreference : 'regular',
+      sizes: {
+        top: typeof sizes?.top === 'string' ? sizes.top : null,
+        bottom: typeof sizes?.bottom === 'string' ? sizes.bottom : null,
+        shoe: typeof sizes?.shoe === 'string' ? sizes.shoe : null,
+      },
+    },
+    tokenVersion: user.tokenVersion ?? 0,
+    role: user.role ?? 'user',
+  };
+}
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
   constructor(
-    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(User) private readonly userRepo: Repository<User>,
+    @InjectRepository(StyleProfile) private readonly styleProfileRepo: Repository<StyleProfile>,
+    private readonly dataSource: DataSource,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
-    private readonly dataSource: DataSource,
     private readonly cache: CacheService,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
-    const existing = await this.users.findOne({ where: { email: dto.email } });
+    const existing = await this.userRepo.findOne({ where: { email: String(dto.email).toLowerCase() } });
     if (existing) {
       throw new ConflictException('An account with this email already exists');
     }
 
     const rounds = this.config.get<number>('jwt.bcryptRounds') ?? 10;
+    const name =
+      dto.name ||
+      [dto.firstName, dto.lastName].filter(Boolean).join(' ') ||
+      dto.email.split('@')[0];
 
-    const user = await this.dataSource.transaction(async (manager) => {
-      const created = manager.create(User, {
-        email: dto.email,
-        phone: dto.phone ?? null,
+    return this.dataSource.transaction(async (manager) => {
+      const user = manager.create(User, {
+        id: uid(),
+        name: name.trim(),
+        email: String(dto.email).toLowerCase(),
         passwordHash: await bcrypt.hash(dto.password, rounds),
+        createdAt: new Date(),
+        avatarUrl: null,
+        tokenVersion: 0,
         role: UserRole.USER,
-        lastLoginAt: new Date(),
       });
-      await manager.save(created);
+      await manager.save(user);
 
-      // Section 7: every account owns a profile, style profile and wardrobe.
-      await manager.save(
-        manager.create(UserProfile, {
-          userId: created.id,
-          firstName: dto.firstName ?? dto.email.split('@')[0],
-          lastName: dto.lastName ?? null,
-        }),
-      );
-      await manager.save(
-        manager.create(StyleProfile, {
-          userId: created.id,
-          archetype: null,
-          overallConfidence: 0,
-        }),
-      );
-      const wardrobe = await manager.save(
-        manager.create(Wardrobe, {
-          userId: created.id,
-          name: 'My Wardrobe',
-          kind: 'primary',
-        }),
-      );
-      created.defaultLocationCity = null;
-      await manager.save(created);
-      this.logger.log(`Registered ${created.email} (wardrobe ${wardrobe.id})`);
+      const styleProfile = new StyleProfile();
+      styleProfile.userId = user.id;
+      styleProfile.dimensions = {
+        favoriteColors: 0,
+        preferredStyles: 0,
+        avoidedColors: 0,
+        heightCm: 0,
+        weightKg: 0,
+        fitPreference: 1,
+        sizes: 0,
+      } as Record<string, number>;
+      styleProfile.overallConfidence = 0;
+      await manager.save(styleProfile);
 
-      return created;
+      const legacyUser = userToLegacyUser(user, styleProfile);
+      this.logger.log(`Registered ${user.email}`);
+      return this.issueSession(legacyUser);
     });
-
-    return this.issueSession(user);
   }
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
-    const user = await this.users
+    const user = await this.userRepo
       .createQueryBuilder('user')
       .addSelect('user.passwordHash')
-      .where('user.email = :email', { email: dto.email })
+      .where('user.email = :email', { email: String(dto.email).toLowerCase() })
       .getOne();
 
-    if (!user?.passwordHash || !(await bcrypt.compare(dto.password, user.passwordHash))) {
+    if (!user || !(await this.verifyPassword(dto.password, user.passwordHash))) {
       throw new UnauthorizedException('Incorrect email or password');
     }
 
-    user.lastLoginAt = new Date();
-    await this.users.save(user);
-    await this.cache.invalidateUser(user.id);
+    // Accounts imported from the old JSON store carry a SHA-256 hash. Upgrade
+    // them to bcrypt on the first successful sign-in, without asking the user.
+    if (user.passwordHash && /^[a-f0-9]{64}$/i.test(user.passwordHash)) {
+      const rounds = this.config.get<number>('jwt.bcryptRounds') ?? 10;
+      user.passwordHash = await bcrypt.hash(dto.password, rounds);
+      await this.userRepo.save(user);
+    }
 
-    return this.issueSession(user);
+    const styleProfile = await this.styleProfileRepo.findOne({ where: { userId: user.id } });
+    await this.cache.invalidateUser(user.id);
+    return this.issueSession(userToLegacyUser(user, styleProfile));
   }
 
   /** Email/Google/Apple/Phone entry point described in section 4.1. */
   async socialLogin(dto: SocialAuthDto): Promise<AuthResponseDto> {
-    const identity = this.socialIdentity(dto);
-    let user = await this.users.findOne({ where: { email: identity.email } });
+    const email = this.socialEmail(dto);
+    let user = await this.userRepo.findOne({ where: { email } });
 
     if (!user) {
       const rounds = this.config.get<number>('jwt.bcryptRounds') ?? 10;
-      user = await this.dataSource.transaction(async (manager) => {
-        const created = manager.create(User, {
-          email: identity.email,
-          phone: dto.provider === 'phone' ? dto.credential : null,
+      return this.dataSource.transaction(async (manager) => {
+        user = manager.create(User, {
+          id: uid(),
+          name: [dto.firstName, dto.lastName].filter(Boolean).join(' ') || email.split('@')[0],
+          email,
           passwordHash: await bcrypt.hash(`${dto.provider}:${dto.credential}`, rounds),
+          createdAt: new Date(),
+          avatarUrl: null,
+          tokenVersion: 0,
           role: UserRole.USER,
-          emailVerified: dto.provider !== 'phone',
-          lastLoginAt: new Date(),
         });
-        await manager.save(created);
-        await manager.save(
-          manager.create(UserProfile, {
-            userId: created.id,
-            firstName: dto.firstName ?? identity.email.split('@')[0],
-            lastName: dto.lastName ?? null,
-          }),
-        );
-        await manager.save(
-          manager.create(StyleProfile, { userId: created.id, overallConfidence: 0 }),
-        );
-        await manager.save(
-          manager.create(Wardrobe, { userId: created.id, name: 'My Wardrobe', kind: 'primary' }),
-        );
-        return created;
+        await manager.save(user);
+
+        const styleProfile = new StyleProfile();
+        styleProfile.userId = user.id;
+      styleProfile.dimensions = {
+        favoriteColors: 0,
+        preferredStyles: 0,
+        avoidedColors: 0,
+        heightCm: 0,
+        weightKg: 0,
+        fitPreference: 1,
+        sizes: 0,
+      } as Record<string, number>;
+      styleProfile.overallConfidence = 0;
+      await manager.save(styleProfile);
+
+        const legacyUser = userToLegacyUser(user, styleProfile);
+        return this.issueSession(legacyUser);
       });
     }
 
-    user.lastLoginAt = new Date();
-    await this.users.save(user);
-    return this.issueSession(user);
+    const styleProfile = await this.styleProfileRepo.findOne({ where: { userId: user.id } });
+    return this.issueSession(userToLegacyUser(user, styleProfile));
   }
 
   async refresh(refreshToken: string): Promise<AuthResponseDto> {
@@ -154,46 +196,60 @@ export class AuthService {
       throw new UnauthorizedException('An access token cannot be refreshed');
     }
 
-    const user = await this.users.findOne({ where: { id: payload.sub } });
-    if (!user || user.tokenVersion !== payload.ver) {
+    const user = await this.userRepo.findOne({ where: { id: payload.sub } });
+    if (!user || (user.tokenVersion ?? 0) !== payload.ver) {
       throw new UnauthorizedException('Session expired, please sign in again');
     }
 
-    return this.issueSession(user);
+    const styleProfile = await this.styleProfileRepo.findOne({ where: { userId: user.id } });
+    return this.issueSession(userToLegacyUser(user, styleProfile));
   }
 
   /** Rotates the token version so every previously issued refresh token dies. */
   async logout(userId: string, refreshToken?: string): Promise<{ success: boolean }> {
-    const user = await this.users.findOne({ where: { id: userId } });
+    const user = await this.userRepo.findOne({ where: { id: userId } });
     if (user) {
-      user.tokenVersion += 1;
-      await this.users.save(user);
+      await this.userRepo.increment({ id: userId }, 'tokenVersion', 1);
     }
     await this.cache.invalidateUser(userId);
     this.logger.log(`Logout for ${userId}`);
     return { success: true };
   }
 
-  async findById(id: string): Promise<User | null> {
-    return this.users.findOne({ where: { id } });
+  findById(id: string): LegacyUser | null {
+    throw new Error('findById is not supported in TypeORM mode; use UsersService instead.');
   }
 
-  private socialIdentity(dto: SocialAuthDto): { email: string } {
-    if (dto.email) return { email: dto.email.trim().toLowerCase() };
-    if (dto.provider === 'phone') {
-      return { email: `phone-${dto.credential.replace(/[^0-9]/g, '')}@smartwardrobe.local` };
+  private async verifyPassword(password: string, hash: string | null): Promise<boolean> {
+    if (!hash) return false;
+    if (/^[a-f0-9]{64}$/i.test(hash)) {
+      return this.legacySha256(password) === hash.toLowerCase();
     }
-    // A real deployment verifies the provider token before deriving the email;
-    // locally we fall back to a stable pseudo-address so flows stay testable.
-    const hash = require('node:crypto')
+    try {
+      return await bcrypt.compare(password, hash);
+    } catch {
+      return false;
+    }
+  }
+
+  private legacySha256(value: string): string {
+    return crypto.createHash('sha256').update(String(value)).digest('hex');
+  }
+
+  private socialEmail(dto: SocialAuthDto): string {
+    if (dto.email) return dto.email.trim().toLowerCase();
+    if (dto.provider === 'phone') {
+      return `phone-${dto.credential.replace(/[^0-9]/g, '')}@smartwardrobe.local`;
+    }
+    const hash = crypto
       .createHash('sha256')
       .update(`${dto.provider}:${dto.credential}`)
       .digest('hex')
       .slice(0, 20);
-    return { email: `${dto.provider}-${hash}@smartwardrobe.local` };
+    return `${dto.provider}-${hash}@smartwardrobe.local`;
   }
 
-  private async issueSession(user: User): Promise<AuthResponseDto> {
+  private async issueSession(user: LegacyUser): Promise<AuthResponseDto> {
     const accessTtl = this.config.get<string>('jwt.accessTtl') ?? '15m';
     const refreshTtl = this.config.get<string>('jwt.refreshTtl') ?? '30d';
 
@@ -201,41 +257,33 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       role: user.role,
-      ver: user.tokenVersion,
+      ver: user.tokenVersion ?? 0,
     };
 
     const accessToken = await this.jwt.signAsync(
       { ...base, type: 'access' } as JwtPayload,
-      { secret: this.config.get<string>('jwt.accessSecret'), expiresIn: accessTtl },
+      {
+        secret: this.config.get<string>('jwt.accessSecret'),
+        expiresIn: accessTtl as JwtSignOptions['expiresIn'],
+      },
     );
     const refreshToken = await this.jwt.signAsync(
       { ...base, type: 'refresh' } as JwtPayload,
-      { secret: this.config.get<string>('jwt.refreshSecret'), expiresIn: refreshTtl },
+      {
+        secret: this.config.get<string>('jwt.refreshSecret'),
+        expiresIn: refreshTtl as JwtSignOptions['expiresIn'],
+      },
     );
-
-    const profile = await this.users.manager
-      .getRepository(UserProfile)
-      .findOne({ where: { userId: user.id } });
+    const expiresIn = this.parseTtl(accessTtl);
 
     return {
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        firstName: profile?.firstName ?? null,
-        lastName: profile?.lastName ?? null,
-        avatarUrl: user.avatarUrl,
-        onboardingCompleted: user.onboardingCompleted,
-        emailVerified: user.emailVerified,
-        createdAt: (user.createdAt ?? new Date()).toISOString(),
-      },
-      tokens: {
-        accessToken,
-        refreshToken,
-        expiresIn: this.parseTtl(accessTtl),
-        tokenType: 'Bearer',
-      },
-    };
+      user: profilePayload(user) as any,
+      accessToken,
+      refreshToken,
+      expiresIn,
+      tokenType: 'Bearer',
+      tokens: { accessToken, refreshToken, expiresIn, tokenType: 'Bearer' },
+    } as AuthResponseDto & Record<string, unknown>;
   }
 
   private parseTtl(ttl: string): number {

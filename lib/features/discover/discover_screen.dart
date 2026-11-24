@@ -6,84 +6,130 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
+import '../../data/app_state.dart';
 import '../../data/assets.dart';
-import '../../data/mock_data.dart';
+import '../../data/controllers/discover_controller.dart';
+import '../../data/models.dart';
 
 /// Frame 23 - trending styles, seasonal spotlight and community looks.
-class DiscoverScreen extends StatelessWidget {
-  const DiscoverScreen({super.key});
+///
+/// Trends and community looks are rows in the database and are fetched from
+/// `GET /content/discover`; the seasonal banner is static editorial copy.
+class DiscoverScreen extends StatefulWidget {
+  const DiscoverScreen({super.key, this.discoverController});
+
+  final DiscoverController? discoverController;
+
+  @override
+  State<DiscoverScreen> createState() => _DiscoverScreenState();
+}
+
+class _DiscoverScreenState extends State<DiscoverScreen> {
+  late final DiscoverController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = widget.discoverController ?? AppState.instance.discoverController;
+    _controller.load();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SwScreen(
-      scroll: true,
-      padding: const EdgeInsets.only(bottom: Insets.xxl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              Insets.gutter,
-              Insets.sm,
-              Insets.gutter,
-              0,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Discover', style: AppText.h1),
-                      const SizedBox(height: 2),
+    return ListenableBuilder(
+      listenable: _controller,
+      builder: (context, _) {
+        final content = _controller.content;
+        return SwScreen(
+          scroll: true,
+          padding: const EdgeInsets.only(bottom: Insets.xxl),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  Insets.gutter,
+                  Insets.sm,
+                  Insets.gutter,
+                  0,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Discover', style: AppText.h1),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Browse global trends & daily inspiration',
+                            style: AppText.caption,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SwIconButton(icon: SwIconButtonKind.search),
+                  ],
+                ),
+              ),
+              const SizedBox(height: Insets.lg),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Trending Styles', style: AppText.h4),
+                    const SizedBox(height: Insets.md),
+                    if (_controller.loading && content.trends.isEmpty)
+                      const LinearProgressIndicator(minHeight: 2)
+                    else if (content.trends.isEmpty)
                       Text(
-                        'Browse global trends & daily inspiration',
+                        'Trending styles are unavailable right now.',
                         style: AppText.caption,
                       ),
-                    ],
-                  ),
+                  ],
                 ),
-                const SwIconButton(icon: SwIconButtonKind.search),
-              ],
-            ),
-          ),
-          const SizedBox(height: Insets.lg),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Trending Styles', style: AppText.h4),
+              ),
+              if (content.trends.isNotEmpty) ...[
                 const SizedBox(height: Insets.md),
+                _TrendingRail(trends: content.trends),
               ],
-            ),
+              const SizedBox(height: Insets.lg),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Seasonal Spotlight', style: AppText.h4),
+                    const SizedBox(height: Insets.md),
+                    const _SpotlightBanner(),
+                    const SizedBox(height: Insets.sectionGap),
+                    Text('Community Looks', style: AppText.h4),
+                    const SizedBox(height: Insets.md),
+                    if (_controller.loading && content.looks.isEmpty)
+                      const LinearProgressIndicator(minHeight: 2)
+                    else if (content.looks.isEmpty)
+                      Text(
+                        'Community looks are unavailable right now.',
+                        style: AppText.caption,
+                      ),
+                  ],
+                ),
+              ),
+              if (content.looks.isNotEmpty) _CommunityGrid(looks: content.looks),
+            ],
           ),
-          const _TrendingRail(),
-          const SizedBox(height: Insets.lg),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Seasonal Spotlight', style: AppText.h4),
-                const SizedBox(height: Insets.md),
-                const _SpotlightBanner(),
-                const SizedBox(height: Insets.sectionGap),
-                Text('Community Looks', style: AppText.h4),
-                const SizedBox(height: Insets.md),
-              ],
-            ),
-          ),
-          const _CommunityGrid(),
-        ],
-      ),
+        );
+      },
     );
   }
 }
 
-/// Horizontal rail of the two trending styles.
+/// Horizontal rail of trending styles.
 class _TrendingRail extends StatelessWidget {
-  const _TrendingRail();
+  const _TrendingRail({required this.trends});
+
+  final List<DiscoverTrend> trends;
 
   @override
   Widget build(BuildContext context) {
@@ -93,10 +139,10 @@ class _TrendingRail extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
         physics: const BouncingScrollPhysics(),
-        itemCount: MockData.trendingStyles.length,
+        itemCount: trends.length,
         separatorBuilder: (_, _) => const SizedBox(width: Insets.md),
         itemBuilder: (context, i) {
-          final trend = MockData.trendingStyles[i];
+          final trend = trends[i];
           return GestureDetector(
             onTap: () => _toast(context, trend.name),
             child: SizedBox(
@@ -106,7 +152,7 @@ class _TrendingRail extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    Image.asset(trend.image, fit: BoxFit.cover),
+                    SwPhoto(path: trend.image),
                     const DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
@@ -153,7 +199,7 @@ class _TrendingRail extends StatelessWidget {
   }
 }
 
-/// Full width seasonal feature card.
+/// Full width seasonal feature card. This is product copy, not user data.
 class _SpotlightBanner extends StatelessWidget {
   const _SpotlightBanner();
 
@@ -232,7 +278,9 @@ class _SpotlightBanner extends StatelessWidget {
 
 /// Two column grid of community outfits with like counts.
 class _CommunityGrid extends StatelessWidget {
-  const _CommunityGrid();
+  const _CommunityGrid({required this.looks});
+
+  final List<CommunityLook> looks;
 
   @override
   Widget build(BuildContext context) {
@@ -246,9 +294,9 @@ class _CommunityGrid extends StatelessWidget {
         crossAxisSpacing: Insets.md,
         childAspectRatio: 0.82,
       ),
-      itemCount: MockData.communityLooks.length,
+      itemCount: looks.length,
       itemBuilder: (context, i) {
-        final look = MockData.communityLooks[i];
+        final look = looks[i];
         return GestureDetector(
           onTap: () => _toast(context, look.name),
           child: Column(

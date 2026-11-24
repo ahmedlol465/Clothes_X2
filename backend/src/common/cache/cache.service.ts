@@ -1,13 +1,13 @@
 import {
-  CACHE_MANAGER,
+  Global,
   Inject,
   Injectable,
   Logger,
   Module,
 } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { CacheModule as NestCacheModule } from '@nestjs/cache-manager';
-import type { Cache, Store } from 'cache-manager';
+import { CacheModule as NestCacheModule, CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import * as net from 'node:net';
 
 /**
@@ -110,7 +110,7 @@ export class CacheService {
 async function buildStore(
   config: ConfigService,
   logger: Logger,
-): Promise<{ store: Store; max: number; ttl: number }> {
+): Promise<{ store: any; max: number; ttl: number }> {
   const mode = config.get<string>('redis.mode') ?? 'auto';
   const host = config.get<string>('redis.host') ?? 'localhost';
   const port = config.get<number>('redis.port') ?? 6379;
@@ -128,7 +128,7 @@ async function buildStore(
         ? `redis://:${config.get<string>('redis.password')}@${host}:${port}`
         : `redis://${host}:${port}`;
       logger.log(`Cache store: Redis at ${host}:${port}`);
-      return { store: new Keyv({ store: new KeyvRedis({ url }) }) as Store, max: 20000, ttl };
+      return { store: new Keyv({ store: new KeyvRedis({ url }) }) as any, max: 20000, ttl };
     } catch (error) {
       logger.warn(
         `Redis is up but the keyv-redis store could not be loaded (${(error as Error).message}). Using memory.`,
@@ -141,7 +141,7 @@ async function buildStore(
       ? 'Cache store: in-process memory (REDIS_MODE=memory).'
       : 'Cache store: in-process memory (Redis unreachable).',
   );
-  return { store: 'memory' as Store, ...memory };
+  return { store: 'memory' as any, ...memory };
 }
 
 @Global()

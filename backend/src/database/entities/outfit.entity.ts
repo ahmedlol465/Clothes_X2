@@ -16,7 +16,7 @@ import {
   OutfitSource,
   RecommendationMode,
 } from '../../common/vocabularies';
-import { WardrobeItem } from './identity.entity';
+import { WardrobeItem } from './wardrobe.entity';
 
 /** Section 4.7 / 7: an occasion the user dresses for. */
 @Entity('occasions')
@@ -37,7 +37,7 @@ export class Occasion {
   @Column({ length: 40, default: 'Smart Casual' })
   requiredFormality: string;
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   tags: string[];
 
   @Column({ default: false })
@@ -73,7 +73,7 @@ export class Outfit {
   @Column({ type: 'int', default: 0 })
   matchScore: number;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   factorBreakdown: Record<string, number> | null;
 
   @Column({ type: 'text', nullable: true })
@@ -83,10 +83,10 @@ export class Outfit {
   @Column({ type: 'text', nullable: true })
   explanation: string | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   reasons: Array<{ label: string; detail: string; weight: number }> | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   weatherContext: Record<string, unknown> | null;
 
   @Column({ length: 8, default: 'active' })
@@ -201,7 +201,7 @@ export class OutfitFeedback {
   @Column({ type: 'text', nullable: true })
   comment: string | null;
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   tags: string[];
 
   @CreateDateColumn()
@@ -233,19 +233,19 @@ export class Recommendation {
   @Column({ length: 40, nullable: true })
   occasion: string | null;
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   itemIds: string[];
 
   @Column({ type: 'int', default: 0 })
   score: number;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   factors: Record<string, number> | null;
 
   @Column({ type: 'text', nullable: true })
   explanation: string | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   context: Record<string, unknown> | null;
 
   @Column({ length: 20, default: 'pending' })
@@ -283,7 +283,7 @@ export class RecommendationFeedback {
   @Column({ length: 20, default: FeedbackType.LIKED })
   action: FeedbackType | string;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   perItemReaction: Record<string, string> | null;
 
   @CreateDateColumn()

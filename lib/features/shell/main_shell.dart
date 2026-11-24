@@ -6,6 +6,7 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../app.dart';
 import '../../data/app_state.dart';
+import '../../data/controllers/account_controller.dart';
 import '../home/home_screen.dart';
 import '../outfits/outfits_screen.dart';
 import '../profile/profile_screen.dart';
@@ -24,9 +25,24 @@ enum ShellTab { home, wardrobe, stylist, outfits, profile }
 /// after the token was rejected server-side) is bounced to Login, and the
 /// shell route is removed from the stack behind them.
 class MainShell extends StatefulWidget {
-  const MainShell({super.key, this.initialTab = ShellTab.home});
+  const MainShell._({
+    required this.initialTab,
+    required this.accountController,
+  });
+
+  factory MainShell({
+    Key? key,
+    ShellTab initialTab = ShellTab.home,
+    AccountController? accountController,
+  }) {
+    return MainShell._(
+      initialTab: initialTab,
+      accountController: accountController ?? AppState.instance.accountController,
+    );
+  }
 
   final ShellTab initialTab;
+  final AccountController accountController;
 
   @override
   State<MainShell> createState() => _MainShellState();
@@ -48,7 +64,7 @@ class _MainShellState extends State<MainShell> {
   /// Sends unauthenticated visitors back to Login without leaving the shell
   /// behind them in the back stack.
   void _requireAuth() {
-    if (!mounted || AppState.instance.isAuthenticated) return;
+    if (!mounted || widget.accountController.isAuthenticated) return;
     Navigator.of(context).pushNamedAndRemoveUntil(Routes.login, (_) => false);
   }
 
@@ -118,11 +134,11 @@ class _TabNavigator extends StatelessWidget {
 
   Widget _root() => switch (tab) {
     ShellTab.home => HomeScreen(onOpenTab: onOpenTab),
-    ShellTab.wardrobe => const WardrobeScreen(),
-    ShellTab.stylist => const StylistScreen(),
-    ShellTab.outfits => const OutfitsScreen(),
-    ShellTab.profile => const ProfileScreen(),
-  };
+    ShellTab.wardrobe => WardrobeScreen(),
+    ShellTab.stylist => StylistScreen(),
+    ShellTab.outfits => OutfitsScreen(),
+    ShellTab.profile => ProfileScreen(),
+  } as Widget;
 
   @override
   Widget build(BuildContext context) {

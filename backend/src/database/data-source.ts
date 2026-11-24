@@ -9,13 +9,14 @@ export const DATA_SOURCE = 'DATA_SOURCE';
 
 export function buildDataSourceOptions(
   config: ConfigService,
-  mode?: 'postgres' | 'better-sqlite3',
+  mode?: 'postgres' | 'better-sqlite3' | 'mysql',
 ): DataSourceOptions {
   const base = {
     entities: ALL_ENTITIES,
+    migrations: [__dirname + '/migrations/*{.ts,.js}'],
     synchronize: config.get<boolean>('database.synchronize') ?? true,
     logging: config.get<boolean>('database.logging') ?? false,
-    charset: 'utf8',
+    charset: 'utf8mb4',
   };
 
   if (mode === 'postgres') {
@@ -32,14 +33,27 @@ export function buildDataSourceOptions(
     } as DataSourceOptions;
   }
 
+  if (mode === 'mysql') {
+    return {
+      ...base,
+      type: 'mysql',
+      host: config.get<string>('database.host') ?? 'localhost',
+      port: config.get<number>('database.port') ?? 3306,
+      username: config.get<string>('database.username') ?? 'smartwardrobe',
+      password: config.get<string>('database.password') ?? '',
+      database: config.get<string>('database.database') ?? 'smartwardrobe',
+      charset: 'utf8mb4',
+    } as DataSourceOptions;
+  }
+
   return {
     ...base,
     type: 'better-sqlite3',
     /**
      * Injected pure-JS shim over `node:sqlite`. TypeORM's better-sqlite3 driver
-     * accepts a replacement driver package, so no native build is required.
+     * accepts a replacement driver constructor, so no native build is required.
      */
-    driver: { Database: SqliteDatabase } as never,
+    driver: SqliteDatabase as never,
     database: config.get<string>('database.database') ?? 'data/smartwardrobe.sqlite',
     enableWAL: true,
   } as DataSourceOptions;
@@ -52,11 +66,11 @@ export function buildDataSourceOptions(
 @Injectable()
 export class DataSourceFactory implements OnApplicationBootstrap {
   private readonly logger = new Logger(DataSourceFactory.name);
-  private resolvedType: 'postgres' | 'better-sqlite3' = 'better-sqlite3';
+  private resolvedType: 'postgres' | 'better-sqlite3' | 'mysql' = 'better-sqlite3';
 
   constructor(private readonly config: ConfigService) {}
 
-  get type(): 'postgres' | 'better-sqlite3' {
+  get type(): 'postgres' | 'better-sqlite3' | 'mysql' {
     return this.resolvedType;
   }
 
@@ -84,6 +98,24 @@ export class DataSourceFactory implements OnApplicationBootstrap {
       } catch (error) {
         const message = (error as Error).message;
         this.logger.warn(`PostgreSQL unavailable (${message}).`);
+        this.logger.warn('Falling back to the embedded SQLite database.');
+        this.resolvedType = 'better-sqlite3';
+        return this.options;
+      }
+    }
+
+    if (requested === 'mysql') {
+      this.logger.log('Database type is mysql - probing server...');
+      const probe = new DataSource(buildDataSourceOptions(this.config, 'mysql'));
+      try {
+        await probe.initialize();
+        await probe.destroy();
+        this.resolvedType = 'mysql';
+        this.logger.log('Connected to MySQL.');
+        return this.options;
+      } catch (error) {
+        const message = (error as Error).message;
+        this.logger.warn(`MySQL unavailable (${message}).`);
         this.logger.warn('Falling back to the embedded SQLite database.');
         this.resolvedType = 'better-sqlite3';
         return this.options;

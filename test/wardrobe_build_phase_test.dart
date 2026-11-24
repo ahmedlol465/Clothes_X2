@@ -43,7 +43,7 @@ void main() {
     // Open the wardrobe like the app does: pushed onto the navigation stack
     // while earlier screens keep their ListenableBuilder mounted.
     nav.currentState!.push(
-      MaterialPageRoute<void>(builder: (_) => const WardrobeScreen()),
+      MaterialPageRoute<void>(builder: (_) => WardrobeScreen()),
     );
     await tester.pump();
     await tester.pumpAndSettle();

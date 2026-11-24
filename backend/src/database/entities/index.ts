@@ -3,19 +3,22 @@
  * SmartWardrobe specification, plus the supporting lookup tables.
  */
 export {
-  Brand,
-  Category,
-  ClothingAttribute,
   StyleMemory,
   StylePreference,
   StyleProfile,
   Subscription,
   User,
   UserProfile,
+} from './identity.entity';
+
+export {
+  Brand,
+  Category,
+  ClothingAttribute,
   Wardrobe,
   WardrobeItem,
   WearEvent,
-} from './identity.entity';
+} from './wardrobe.entity';
 
 export {
   Occasion,
@@ -47,6 +50,19 @@ export {
   AppNotification,
 } from './ai.entity';
 
+export {
+  Session,
+} from './session.entity';
+
+export {
+  WeeklyPlan,
+} from './weekly-plan.entity';
+
+export {
+  CommunityLook,
+  TrendStyle,
+} from './content.entity';
+
 import {
   AIConversation,
   AIInteraction,
@@ -54,19 +70,21 @@ import {
   AppNotification,
 } from './ai.entity';
 import {
-  Brand,
-  Category,
-  ClothingAttribute,
   StyleMemory,
   StylePreference,
   StyleProfile,
   Subscription,
   User,
   UserProfile,
+} from './identity.entity';
+import {
+  Brand,
+  Category,
+  ClothingAttribute,
   Wardrobe,
   WardrobeItem,
   WearEvent,
-} from './identity.entity';
+} from './wardrobe.entity';
 import {
   Occasion,
   Outfit,
@@ -87,6 +105,16 @@ import {
   ShoppingItem,
   WishlistItem,
 } from './shopping.entity';
+import {
+  Session,
+} from './session.entity';
+import {
+  WeeklyPlan,
+} from './weekly-plan.entity';
+import {
+  CommunityLook,
+  TrendStyle,
+} from './content.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -119,4 +147,8 @@ export const ALL_ENTITIES = [
   AIInteraction,
   AppNotification,
   AIUsage,
+  Session,
+  WeeklyPlan,
+  TrendStyle,
+  CommunityLook,
 ];

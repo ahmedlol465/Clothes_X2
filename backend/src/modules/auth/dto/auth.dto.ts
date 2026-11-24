@@ -14,6 +14,12 @@ export class RegisterDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
   email: string;
 
+  /** Full display name. The Flutter client sends one string, not first/last. */
+  @ApiProperty({ example: 'Karim Hassan', required: false })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
   @ApiProperty({ example: 'Str0ngPass!', minLength: 8 })
   @IsString()
   @MinLength(8, { message: 'Password must be at least 8 characters' })

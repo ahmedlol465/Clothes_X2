@@ -1,0 +1,12 @@
+build/
+dist/
+node_modules/
+.dart_tool/
+coverage/
+backend/data/
+backend/storage/
+backend/.model-cache/
+ai-service/.venv/
+ai-service/.model-cache/
+*.min.js
+*.lock

@@ -2,33 +2,55 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../app.dart';
 import '../../core/icons/sw_icon.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../data/app_state.dart';
+import '../../data/assets.dart';
+import '../../data/controllers/wardrobe_controller.dart';
 import '../../data/models.dart';
-import 'item_detail_screen.dart';
 
 /// Frame 10 - full screen progress state while the model tags the garment.
 ///
 /// Runs real AI analysis + persistence, then opens the saved garment.
 class AnalyzingScreen extends StatefulWidget {
-  const AnalyzingScreen({
-    super.key,
-    this.name = 'New Garment',
-    this.filename = 'upload.jpg',
-    this.image = 'assets/images/item_tee_white.jpg',
-    this.result,
-  });
+  AnalyzingScreen._({
+    required String name,
+    required String filename,
+    required String image,
+    dynamic result,
+    WardrobeController? wardrobeController,
+  })  : _name = name,
+        _filename = filename,
+        _image = image,
+        _result = result,
+        _wardrobeController = wardrobeController ?? AppState.instance.wardrobeController;
 
-  final String name;
-  final String filename;
-  final String image;
+  factory AnalyzingScreen({
+    Key? key,
+    String name = 'New Garment',
+    String filename = 'upload.jpg',
+    String image = Img.teeWhite,
+    dynamic result,
+    WardrobeController? wardrobeController,
+  }) {
+    return AnalyzingScreen._(
+      name: name,
+      filename: filename,
+      image: image,
+      result: result,
+      wardrobeController: wardrobeController,
+    );
+  }
 
-  /// Optional garment to open once analysis finishes.
-  final dynamic result;
+  final String _name;
+  final String _filename;
+  final String _image;
+  final dynamic _result;
+  final WardrobeController _wardrobeController;
 
   @override
   State<AnalyzingScreen> createState() => _AnalyzingScreenState();
@@ -51,17 +73,17 @@ class _AnalyzingScreenState extends State<AnalyzingScreen>
 
   Future<void> _finish() async {
     // Keep the progress UX visible for a beat while the backend works.
-    final item = await AppState.instance.analyzeAndAdd(
-      name: widget.name,
-      filename: widget.filename,
-      image: widget.image,
+    final item = await widget._wardrobeController.analyzeAndAdd(
+      name: widget._name,
+      filename: widget._filename,
+      image: widget._image,
     );
     await Future<void>.delayed(const Duration(milliseconds: 1800));
     if (!mounted || _done) return;
     _done = true;
-    final repo = AppState.instance.wardrobe;
-    final fallback = widget.result is ClothingItem
-        ? widget.result as ClothingItem
+    final repo = widget._wardrobeController.items;
+    final fallback = widget._result is ClothingItem
+        ? widget._result as ClothingItem
         : repo.isNotEmpty
             ? repo.first
             : null;
@@ -69,10 +91,9 @@ class _AnalyzingScreenState extends State<AnalyzingScreen>
       Navigator.of(context).pop();
       return;
     }
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => ItemDetailScreen(item: item ?? fallback!),
-      ),
+    Navigator.of(context).pushReplacementNamed(
+      Routes.itemDetail,
+      arguments: item ?? fallback!,
     );
   }
 

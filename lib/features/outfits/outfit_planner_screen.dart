@@ -1,42 +1,51 @@
 import 'package:flutter/material.dart';
 
+import '../../app.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
+import '../../data/assets.dart';
+import '../../data/controllers/planner_controller.dart';
 import '../../data/models.dart';
-import 'perfect_match_screen.dart';
 
 /// Frame 18 - week strip plus the recommended look for each day.
 ///
 /// The week loads from the backend (`GET /planner/weekly`).
 class OutfitPlannerScreen extends StatefulWidget {
-  const OutfitPlannerScreen({super.key});
+  const OutfitPlannerScreen._(this._plannerController);
+
+  factory OutfitPlannerScreen({Key? key, PlannerController? plannerController}) {
+    return OutfitPlannerScreen._(
+      plannerController ?? AppState.instance.plannerController,
+    );
+  }
+
+  final PlannerController _plannerController;
 
   @override
   State<OutfitPlannerScreen> createState() => _OutfitPlannerScreenState();
 }
 
 class _OutfitPlannerScreenState extends State<OutfitPlannerScreen> {
-  final _state = AppState.instance;
   int _selected = 2;
 
   @override
   void initState() {
     super.initState();
-    _state.loadWeeklyPlan();
+    widget._plannerController.loadWeek();
   }
 
   List<PlanDay> get _week => [
-        for (final d in _state.planWeek)
+        for (final d in widget._plannerController.week)
           PlanDay(
             weekday: '${d['weekday'] ?? ''}',
             date: '${d['date'] ?? ''}',
             occasion: '${d['occasion'] ?? ''}',
             outfitName: '${d['outfitName'] ?? ''}',
-            image: '${d['image'] ?? 'assets/images/outfit_flatlay_beige.jpg'}',
+            image: '${d['image'] ?? Img.outfitFlatlayBeige}',
             isToday: d['isToday'] as bool? ?? false,
           ),
       ];
@@ -44,7 +53,7 @@ class _OutfitPlannerScreenState extends State<OutfitPlannerScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: _state,
+      listenable: widget._plannerController,
       builder: (context, _) {
         final week = _week;
         final selected = _selected.clamp(0, week.length - 1);
@@ -99,11 +108,7 @@ class _OutfitPlannerScreenState extends State<OutfitPlannerScreen> {
                     for (final day in week) ...[
                       _DayCard(
                         day: day,
-                        onUse: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const PerfectMatchScreen(),
-                          ),
-                        ),
+                        onUse: () => Navigator.of(context).pushNamed(Routes.perfectMatch),
                       ),
                       const SizedBox(height: Insets.md),
                     ],

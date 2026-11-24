@@ -32,35 +32,6 @@ class ClothingItem {
   /// Compact "Tops • White" style summary used under the product name.
   String get meta => '$category • $color';
 
-  /// JSON mapping for the backend wardrobe API (§8.3).
-  factory ClothingItem.fromJson(Map<String, dynamic> json) => ClothingItem(
-        id: '${json['id'] ?? ''}',
-        name: '${json['name'] ?? 'Untitled'}',
-        image: '${json['image'] ?? 'assets/images/item_tee_white.jpg'}',
-        category: '${json['category'] ?? 'Tops'}',
-        color: '${json['color'] ?? 'White'}',
-        style: '${json['style'] ?? 'Casual'}',
-        material: '${json['material'] ?? 'Cotton'}',
-        season: '${json['season'] ?? 'All Season'}',
-        formality: '${json['formality'] ?? 'Casual'}',
-        timesWorn: (json['timesWorn'] as num?)?.toInt() ?? 0,
-        lastWornLabel: json['lastWornLabel'] as String?,
-      );
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'image': image,
-        'category': category,
-        'color': color,
-        'style': style,
-        'material': material,
-        'season': season,
-        'formality': formality,
-        'timesWorn': timesWorn,
-        if (lastWornLabel != null) 'lastWornLabel': lastWornLabel,
-      };
-
   ClothingItem copyWith({
     String? name,
     String? image,
@@ -118,15 +89,6 @@ class MatchFactor {
   /// [value] x [weight] — the points this factor actually contributed.
   final double contribution;
 
-  factory MatchFactor.fromJson(Map<String, dynamic> json) => MatchFactor(
-        key: '${json['key'] ?? ''}',
-        label: '${json['label'] ?? ''}',
-        value: (json['value'] as num?)?.toInt() ?? 0,
-        weight: (json['weight'] as num?)?.toDouble() ?? 0,
-        applied: json['applied'] != false,
-        contribution: (json['contribution'] as num?)?.toDouble() ?? 0,
-      );
-
   /// Matches the legacy `(label, value)` shape used by the mock data.
   ({String label, int value}) get row => (label: label, value: value);
 }
@@ -152,6 +114,7 @@ class Outfit {
     this.note,
     this.keptFromOriginal,
     this.regenerated = false,
+    this.createdAt,
   });
 
   final String id;
@@ -164,7 +127,7 @@ class Outfit {
   final List<String> pieces;
   final String? summary;
 
-  /// Backend outfit fields (§8.5). Null when the outfit is a local mock.
+  /// Backend outfit fields (§8.5). Null for client-side previews.
   final List<String>? itemIds;
   final List<({String label, int value})>? breakdown;
 
@@ -189,40 +152,8 @@ class Outfit {
   /// True when the remix had to rebuild the look from scratch.
   final bool regenerated;
 
-  /// JSON mapping for the backend outfits API (§8.5).
-  factory Outfit.fromJson(Map<String, dynamic> json) => Outfit(
-        id: '${json['id'] ?? ''}',
-        name: '${json['name'] ?? 'Untitled look'}',
-        image: '${json['image'] ?? 'assets/images/outfit_flatlay_beige.jpg'}',
-        occasion: '${json['occasion'] ?? 'Casual'}',
-        match: (json['match'] as num?)?.toInt() ?? 85,
-        pieces: [
-          for (final p in (json['pieces'] as List? ?? const [])) '$p',
-        ],
-        summary: json['summary'] as String?,
-        itemIds: [
-          for (final p in (json['itemIds'] as List? ?? const [])) '$p',
-        ],
-        breakdown: [
-          for (final b in (json['breakdown'] as List? ?? const []))
-            (
-              label: '${b['label'] ?? ''}',
-              value: (b['value'] ?? 0).toInt(),
-            ),
-        ],
-        factors: [
-          for (final b in (json['breakdown'] as List? ?? const []))
-            if (b is Map)
-              MatchFactor.fromJson(Map<String, dynamic>.from(b)),
-        ],
-        explanation: json['explanation'] as String?,
-        favorite: json['favorite'] == true,
-        completeness: (json['completeness'] as num?)?.toDouble(),
-        variant: json['variant'] as String?,
-        note: json['note'] as String?,
-        keptFromOriginal: (json['keptFromOriginal'] as num?)?.toInt(),
-        regenerated: json['regenerated'] == true,
-      );
+  /// Server creation time, used by the outfit history list.
+  final DateTime? createdAt;
 }
 
 /// A single row in the AI stylist conversation.
@@ -296,31 +227,6 @@ class OutfitMatch {
   /// Scored assembly of the matched pieces, when two or more were found.
   final Outfit? outfit;
   final String source;
-
-  factory OutfitMatch.fromJson(Map<String, dynamic> json) {
-    final outfit = json['outfit'];
-    return OutfitMatch(
-      title: '${(json['reference'] as Map?)?['title'] ?? 'Reference outfit'}',
-      occasion: '${(json['reference'] as Map?)?['occasion'] ?? ''}',
-      notes: '${(json['reference'] as Map?)?['notes'] ?? ''}',
-      matches: [
-        for (final m in (json['matches'] as List? ?? const []))
-          if (m is Map) SlotMatch.fromJson(Map<String, dynamic>.from(m)),
-      ],
-      gaps: [
-        for (final g in (json['gaps'] as List? ?? const []))
-          if (g is Map) SlotGap.fromJson(Map<String, dynamic>.from(g)),
-      ],
-      similarity: (json['similarity'] as num?)?.toInt() ?? 0,
-      averageMatch: (json['averageMatch'] as num?)?.toInt() ?? 0,
-      wearable: json['wearable'] == true,
-      exactCount: (json['exactCount'] as num?)?.toInt() ?? 0,
-      outfit: outfit is Map
-          ? Outfit.fromJson(Map<String, dynamic>.from(outfit))
-          : null,
-      source: '${json['source'] ?? ''}',
-    );
-  }
 }
 
 /// One slot of a reference look matched against the wardrobe.
@@ -349,25 +255,6 @@ class SlotMatch {
   final bool exact;
   final bool closeEnough;
   final String reason;
-
-  factory SlotMatch.fromJson(Map<String, dynamic> json) {
-    final item = json['item'] is Map
-        ? Map<String, dynamic>.from(json['item'] as Map)
-        : null;
-    final request = json['request'] is Map
-        ? Map<String, dynamic>.from(json['request'] as Map)
-        : null;
-    return SlotMatch(
-      slotLabel: '${json['slotLabel'] ?? ''}',
-      requestedGarment: '${request?['garment'] ?? ''}',
-      itemName: '${item?['name'] ?? ''}',
-      image: '${item?['image'] ?? ''}',
-      score: (json['score'] as num?)?.toInt() ?? 0,
-      exact: json['exact'] == true,
-      closeEnough: json['closeEnough'] == true,
-      reason: '${json['reason'] ?? ''}',
-    );
-  }
 }
 
 /// A slot the wardrobe cannot fill properly.
@@ -388,14 +275,6 @@ class SlotGap {
   final String color;
   final String material;
   final String reason;
-
-  factory SlotGap.fromJson(Map<String, dynamic> json) => SlotGap(
-        slotLabel: '${json['slotLabel'] ?? ''}',
-        missing: '${json['missing'] ?? ''}',
-        color: '${json['color'] ?? ''}',
-        material: '${json['material'] ?? ''}',
-        reason: '${json['reason'] ?? ''}',
-      );
 }
 
 /// A garment recommendation produced by the shopping assistant.
@@ -474,6 +353,97 @@ class StyleColor {
   final int? count;
 }
 
+/// A wardrobe category row on the Style DNA screen.
+@immutable
+class StyleCategory {
+  const StyleCategory({
+    required this.name,
+    required this.icon,
+    required this.count,
+  });
+
+  final String name;
+  final String icon;
+  final int count;
+}
+
+/// The DB-backed Style DNA payload (`GET /insights/style-dna`).
+@immutable
+class StyleDna {
+  const StyleDna({
+    required this.segments,
+    required this.colors,
+    required this.categories,
+    required this.evolution,
+    required this.evolutionMonths,
+    this.confidence = 0,
+    this.archetype,
+  });
+
+  static const empty = StyleDna(
+    segments: [],
+    colors: [],
+    categories: [],
+    evolution: [],
+    evolutionMonths: [],
+  );
+
+  final List<StyleSegment> segments;
+  final List<StyleColor> colors;
+  final List<StyleCategory> categories;
+  final List<double> evolution;
+  final List<String> evolutionMonths;
+  final double confidence;
+  final String? archetype;
+
+  bool get isEmpty =>
+      segments.isEmpty && colors.isEmpty && categories.isEmpty;
+}
+
+/// Editorial trend card on Discover.
+@immutable
+class DiscoverTrend {
+  const DiscoverTrend({
+    required this.name,
+    required this.tag,
+    required this.image,
+  });
+
+  final String name;
+  final String tag;
+  final String image;
+}
+
+/// Community look on Discover.
+@immutable
+class CommunityLook {
+  const CommunityLook({
+    required this.name,
+    required this.likes,
+    required this.image,
+  });
+
+  final String name;
+  final int likes;
+  final String image;
+}
+
+/// Discover payload served from the database.
+@immutable
+class DiscoverContent {
+  const DiscoverContent({
+    required this.trends,
+    required this.looks,
+  });
+
+  static const empty = DiscoverContent(trends: [], looks: []);
+
+  final List<DiscoverTrend> trends;
+  final List<CommunityLook> looks;
+
+  bool get isEmpty => trends.isEmpty && looks.isEmpty;
+}
+
 // ----------------------------------------------------------------- profile
 
 /// The signed-in account plus its editable style blueprint.
@@ -481,7 +451,7 @@ class StyleColor {
 /// Mirrors `GET /users/me` on the backend, where the subject is always resolved
 /// from the bearer token — the client never sends a user id. Every field other
 /// than [id] is either read-only (email, createdAt) or editable through
-/// [toStyleProfileJson] / [copyWith].
+/// the `styleProfileToJson` mapper / [copyWith].
 @immutable
 class UserProfile {
   const UserProfile({
@@ -579,48 +549,6 @@ class UserProfile {
   /// Human readable weight, e.g. "72 kg".
   String? get weightLabel => weightKg == null ? null : '$weightKg kg';
 
-  /// Parses the `/users/me` payload. Tolerant by design: a missing style
-  /// profile or a null measurement renders as "not set" rather than throwing.
-  factory UserProfile.fromJson(Map<String, dynamic> json) {
-    final style = (json['styleProfile'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final sizes = (style['sizes'] as Map?)?.cast<String, dynamic>() ?? const {};
-    return UserProfile(
-      id: '${json['id'] ?? ''}',
-      name: '${json['name'] ?? ''}'.trim().isEmpty
-          ? '${json['email'] ?? 'Member'}'
-          : '${json['name']}'.trim(),
-      email: '${json['email'] ?? ''}',
-      createdAt: DateTime.tryParse('${json['createdAt'] ?? ''}')?.toLocal(),
-      avatarUrl: json['avatarUrl'] == null
-          ? null
-          : '${json['avatarUrl']}'.trim().isEmpty
-              ? null
-              : '${json['avatarUrl']}',
-      favoriteColors: _strings(style['favoriteColors']),
-      preferredStyles: _strings(style['preferredStyles']),
-      heightCm: _intOrNull(style['heightCm']),
-      weightKg: _intOrNull(style['weightKg']),
-      fitPreference: '${style['fitPreference'] ?? 'regular'}',
-      topSize: _nullIfEmpty(sizes['top']),
-      bottomSize: _nullIfEmpty(sizes['bottom']),
-      shoeSize: _nullIfEmpty(sizes['shoe'] ?? sizes['shoes']),
-    );
-  }
-
-  /// Only the editable style fields, shaped for `PATCH /users/me/style-profile`.
-  Map<String, dynamic> toStyleProfileJson() => {
-        'favoriteColors': favoriteColors,
-        'preferredStyles': preferredStyles,
-        'heightCm': heightCm,
-        'weightKg': weightKg,
-        'fitPreference': fitPreference,
-        'sizes': {
-          'top': topSize,
-          'bottom': bottomSize,
-          'shoe': shoeSize,
-        },
-      };
-
   UserProfile copyWith({
     String? name,
     String? email,
@@ -650,17 +578,4 @@ class UserProfile {
         shoeSize: shoeSize ?? this.shoeSize,
       );
 
-  static List<String> _strings(Object? value) => [
-        for (final v in (value as List? ?? const [])) '$v'.trim(),
-      ].where((v) => v.isNotEmpty).toList();
-
-  static int? _intOrNull(Object? value) {
-    if (value is num) return value.toInt();
-    return int.tryParse('${value ?? ''}'.trim());
-  }
-
-  static String? _nullIfEmpty(Object? value) {
-    final text = '${value ?? ''}'.trim();
-    return text.isEmpty ? null : text;
-  }
 }

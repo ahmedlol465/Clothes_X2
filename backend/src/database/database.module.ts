@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { DataSourceFactory } from './data-source';
+import { SeedService } from './seed.service';
 
 @Global()
 @Module({
@@ -21,8 +22,8 @@ import { DataSourceFactory } from './data-source';
       },
     }),
   ],
-  providers: [DataSourceFactory],
-  exports: [TypeOrmModule, DataSourceFactory],
+  providers: [DataSourceFactory, SeedService],
+  exports: [TypeOrmModule, DataSourceFactory, SeedService],
 })
 export class DatabaseModule implements OnApplicationShutdown {
   private readonly logger = new Logger(DatabaseModule.name);

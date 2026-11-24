@@ -1,23 +1,29 @@
 import 'package:flutter/material.dart';
 
+import '../../app.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
+import '../../data/controllers/outfits_controller.dart';
 import '../../data/models.dart';
 import '../outfits/outfit_history_screen.dart';
-import '../outfits/outfit_planner_screen.dart';
-import '../outfits/perfect_match_screen.dart';
-import '../stylist/create_outfit_screen.dart';
-import '../travel/travel_planner_screen.dart';
 
 /// Frame 16 - saved outfits with Saved / History / Favorites tabs.
 ///
-/// Grids load from the backend (`GET /outfits`) via [AppState].
+/// Grids load from the backend (`GET /outfits`) via [OutfitsController].
 class OutfitsScreen extends StatefulWidget {
-  const OutfitsScreen({super.key});
+  const OutfitsScreen._(this._outfitsController);
+
+  factory OutfitsScreen({Key? key, OutfitsController? outfitsController}) {
+    return OutfitsScreen._(
+      outfitsController ?? AppState.instance.outfitsController,
+    );
+  }
+
+  final OutfitsController _outfitsController;
 
   @override
   State<OutfitsScreen> createState() => _OutfitsScreenState();
@@ -26,12 +32,11 @@ class OutfitsScreen extends StatefulWidget {
 class _OutfitsScreenState extends State<OutfitsScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs = TabController(length: 3, vsync: this);
-  final _state = AppState.instance;
 
   @override
   void initState() {
     super.initState();
-    _state.loadOutfits();
+    widget._outfitsController.loadSaved();
   }
 
   @override
@@ -41,9 +46,7 @@ class _OutfitsScreenState extends State<OutfitsScreen>
   }
 
   void _open(BuildContext context, Outfit outfit) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => PerfectMatchScreen(outfit: outfit)),
-    );
+    Navigator.of(context).pushNamed(Routes.perfectMatch, arguments: outfit);
   }
 
   @override
@@ -63,29 +66,17 @@ class _OutfitsScreenState extends State<OutfitsScreen>
                 Expanded(child: Text('Saved Outfits', style: AppText.h1)),
                 SwIconButton(
                   icon: SwIconButtonKind.bag,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const TravelPlannerScreen(),
-                    ),
-                  ),
+                  onTap: () => Navigator.of(context).pushNamed(Routes.travelPlanner),
                 ),
                 const SizedBox(width: Insets.sm),
                 SwIconButton(
                   icon: SwIconButtonKind.planner,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const OutfitPlannerScreen(),
-                    ),
-                  ),
+                  onTap: () => Navigator.of(context).pushNamed(Routes.outfitPlanner),
                 ),
                 const SizedBox(width: Insets.sm),
                 SwIconButton(
                   icon: SwIconButtonKind.plus,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const CreateOutfitScreen(),
-                    ),
-                  ),
+                  onTap: () => Navigator.of(context).pushNamed(Routes.createOutfit),
                 ),
               ],
             ),
@@ -109,9 +100,9 @@ class _OutfitsScreenState extends State<OutfitsScreen>
           ),
           Expanded(
             child: ListenableBuilder(
-              listenable: _state,
+              listenable: widget._outfitsController,
               builder: (context, _) {
-                final saved = _state.savedOutfits;
+                final saved = widget._outfitsController.saved;
                 final favorites =
                     saved.where((o) => o.favorite).toList();
                 return TabBarView(

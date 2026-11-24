@@ -58,6 +58,22 @@ backend/storage/
 backend/data/
 *.tsbuildinfo
 
+# TypeScript emits next to the sources if a tool bypasses nest build.
+# Never track generated JavaScript in backend/src (the Express runtime is
+# legacy; the Nest build owns dist/).
+backend/src/**/*.js
+backend/src/**/*.js.map
+backend/test/**/*.js
+backend/test/**/*.js.map
+
+# Local SQLite databases (the API falls back to SQLite when Postgres/MySQL
+# are unavailable).
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
 # Local AI model weights (Marqo/marqo-fashionCLIP + Xenova/all-MiniLM-L6-v2).
 # NOT committed — teammates obtain them via `npm run setup:models` (see README).
 # The directory is safe to delete/clean on CI; production clones must not

@@ -1,32 +1,37 @@
 # SmartWardrobe backend (§5–§8)
 
-Modular REST API (Express runtime, NestJS-style module layout). No database
-server needed — data persists to `backend/data/db.json` (seeded from the
-Flutter mock data so the UI looks identical on first run).
+The canonical backend is the **NestJS** application in `src/`. It uses a
+normalised TypeORM schema (PostgreSQL/MySQL) and automatically falls back to an
+embedded SQLite file when no database server is reachable, so a fresh clone
+still boots.
+
+The legacy Express runtime and the file-backed JSON store have been removed.
+The NestJS app is the only runtime, and TypeORM is the only source of truth for
+application data (uploaded images stay in file/object storage).
 
 ## Run
 
 ```bash
 cd backend
 npm install
-npm run setup:models   # one-time: download AI models into .model-cache (see below)
-npm start
-# → http://localhost:3001  (endpoint index at GET /docs)
+npm run setup:models   # one-time: download local AI models (see below)
+npm run dev            # NestJS with watch → http://localhost:3002/api
+# → Swagger UI: http://localhost:3002/docs
 ```
 
-The Flutter app auto-connects (Android emulator: `10.0.2.2:3001`,
-desktop/iOS/Chrome: `localhost:3001`). If the backend is down, the app falls back
-to bundled mock data and shows an "Offline demo" badge.
+The Flutter app auto-connects (Android emulator: `10.0.2.2:3002`,
+desktop/iOS/Chrome: `localhost:3002`) under the `/api` prefix. If the backend is
+down the app shows an offline/empty state; there is no bundled mock fallback.
 
 ## Local AI models (backend/.model-cache)
 
-The Express runtime analyzes garment photos **locally** with transformers.js
-(ONNX, q8), so no API key is required for clothing analysis:
+The local transformers.js pipeline is used by the NestJS clothing-vision
+analyzer and the rule-based stylist. It never needs an API key:
 
 | Model | Purpose | Loader |
 | --- | --- | --- |
-| `Marqo/marqo-fashionCLIP` | clothing/non-clothing gate + all attributes (512-dim) | `src/clothing-vision/encoder.js` |
-| `Xenova/all-MiniLM-L6-v2` | semantic retrieval (384-dim) | `src/retrieval.js` |
+| `Marqo/marqo-fashionCLIP` | clothing/non-clothing gate + all attributes (512-dim) | `src/clothing-vision/encoder.ts` |
+| `Xenova/all-MiniLM-L6-v2` | semantic retrieval (384-dim) | `src/retrieval.ts` |
 
 Both load lazily from `backend/.model-cache` (set explicitly by both loaders).
 Weights are ignored by git; on a fresh clone run `npm run setup:models` (reuses

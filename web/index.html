@@ -41,6 +41,42 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
+  <!--
+    Pin CanvasKit to the copy that ships inside this build (build/web/canvaskit)
+    instead of the https://www.gstatic.com/flutter-canvaskit CDN.
+
+    The CDN is the default, but it means the app cannot start until ~7 MB of
+    wasm has been pulled from the internet: on a slow link (or offline) the
+    screen stays blank for a long time before the first frame. The local copy
+    is served from the same origin, so the app boots immediately and works
+    with no network at all.
+  -->
+  <script>
+    (function () {
+      var LOCAL_CANVASKIT = 'canvaskit/';
+      var patch = function () {
+        var loader = window._flutter && window._flutter.loader;
+        if (!loader || loader.__canvasKitPinned) return false;
+        var original = loader.load.bind(loader);
+        loader.load = function (options) {
+          options = options || {};
+          options.config = options.config || {};
+          if (!options.config.canvasKitBaseUrl) {
+            options.config.canvasKitBaseUrl = LOCAL_CANVASKIT;
+          }
+          return original(options);
+        };
+        loader.__canvasKitPinned = true;
+        return true;
+      };
+      // flutter_bootstrap.js is async, so the loader may not exist yet.
+      if (!patch()) {
+        var timer = setInterval(function () {
+          if (patch()) clearInterval(timer);
+        }, 10);
+      }
+    })();
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

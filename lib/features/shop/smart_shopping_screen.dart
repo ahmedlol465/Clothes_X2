@@ -7,6 +7,7 @@ import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
+import '../../data/controllers/shop_controller.dart';
 import '../../data/models.dart';
 
 /// Frame 22 - gap filling product recommendations.
@@ -14,20 +15,27 @@ import '../../data/models.dart';
 /// Picks load from the backend (`GET /shop/recommended`, gap analysis §8.4)
 /// and wishlist taps persist (`POST /shop/wishlist`).
 class SmartShoppingScreen extends StatefulWidget {
-  const SmartShoppingScreen({super.key});
+  const SmartShoppingScreen._(this._shopController);
+
+  factory SmartShoppingScreen({Key? key, ShopController? shopController}) {
+    return SmartShoppingScreen._(
+      shopController ?? AppState.instance.shopController,
+    );
+  }
+
+  final ShopController _shopController;
 
   @override
   State<SmartShoppingScreen> createState() => _SmartShoppingScreenState();
 }
 
 class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
-  final _state = AppState.instance;
   final Set<int> _wishlisted = {};
 
   @override
   void initState() {
     super.initState();
-    _state.loadShop();
+    widget._shopController.load();
   }
 
   Future<void> _toggle(int index) async {
@@ -35,9 +43,9 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
       if (!_wishlisted.remove(index)) _wishlisted.add(index);
     });
     if (_wishlisted.contains(index)) {
-      final pick = _state.shopPicks[index];
+      final pick = widget._shopController.picks[index];
       try {
-        await _state.api.addToWishlist({
+        await widget._shopController.api.addToWishlist({
           'name': pick.name,
           'price': pick.price,
           'image': pick.image,
@@ -51,7 +59,7 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: _state,
+      listenable: widget._shopController,
       builder: (context, _) => SwScreen(
         scroll: true,
         padding: const EdgeInsets.only(bottom: Insets.xxl),
@@ -89,9 +97,9 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
               padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
               child: Column(
                 children: [
-                  for (var i = 0; i < _state.shopPicks.length; i++) ...[
+                  for (var i = 0; i < widget._shopController.picks.length; i++) ...[
                     _PickCard(
-                      pick: _state.shopPicks[i],
+                      pick: widget._shopController.picks[i],
                       wishlisted: _wishlisted.contains(i),
                       onToggle: () => _toggle(i),
                       onView: () => ScaffoldMessenger.of(context)
@@ -99,7 +107,7 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
                         ..showSnackBar(
                           SnackBar(
                             content: Text(
-                              'Opening ${_state.shopPicks[i].name}',
+                              'Opening ${widget._shopController.picks[i].name}',
                             ),
                           ),
                         ),

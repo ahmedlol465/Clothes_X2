@@ -11,7 +11,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-import { ItemStatus, StyleMemorySource, UserRole } from '../../common/vocabularies';
+import { StyleMemorySource, UserRole } from '../../common/vocabularies';
 
 /** Core account. `passwordHash` is nullable so Google/Apple sign-in works. */
 @Entity('users')
@@ -22,6 +22,9 @@ export class User {
   @Index({ unique: true })
   @Column({ length: 180 })
   email: string;
+
+  @Column({ length: 120, nullable: true })
+  name: string | null;
 
   @Column({ length: 255, nullable: true, select: false })
   passwordHash: string | null;
@@ -60,17 +63,25 @@ export class User {
   @UpdateDateColumn()
   updatedAt: Date;
 
+  /**
+   * Relation properties use `InstanceType<typeof X>` instead of `X` so
+   * `emitDecoratorMetadata` emits `void 0` rather than a runtime reference to
+   * a class declared later in this file. A plain `X` annotation makes the
+   * generated `design:type` metadata throw a TDZ ReferenceError at load time.
+   * The relation itself is resolved lazily by the `() => X` decorator above,
+   * and the TypeScript type is preserved.
+   */
   @OneToOne(() => UserProfile, (profile) => profile.user, { cascade: true })
-  profile: UserProfile;
+  profile: InstanceType<typeof UserProfile>;
 
   @OneToOne(() => StyleProfile, (style) => style.user, { cascade: true })
-  styleProfile: StyleProfile;
+  styleProfile: InstanceType<typeof StyleProfile>;
 
   @OneToMany(() => StyleMemory, (memory) => memory.user)
   styleMemories: StyleMemory[];
 
   @OneToOne(() => Subscription, (subscription) => subscription.user)
-  subscription: Subscription;
+  subscription: InstanceType<typeof Subscription>;
 }
 
 /** Section 4.1 onboarding answers: sizes, fit, colors, style, occasions. */
@@ -108,16 +119,16 @@ export class UserProfile {
   @Column({ type: 'float', nullable: true })
   weightKg: number | null;
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   preferredColors: string[];
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   avoidedColors: string[];
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   preferredStyles: string[];
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   occasions: string[];
 
   @Column({ length: 40, default: 'minimalist' })
@@ -172,16 +183,16 @@ export class StyleProfile {
   @Column({ length: 60, nullable: true })
   archetype: string | null;
 
-  @Column({ type: 'simple-json', nullable: true })
-  dimensions: Record<string, number> | null;
+  @Column({ type: 'json', nullable: true })
+  dimensions: Record<string, unknown> | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   palette: Array<{ name: string; hex: string; count: number }> | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   categoryMix: Array<{ name: string; count: number }> | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   evolution: Array<{ month: string; score: number }> | null;
 
   @Column({ type: 'float', nullable: true })
@@ -211,10 +222,10 @@ export class StyleProfile {
   @Column({ type: 'float', nullable: true })
   riskTaking: number | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   favoriteSilhouettes: string[] | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   brandPreference: string[] | null;
 
   @Column({ type: 'float', default: 0 })
@@ -239,6 +250,10 @@ export class StylePreference {
   @Index()
   @Column()
   userId: string;
+
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'userId' })
+  user: User;
 
   @Index()
   @Column({ length: 80 })
@@ -329,271 +344,4 @@ export class Subscription {
 
   @UpdateDateColumn()
   updatedAt: Date;
-}
-
-@Entity('wardrobes')
-export class Wardrobe {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
-
-  @Index()
-  @Column()
-  userId: string;
-
-  @Column({ length: 80, default: 'My Wardrobe' })
-  name: string;
-
-  @Column({ length: 40, default: 'primary' })
-  kind: string;
-
-  @Column({ type: 'int', default: 0 })
-  itemCount: number;
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @UpdateDateColumn()
-  updatedAt: Date;
-}
-
-@Entity('brands')
-export class Brand {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
-
-  @Index({ unique: true })
-  @Column({ length: 120 })
-  name: string;
-
-  @Column({ length: 255, nullable: true })
-  logoUrl: string | null;
-
-  @Column({ length: 60, nullable: true })
-  country: string | null;
-
-  @CreateDateColumn()
-  createdAt: Date;
-}
-
-@Entity('categories')
-export class Category {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
-
-  @Index({ unique: true })
-  @Column({ length: 60 })
-  name: string;
-
-  @Column({ length: 40, default: 'apparel' })
-  group: string;
-
-  @Column({ length: 40, default: 'shirt' })
-  icon: string;
-
-  @Column({ type: 'int', default: 0 })
-  sortOrder: number;
-}
-
-/** A single garment. Mirrors the Flutter `ClothingItem` model field-for-field. */
-@Entity('wardrobe_items')
-@Index(['wardrobeId', 'status'])
-export class WardrobeItem {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
-
-  @Index()
-  @Column()
-  wardrobeId: string;
-
-  @ManyToOne(() => Wardrobe, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'wardrobeId' })
-  wardrobe: Wardrobe;
-
-  @Column({ length: 160 })
-  name: string;
-
-  @Column({ length: 60, nullable: true })
-  category: string | null;
-
-  @ManyToOne(() => Category, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'categoryId' })
-  categoryRef: Category | null;
-
-  @Column({ nullable: true })
-  categoryId: string | null;
-
-  @Column({ length: 255 })
-  imageUrl: string;
-
-  @Column({ type: 'simple-json', nullable: true })
-  secondaryColors: string[] | null;
-
-  @Column({ length: 60, nullable: true })
-  color: string | null;
-
-  @Column({ length: 40, nullable: true })
-  pattern: string | null;
-
-  @Column({ length: 60, nullable: true })
-  style: string | null;
-
-  @Column({ length: 80, nullable: true })
-  material: string | null;
-
-  @Column({ length: 40, nullable: true })
-  season: string | null;
-
-  @Column({ length: 40, nullable: true })
-  formality: string | null;
-
-  @Column({ length: 40, nullable: true })
-  fit: string | null;
-
-  @Column({ length: 30, default: 'New' })
-  condition: string;
-
-  @Column({ type: 'simple-array', default: '' })
-  occasions: string[];
-
-  /** 1 (very light) .. 5 (insulated). Section 4.5 "Warmth". */
-  @Column({ type: 'int', default: 3 })
-  warmth: number;
-
-  /** 1 (single layer) .. 5 (goes under anything). Section 4.5 "Layerability". */
-  @Column({ type: 'int', default: 3 })
-  layerability: number;
-
-  /** 0-1, the vision model certainty shown in the item detail screen. */
-  @Column({ type: 'float', default: 0 })
-  confidence: number;
-
-  @Column({ type: 'simple-json', nullable: true })
-  confidenceByAttribute: Record<string, number> | null;
-
-  @Column({ type: 'simple-json', nullable: true })
-  tags: string[] | null;
-
-  @Column({ type: 'simple-json', nullable: true })
-  compatibleColors: string[] | null;
-
-  @ManyToOne(() => Brand, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'brandId' })
-  brand: Brand | null;
-
-  @Column({ nullable: true })
-  brandId: string | null;
-
-  @Column({ type: 'float', nullable: true })
-  purchasePrice: number | null;
-
-  @Column({ type: 'datetime', nullable: true })
-  purchaseDate: Date | null;
-
-  /** Denormalised counters kept in sync by the wardrobe service. */
-  @Column({ type: 'int', default: 0 })
-  timesWorn: number;
-
-  @Column({ type: 'datetime', nullable: true })
-  lastWornAt: Date | null;
-
-  @Column({ type: 'int', default: 1 })
-  timesRecommended: number;
-
-  @Column({ length: 8, default: ItemStatus.ACTIVE })
-  status: ItemStatus | string;
-
-  @Column({ type: 'simple-json', nullable: true })
-  embeddings: number[] | null;
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @UpdateDateColumn()
-  updatedAt: Date;
-
-  @OneToMany(() => ClothingAttribute, (attribute) => attribute.item, {
-    cascade: true,
-  })
-  attributes: ClothingAttribute[];
-}
-
-/** Section 7 entity: per-item attribute rows produced by the vision model. */
-@Entity('clothing_attributes')
-@Index(['itemId', 'name'], { unique: true })
-export class ClothingAttribute {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
-
-  @Index()
-  @Column()
-  itemId: string;
-
-  @OneToOne(() => WardrobeItem, (item) => item.attributes, {
-    onDelete: 'CASCADE',
-  })
-  @JoinColumn({ name: 'itemId' })
-  item: WardrobeItem;
-
-  @Column({ length: 60 })
-  name: string;
-
-  @Column({ length: 160 })
-  value: string;
-
-  @Column({ type: 'float', default: 0 })
-  confidence: number;
-
-  @Column({ default: false })
-  correctedByUser: boolean;
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @UpdateDateColumn()
-  updatedAt: Date;
-}
-
-/** Section 4.9 / Insights "Most worn": one row per time an item went out. */
-@Entity('wear_events')
-@Index(['itemId', 'wornAt'])
-export class WearEvent {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
-
-  @Index()
-  @Column()
-  userId: string;
-
-  @Index()
-  @Column()
-  itemId: string;
-
-  @ManyToOne(() => WardrobeItem, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'itemId' })
-  item: WardrobeItem;
-
-  @Index()
-  @Column({ nullable: true })
-  outfitId: string | null;
-
-  @Column({ length: 40, nullable: true })
-  occasion: string | null;
-
-  @Column({ length: 120, nullable: true })
-  location: string | null;
-
-  @Column({ type: 'int', nullable: true })
-  temperatureC: number | null;
-
-  @Column({ length: 40, nullable: true })
-  weatherCondition: string | null;
-
-  @Column({ nullable: true })
-  calendarEventId: string | null;
-
-  @Column({ default: false })
-  fromPlanner: boolean;
-
-  @CreateDateColumn({ name: 'wornAt' })
-  wornAt: Date;
 }

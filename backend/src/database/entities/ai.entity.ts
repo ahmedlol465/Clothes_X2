@@ -4,6 +4,7 @@ import {
   Entity,
   Index,
   JoinColumn,
+  ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
@@ -28,7 +29,7 @@ export class AIConversation {
   @Column({ length: 20, default: 'stylist' })
   channel: string;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   context: Record<string, unknown> | null;
 
   @Column({ type: 'int', default: 0 })
@@ -75,7 +76,7 @@ export class AIInteraction {
   @Column({ type: 'text' })
   content: string;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   payload: Record<string, unknown> | null;
 
   @Column({ nullable: true })
@@ -85,7 +86,7 @@ export class AIInteraction {
   @JoinColumn({ name: 'outfitId' })
   outfit: Outfit | null;
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   referencedItemIds: string[];
 
   @Column({ type: 'int', default: 0 })
@@ -116,7 +117,7 @@ export class AIUsage {
   @Column({ length: 60, default: 'rule-engine' })
   provider: string;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   model: Record<string, unknown> | null;
 
   @Column({ type: 'int', default: 0 })
@@ -125,7 +126,16 @@ export class AIUsage {
   @Column({ type: 'int', default: 0 })
   tokens: number;
 
-  @Column({ type: 'float', default: 0 })
+  @Column({
+    type: 'decimal',
+    precision: 12,
+    scale: 4,
+    default: 0,
+    transformer: {
+      to: (value: number | null) => value === null ? null : value,
+      from: (value: string | null) => value === null ? null : Number(value),
+    },
+  })
   costUsd: number;
 
   @Column({ default: true })
@@ -134,7 +144,7 @@ export class AIUsage {
   @Column({ type: 'text', nullable: true })
   errorMessage: string | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   metadata: Record<string, unknown> | null;
 
   @CreateDateColumn()
@@ -161,7 +171,7 @@ export class AppNotification {
   @Column({ type: 'text', nullable: true })
   body: string | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   data: Record<string, unknown> | null;
 
   @Column({ length: 20, default: 'in_app' })

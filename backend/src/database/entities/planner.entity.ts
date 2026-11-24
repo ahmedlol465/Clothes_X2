@@ -12,7 +12,7 @@ import {
 
 import { OutfitSlot } from '../../common/vocabularies';
 import { Outfit } from './outfit.entity';
-import { WardrobeItem } from './identity.entity';
+import { WardrobeItem } from './wardrobe.entity';
 
 /** Section 4.11 Event Scheduler / Calendar. */
 @Entity('calendar_events')
@@ -37,11 +37,17 @@ export class CalendarEvent {
   @Column({ length: 40, nullable: true })
   occasion: string | null;
 
-  @Column({ type: 'datetime' })
-  startsAt: Date;
+  @Column({ type: 'datetime', nullable: true })
+  startsAt: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  startsAtRaw: string | null;
 
   @Column({ type: 'datetime', nullable: true })
   endsAt: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  endsAtRaw: string | null;
 
   @Column({ length: 160, nullable: true })
   location: string | null;
@@ -55,7 +61,7 @@ export class CalendarEvent {
   @Column({ length: 255, nullable: true })
   externalId: string | null;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   attendees: string[] | null;
 
   @Column({ default: false })
@@ -70,10 +76,10 @@ export class CalendarEvent {
   @Column({ default: false })
   reminderSent: boolean;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   weatherSnapshot: Record<string, unknown> | null;
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   tags: string[];
 
   @CreateDateColumn()
@@ -106,8 +112,8 @@ export class EventSchedule {
   event: CalendarEvent;
 
   @Index()
-  @Column()
-  outfitId: string;
+  @Column({ nullable: true })
+  outfitId: string | null;
 
   @ManyToOne(() => Outfit, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'outfitId' })
@@ -189,7 +195,7 @@ export class WeatherSnapshot {
   @Column({ length: 20, default: 'openweathermap' })
   provider: string;
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   forecast: Array<{
     date: string;
     tempMinC: number;
@@ -219,11 +225,17 @@ export class Trip {
   @Column({ length: 10, nullable: true })
   country: string | null;
 
-  @Column({ type: 'date' })
-  startsOn: string;
+  @Column({ type: 'date', nullable: true })
+  startsOn: string | null;
 
-  @Column({ type: 'date' })
-  endsOn: string;
+  @Column({ type: 'text', nullable: true })
+  startsOnRaw: string | null;
+
+  @Column({ type: 'date', nullable: true })
+  endsOn: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  endsOnRaw: string | null;
 
   @Column({ type: 'int', default: 0 })
   days: number;
@@ -231,13 +243,13 @@ export class Trip {
   @Column({ type: 'int', nullable: true })
   luggageLimit: number | null;
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   activities: string[];
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   formalEventTitles: string[];
 
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   weatherForecast: Array<{ date: string; condition: string; tempMinC: number; tempMaxC: number }> | null;
 
   @Column({ type: 'int', default: 0 })
@@ -298,7 +310,7 @@ export class PackingList {
   @Column({ type: 'int', default: 0 })
   outfitCount: number;
 
-  @Column({ type: 'simple-array', default: '' })
+  @Column({ type: 'json', default: () => "('[]')" })
   dayPlan: string[];
 
   @CreateDateColumn()

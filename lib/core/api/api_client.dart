@@ -184,7 +184,7 @@ class ApiClient {
             : 'Upload failed (${res.statusCode})';
         throw ApiException(msg, status: res.statusCode);
       }
-      return decoded;
+      return _unwrap(decoded);
     } on TimeoutException {
       throw ApiException('Upload timed out.');
     } on http.ClientException {
@@ -199,6 +199,16 @@ class ApiClient {
         'Content-Type': 'application/json',
         if (_token != null) 'Authorization': 'Bearer $_token',
       };
+
+  /// The NestJS API wraps every successful payload in
+  /// `{success, data, meta?, timestamp}` ([ResponseInterceptor]). Callers work
+  /// with the payload itself, so the envelope is stripped here, once.
+  static dynamic _unwrap(dynamic decoded) {
+    if (decoded is Map && decoded['success'] == true && decoded.containsKey('data')) {
+      return decoded['data'];
+    }
+    return decoded;
+  }
 
   Future<dynamic> _send(
     String method,
@@ -224,7 +234,7 @@ class ApiClient {
             : 'Request failed (${res.statusCode})';
         throw ApiException(msg, status: res.statusCode);
       }
-      return decoded;
+      return _unwrap(decoded);
     } on TimeoutException {
       throw ApiException('Backend timed out.');
     } on http.ClientException {

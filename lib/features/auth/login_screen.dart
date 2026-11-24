@@ -10,10 +10,19 @@ import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
+import '../../data/controllers/account_controller.dart';
 
 /// Frame 5 - email and password sign in (backend `POST /auth/login`).
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen._(this._accountController);
+
+  factory LoginScreen({Key? key, AccountController? accountController}) {
+    return LoginScreen._(
+      accountController ?? AppState.instance.accountController,
+    );
+  }
+
+  final AccountController _accountController;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -38,9 +47,10 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _busy = true);
     bool ok = false;
     try {
-      ok = await AppState.instance
-          .login(_email.text.trim(), _password.text)
-          .timeout(const Duration(seconds: 15));
+      ok = await widget._accountController.login(
+        _email.text.trim(),
+        _password.text,
+      ).timeout(const Duration(seconds: 15));
     } catch (_) {
       ok = false;
     }
@@ -51,7 +61,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } else {
       _toast(
         context,
-        'Login failed: ${AppState.instance.lastError ?? 'unknown error'}\n'
+        'Login failed: ${widget._accountController.lastError ?? 'unknown error'}\n'
         'Is the backend running? (backend → npm start)',
       );
     }
@@ -177,7 +187,15 @@ class _InlineLink extends StatelessWidget {
 
 /// Frame 6 - account creation.
 class SignUpScreen extends StatefulWidget {
-  const SignUpScreen({super.key});
+  const SignUpScreen._(this._accountController);
+
+  factory SignUpScreen({Key? key, AccountController? accountController}) {
+    return SignUpScreen._(
+      accountController ?? AppState.instance.accountController,
+    );
+  }
+
+  final AccountController _accountController;
 
   @override
   State<SignUpScreen> createState() => _SignUpScreenState();
@@ -205,7 +223,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false) || _busy) return;
     setState(() => _busy = true);
-    final ok = await AppState.instance.register(
+    final ok = await widget._accountController.register(
       _name.text.trim(),
       _email.text.trim(),
       _password.text,

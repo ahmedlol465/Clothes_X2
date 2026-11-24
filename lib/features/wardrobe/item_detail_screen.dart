@@ -7,16 +7,31 @@ import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
-import '../../data/mock_data.dart';
+import '../../data/controllers/wardrobe_controller.dart';
 import '../../data/models.dart';
 
 /// Frame 11 - full detail view for a single garment.
 ///
 /// Edit / Wear / Delete are wired to the backend wardrobe API (§8.3).
 class ItemDetailScreen extends StatefulWidget {
-  const ItemDetailScreen({super.key, required this.item});
+  const ItemDetailScreen._({
+    required this.item,
+    this.wardrobeController,
+  });
+
+  factory ItemDetailScreen({
+    Key? key,
+    required ClothingItem item,
+    WardrobeController? wardrobeController,
+  }) {
+    return ItemDetailScreen._(
+      item: item,
+      wardrobeController: wardrobeController ?? AppState.instance.wardrobeController,
+    );
+  }
 
   final ClothingItem item;
+  final WardrobeController? wardrobeController;
 
   @override
   State<ItemDetailScreen> createState() => _ItemDetailScreenState();
@@ -25,11 +40,18 @@ class ItemDetailScreen extends StatefulWidget {
 class _ItemDetailScreenState extends State<ItemDetailScreen> {
   late ClothingItem _item = widget.item;
   bool _busy = false;
+  late final WardrobeController _wardrobeController;
+
+  @override
+  void initState() {
+    super.initState();
+    _wardrobeController = widget.wardrobeController!;
+  }
 
   Future<void> _wear() async {
     if (_busy) return;
     setState(() => _busy = true);
-    final ok = await AppState.instance.logWear(_item);
+    final ok = await _wardrobeController.logWear(_item);
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -52,7 +74,7 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
       builder: (sheetContext) => _EditSheet(item: _item),
     );
     if (patch == null || !mounted) return;
-    final ok = await AppState.instance.updateItem(_item.id, patch);
+    final ok = await _wardrobeController.update(_item.id, patch);
     if (!mounted) return;
     if (ok) {
       setState(() {
@@ -92,7 +114,7 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
       ),
     );
     if (confirm != true || !mounted) return;
-    final ok = await AppState.instance.deleteItem(_item.id);
+    final ok = await _wardrobeController.delete(_item.id);
     if (!mounted) return;
     Navigator.of(context).pop();
     _toast(
@@ -425,6 +447,3 @@ void _toast(BuildContext context, String message) {
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(message)));
 }
-
-/// Convenience constructor used by lists that always show the sample shirt.
-ItemDetailScreen sample() => ItemDetailScreen(item: MockData.wardrobe.first);

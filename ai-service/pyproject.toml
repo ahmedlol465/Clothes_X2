@@ -43,6 +43,8 @@ dev = [
     "pytest-cov>=5.0",
     "httpx>=0.27",
     "matplotlib>=3.9",
+    "ruff>=0.9",
+    "mypy>=1.14",
 ]
 
 [project.scripts]
@@ -58,6 +60,27 @@ clothing_ai = ["config/labels.yaml", "config/*.yaml"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["clothing_ai", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+ignore_missing_imports = true
+check_untyped_defs = true
+exclude = ["tests/"]
 # `slow` needs real weights, so it is opt-in: run it with `-m slow` or
 # `--include-slow`. Without the filter a default run would try to download
 # gigabytes and look like a hang.
