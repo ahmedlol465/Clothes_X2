@@ -31,10 +31,10 @@ const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-outfit-fix-'));
 process.env.SMARTWARDROBE_DATA_DIR = TMP_DIR;
 
 const app = require('../server');
-const store = require('../src/store');
-const scoring = require('../src/scoring');
-const memoryStore = require('../src/style-memory');
-const history = require('../src/recommendation-history');
+const store = require('../src/data/store');
+const scoring = require('../src/services/scoring');
+const memoryStore = require('../src/services/style-memory');
+const history = require('../src/services/recommendation-history');
 
 const REAL_DB = path.join(__dirname, '..', 'data', 'db.json');
 const realBefore = fs.existsSync(REAL_DB) ? fs.statSync(REAL_DB) : null;

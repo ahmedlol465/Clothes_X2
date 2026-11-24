@@ -134,8 +134,8 @@ API key is needed for the core pipeline:
 
 | Model | Purpose | Loaded by |
 | --- | --- | --- |
-| `Marqo/marqo-fashionCLIP` (dtype `q8`) | clothing / non-clothing + all attributes | `backend/src/clothing-vision/encoder.js` |
-| `Xenova/all-MiniLM-L6-v2` (dtype `q8`) | semantic wardrobe retrieval | `backend/src/retrieval.js` |
+| `Marqo/marqo-fashionCLIP` (dtype `q8`) | clothing / non-clothing + all attributes | `backend/src/services/clothing-vision/encoder.js` |
+| `Xenova/all-MiniLM-L6-v2` (dtype `q8`) | semantic wardrobe retrieval | `backend/src/services/retrieval.js` |
 
 Files are cached in `backend/.model-cache/` — the same directory the server
 reads at runtime, and the only directory ever touched. Weights are **excluded
@@ -147,8 +147,8 @@ existing files are never re-downloaded or overwritten.
 > uses). transformers.js stores a flat cache that does not record the original
 > commit SHA, so we deliberately do **not** guess and hard-code one; if the Hub
 > revision ever advances, pin it explicitly later in
-> `backend/src/clothing-vision/prompts.js` (`MODEL.revision`) and
-> `backend/src/retrieval.js` (`EMBED_MODEL` options). Current `main` SHAs at the
+> `backend/src/services/clothing-vision/prompts.js` (`MODEL.revision`) and
+> `backend/src/services/retrieval.js` (`EMBED_MODEL` options). Current `main` SHAs at the
 > time of writing: `Marqo/marqo-fashionCLIP` → `44f4c655124ed71e90cbf528d82f508d69d8a81b`,
 > `Xenova/all-MiniLM-L6-v2` → `751bff37182d3f1213fa05d7196b954e230abad9`.
 

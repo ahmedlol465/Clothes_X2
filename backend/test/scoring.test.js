@@ -13,7 +13,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const scoring = require('../src/scoring');
+const scoring = require('../src/services/scoring');
 
 function item(spec) {
   return {

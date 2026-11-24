@@ -8,10 +8,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const contract = require('../src/response-contract');
-const ai = require('../src/ai-engine');
-const memoryStore = require('../src/style-memory');
-const vision = require('../src/vision');
+const contract = require('../src/services/response-contract');
+const ai = require('../src/services/ai-engine');
+const memoryStore = require('../src/services/style-memory');
+const vision = require('../src/services/vision');
 
 function item(spec) {
   return {
@@ -334,7 +334,7 @@ test('baseMeta itemIdValidation captures dropped hallucinated IDs', () => {
 });
 
 test('STYLIST_SYSTEM prompt contains anti-hallucination instruction', () => {
-  const llm = require('../src/llm');
+  const llm = require('../src/services/llm');
   // The STYLIST_SYSTEM is a constant in the module, we can't directly test it
   // but we can verify the module exports what we expect
   assert.ok(typeof llm.stylistChat === 'function');

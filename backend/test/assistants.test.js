@@ -12,7 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const ai = require('../src/ai-engine');
+const ai = require('../src/services/ai-engine');
 
 function item(spec) {
   return {

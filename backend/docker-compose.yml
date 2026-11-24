@@ -1,0 +1,25 @@
+# Local MySQL for the SmartWardrobe backend.
+#   docker compose up -d db
+# then set in backend/.env:
+#   DB_DRIVER=mysql  DB_HOST=127.0.0.1  DB_PORT=3306
+#   DB_USER=smartwardrobe  DB_PASSWORD=smartwardrobe  DB_NAME=smartwardrobe
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: smartwardrobe
+      MYSQL_USER: smartwardrobe
+      MYSQL_PASSWORD: smartwardrobe
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - smartwardrobe-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  smartwardrobe-mysql:

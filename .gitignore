@@ -71,3 +71,6 @@ backend/data/
 
 # Playwright MCP debug artifacts
 .playwright-mcp/
+
+# Tool debris
+.playwright-mcp/
