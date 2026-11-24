@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -137,6 +138,36 @@ export class AuthService {
     const styleProfile = await this.styleProfileRepo.findOne({ where: { userId: user.id } });
     await this.cache.invalidateUser(user.id);
     return this.issueSession(userToLegacyUser(user, styleProfile));
+  }
+
+  /** Exposes (to anyone) only whether a Google Client ID is configured. */
+  googleClientStatus(): { configured: boolean; clientId: string | null } {
+    const clientId = this.config.get<string>('google.clientId') ?? '';
+    // The web sign-in flow needs the Client ID in the page, so it is not a
+    // secret; still, only expose it when present.
+    return { configured: clientId.length > 0, clientId: clientId || null };
+  }
+
+  /**
+   * Google sign-in. The client sends the ID token it got from Google
+   * Identity Services; we verify it with Google, pin it to our configured
+   * Client ID, and only then trust the email inside.
+   */
+  async googleLogin(idToken: string): Promise<AuthResponseDto> {
+    const clientId = this.config.get<string>('google.clientId') ?? '';
+    if (!clientId) {
+      throw new BadRequestException(
+        'Google sign-in is not configured on the server (GOOGLE_CLIENT_ID missing).',
+      );
+    }
+    const profile = await verifyGoogleIdToken(idToken, clientId);
+    return this.socialLogin({
+      provider: 'google',
+      credential: profile.sub,
+      email: profile.email,
+      firstName: profile.givenName,
+      lastName: profile.familyName,
+    } as SocialAuthDto);
   }
 
   /** Email/Google/Apple/Phone entry point described in section 4.1. */

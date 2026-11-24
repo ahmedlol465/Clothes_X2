@@ -50,6 +50,12 @@ export const redisConfig = registerAs('redis', () => ({
   keyPrefix: process.env.REDIS_KEY_PREFIX ?? 'sw:',
 }));
 
+export const googleConfig = registerAs('google', () => ({
+  // Web OAuth 2.0 Client ID from Google Cloud Console. Empty means the
+  // Google sign-in endpoint answers "not configured" instead of guessing.
+  clientId: process.env.GOOGLE_CLIENT_ID ?? '',
+}));
+
 export const jwtConfig = registerAs('jwt', () => {
   const accessSecret = process.env.JWT_ACCESS_SECRET;
   const refreshSecret = process.env.JWT_REFRESH_SECRET;
@@ -135,6 +141,7 @@ export const configFactories = [
   databaseConfig,
   redisConfig,
   jwtConfig,
+  googleConfig,
   storageConfig,
   weatherConfig,
   aiConfig,

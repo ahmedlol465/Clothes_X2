@@ -33,6 +33,18 @@ class SmartWardrobeApi {
     return Map<String, dynamic>.from(res as Map);
   }
 
+  /// Public: whether the server has a Google Client ID configured, and its
+  /// value (the web sign-in flow needs it in the page, so it is not secret).
+  Future<Map<String, dynamic>> googleClientStatus() async =>
+      Map<String, dynamic>.from(await _client.get('/auth/google/config'));
+
+  /// Google sign-in: exchange a verified Google ID token for a session.
+  Future<Map<String, dynamic>> loginWithGoogle(String idToken) async {
+    final res = await _client.post('/auth/google', {'idToken': idToken});
+    _client.setToken(res['accessToken'] as String?);
+    return Map<String, dynamic>.from(res as Map);
+  }
+
   Future<void> logout() async {
     try {
       await _client.post('/auth/logout');
