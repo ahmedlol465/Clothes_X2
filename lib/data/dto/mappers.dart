@@ -8,19 +8,43 @@ import '../assets.dart';
 /// Domain models stay mapping-free so they can be constructed in tests and UI
 /// previews without a backend payload. Every default lives here, next to the
 /// wire format it belongs to.
-ClothingItem clothingItemFromJson(Map<String, dynamic> json) => ClothingItem(
-      id: '${json['id'] ?? ''}',
-      name: '${json['name'] ?? 'Untitled'}',
-      image: '${json['image'] ?? Img.teeWhite}',
-      category: '${json['category'] ?? 'Tops'}',
-      color: '${json['color'] ?? 'White'}',
-      style: '${json['style'] ?? 'Casual'}',
-      material: '${json['material'] ?? 'Cotton'}',
-      season: '${json['season'] ?? 'All Season'}',
-      formality: '${json['formality'] ?? 'Casual'}',
-      timesWorn: (json['timesWorn'] as num?)?.toInt() ?? 0,
-      lastWornLabel: json['lastWornLabel'] as String?,
-    );
+ClothingItem clothingItemFromJson(Map<String, dynamic> json) {
+  // The wardrobe API nests the vision provenance under the item's `legacy`
+  // JSON column (§8.3); older responses carried the same keys flattened.
+  final legacy = json['legacy'] is Map
+      ? Map<String, dynamic>.from(json['legacy'] as Map)
+      : json;
+  final rejected = legacy['analysisRejected'];
+  return ClothingItem(
+    id: '${json['id'] ?? ''}',
+    name: '${json['name'] ?? 'Untitled'}',
+    image: '${json['image'] ?? json['imageUrl'] ?? Img.teeWhite}',
+    category: '${json['category'] ?? 'Tops'}',
+    color: '${json['color'] ?? 'White'}',
+    style: '${json['style'] ?? 'Casual'}',
+    material: '${json['material'] ?? 'Cotton'}',
+    season: '${json['season'] ?? 'All Season'}',
+    formality: '${json['formality'] ?? 'Casual'}',
+    pattern: '${json['pattern'] ?? 'Plain'}',
+    timesWorn: (json['timesWorn'] as num?)?.toInt() ?? 0,
+    lastWornLabel: json['lastWornLabel'] as String?,
+    analysisSource: legacy['analysisSource'] as String?,
+    analysisConfidence: (legacy['analysisConfidence'] as num?)?.toDouble(),
+    // One bundle for the detail card: the vision payload plus the rejection
+    // reason when the gate refused the image. Null when nothing was analyzed.
+    analysisRaw: (legacy['analysis'] is Map || rejected is Map)
+        ? <String, dynamic>{
+            if (legacy['analysis'] is Map)
+              ...Map<String, dynamic>.from(legacy['analysis'] as Map),
+            if (rejected is Map) ...Map<String, dynamic>.from(rejected),
+            if (legacy['uncertainAttributes'] is List)
+              'uncertainAttributes': legacy['uncertainAttributes'],
+          }
+        : null,
+    analysisRejected: rejected != null && rejected != false,
+    analyzedAt: DateTime.tryParse('${legacy['analyzedAt'] ?? ''}'),
+  );
+}
 
 Map<String, dynamic> clothingItemToJson(ClothingItem item) => {
       'id': item.id,

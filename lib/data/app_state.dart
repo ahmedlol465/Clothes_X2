@@ -15,6 +15,8 @@ import 'controllers/stylist_controller.dart';
 import 'controllers/wardrobe_controller.dart';
 import 'models.dart';
 
+export 'controllers/outfits_controller.dart' show SaveOutfitResult;
+
 /// Composition root and compatibility facade for the feature controllers.
 ///
 /// Screens keep listening to one [AppState] (and calling `AppState.instance`)
@@ -195,6 +197,16 @@ class AppState extends ChangeNotifier {
     String occasion = 'casual',
   }) =>
       _outfits.compatibility(itemIds, occasion: occasion);
+  static bool sameOutfit(Outfit a, Outfit b) =>
+      OutfitsController.sameOutfit(a, b);
+
+  Future<SaveOutfitResult> createOutfit({
+    required String name,
+    required List<String> itemIds,
+    String occasion = 'Casual',
+  }) =>
+      _outfits.createOutfit(name: name, itemIds: itemIds, occasion: occasion);
+
   Future<bool> toggleFavorite(Outfit outfit) => _outfits.toggleFavorite(outfit);
   Future<bool> outfitFeedback(Outfit outfit, {int rating = 5}) =>
       _outfits.feedback(outfit, rating: rating);
@@ -242,7 +254,16 @@ class AppState extends ChangeNotifier {
     bool useHistory = true,
   }) =>
       _stylist.ask(message, useHistory: useHistory);
-  Future<({String text, Outfit? outfit, String source})> streamStylist(
+  Future<
+      ({
+        String text,
+        Outfit? outfit,
+        String source,
+        Map<String, dynamic>? outfitRaw,
+        String? followUp,
+        List<String> suggestions,
+      })>
+      streamStylist(
     String message, {
     required void Function(String partial) onDelta,
   }) =>

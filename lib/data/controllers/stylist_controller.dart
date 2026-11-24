@@ -65,7 +65,16 @@ class StylistController extends ChangeNotifier {
     }
   }
 
-  Future<({String text, Outfit? outfit, String source})> stream(
+  Future<
+      ({
+        String text,
+        Outfit? outfit,
+        String source,
+        Map<String, dynamic>? outfitRaw,
+        String? followUp,
+        List<String> suggestions,
+      })>
+      stream(
     String message, {
     required void Function(String partial) onDelta,
   }) async {
@@ -107,13 +116,31 @@ class StylistController extends ChangeNotifier {
         text: finalText,
         outfit: outfit,
         source: '${payload['source'] ?? 'rules'}',
+        outfitRaw: payload['outfit'] is Map
+            ? Map<String, dynamic>.from(payload['outfit'] as Map)
+            : null,
+        followUp: payload['followUp'] is String
+            ? payload['followUp'] as String
+            : null,
+        suggestions: (payload['suggestions'] as List?)
+                ?.map((value) => '$value')
+                .where((value) => value.trim().isNotEmpty)
+                .toList() ??
+            const <String>[],
       );
     } catch (e) {
       _status.markOffline(e);
       final text = _unavailableReply();
       _recordTurn(message, text);
       onDelta(text);
-      return (text: text, outfit: null, source: 'error');
+      return (
+        text: text,
+        outfit: null,
+        source: 'error',
+        outfitRaw: null,
+        followUp: null,
+        suggestions: const <String>[],
+      );
     }
   }
 

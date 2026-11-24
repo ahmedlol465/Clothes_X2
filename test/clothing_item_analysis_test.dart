@@ -1,14 +1,15 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:smartwardrobe/data/dto/mappers.dart';
 import 'package:smartwardrobe/data/models.dart';
 
 void main() {
   group('ClothingItem AI analysis parsing', () {
     test('parses a full vision analysis payload from the backend', () {
-      final item = ClothingItem.fromJson({
+      final item = clothingItemFromJson({
         'id': 'w_99',
         'name': 'Navy Wool Blazer',
-        'image': 'http://localhost:3001/storage/blazer.jpg',
+        'image': 'http://localhost:3002/storage/blazer.jpg',
         'category': 'Outerwear',
         'color': 'Navy',
         'style': 'Formal',
@@ -45,11 +46,41 @@ void main() {
       expect(item.uncertainAttributesList, ['material']);
     });
 
+    test('reads the same provenance nested under the legacy column', () {
+      final item = clothingItemFromJson({
+        'id': 'w_99b',
+        'name': 'Navy Wool Blazer',
+        'imageUrl': 'http://localhost:3002/storage/blazer.jpg',
+        'category': 'Outerwear',
+        'color': 'Navy',
+        'style': 'Formal',
+        'material': 'Wool',
+        'season': 'Autumn / Winter',
+        'formality': 'Formal',
+        'legacy': {
+          'analysisSource': 'clothing-vision+gemini',
+          'analysisConfidence': 0.87,
+          'analysisRejected': false,
+          'analyzedAt': '2026-11-16T13:45:00.000Z',
+          'analysis': {
+            'success': true,
+            'uncertainAttributes': ['material'],
+          },
+        },
+      });
+
+      expect(item.image, 'http://localhost:3002/storage/blazer.jpg');
+      expect(item.analysisSource, 'clothing-vision+gemini');
+      expect(item.analysisConfidence, 0.87);
+      expect(item.analysisStatus, 'analyzed');
+      expect(item.uncertainAttributesList, ['material']);
+    });
+
     test('marks a non-clothing rejection as rejected', () {
-      final item = ClothingItem.fromJson({
+      final item = clothingItemFromJson({
         'id': 'w_100',
         'name': 'Bottle',
-        'image': 'http://localhost:3001/storage/bottle.jpg',
+        'image': 'http://localhost:3002/storage/bottle.jpg',
         'category': 'Accessories',
         'color': 'Clear',
         'style': 'Casual',
@@ -77,10 +108,10 @@ void main() {
     });
 
     test('derives uncertain status from low confidence', () {
-      final item = ClothingItem.fromJson({
+      final item = clothingItemFromJson({
         'id': 'w_101',
         'name': 'Guess',
-        'image': 'http://localhost:3001/storage/guess.jpg',
+        'image': 'http://localhost:3002/storage/guess.jpg',
         'category': 'Tops',
         'color': 'White',
         'style': 'Casual',
@@ -103,7 +134,7 @@ void main() {
     });
 
     test('reports heuristic and filename sources without a status', () {
-      final heuristic = ClothingItem.fromJson({
+      final heuristic = clothingItemFromJson({
         'id': 'w_102',
         'name': 'Item',
         'image': 'assets/images/item_tee_white.jpg',
@@ -119,7 +150,7 @@ void main() {
       expect(heuristic.analysisStatusLabel,
           'Analyzed offline — tags are best-guess defaults.');
 
-      final filename = ClothingItem.fromJson({
+      final filename = clothingItemFromJson({
         'id': 'w_103',
         'name': 'Item',
         'image': 'assets/images/item_tee_white.jpg',
@@ -139,7 +170,7 @@ void main() {
     });
 
     test('returns null status when there is no analysis record', () {
-      final item = ClothingItem.fromJson({
+      final item = clothingItemFromJson({
         'id': 'w_104',
         'name': 'Plain Tee',
         'image': 'assets/images/item_tee_white.jpg',
@@ -158,8 +189,8 @@ void main() {
       expect(item.colorWithConfidence, 'White');
     });
 
-    test('defaults pattern to Plain and round-trips through toJson', () {
-      final item = ClothingItem.fromJson({
+    test('defaults pattern to Plain and serializes the wardrobe shape', () {
+      final item = clothingItemFromJson({
         'id': 'w_105',
         'name': 'Striped Tee',
         'image': 'assets/images/item_tee_white.jpg',
@@ -173,11 +204,12 @@ void main() {
       });
 
       expect(item.pattern, 'Striped');
-      final json = item.toJson();
-      expect(json['pattern'], 'Striped');
-      expect(json['analysisSource'], isNull);
+      final json = clothingItemToJson(item);
+      expect(json['id'], 'w_105');
+      expect(json['name'], 'Striped Tee');
+      expect(json['category'], 'Tops');
 
-      final plain = ClothingItem(
+      const plain = ClothingItem(
         id: 'w_106',
         name: 'Tee',
         image: 'assets/images/item_tee_white.jpg',
