@@ -3,127 +3,66 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource, DataSourceOptions } from 'typeorm';
 
 import { ALL_ENTITIES } from './entities';
-import { SqliteDatabase } from './sqlite/node-sqlite-driver';
 
 export const DATA_SOURCE = 'DATA_SOURCE';
 
-export function buildDataSourceOptions(
-  config: ConfigService,
-  mode?: 'postgres' | 'better-sqlite3' | 'mysql',
-): DataSourceOptions {
-  const base = {
+export function buildDataSourceOptions(config: {
+  get: <T>(key: string, fallback?: T) => T | undefined;
+}): DataSourceOptions {
+  return {
+    type: 'mysql',
     entities: ALL_ENTITIES,
     migrations: [__dirname + '/migrations/*{.ts,.js}'],
     synchronize: config.get<boolean>('database.synchronize') ?? true,
     logging: config.get<boolean>('database.logging') ?? false,
+    host: config.get<string>('database.host') ?? '127.0.0.1',
+    port: config.get<number>('database.port') ?? 3306,
+    username: config.get<string>('database.username') ?? 'root',
+    password: config.get<string>('database.password') ?? '',
+    database: config.get<string>('database.database') ?? 'smartwardrobe',
     charset: 'utf8mb4',
-  };
-
-  if (mode === 'postgres') {
-    return {
-      ...base,
-      type: 'postgres',
-      host: config.get<string>('database.host'),
-      port: config.get<number>('database.port'),
-      username: config.get<string>('database.username'),
-      password: config.get<string>('database.password'),
-      database: config.get<string>('database.database'),
-      ssl: config.get<boolean>('database.ssl') ? { rejectUnauthorized: false } : undefined,
-      extra: { max: 10 },
-    } as DataSourceOptions;
-  }
-
-  if (mode === 'mysql') {
-    return {
-      ...base,
-      type: 'mysql',
-      host: config.get<string>('database.host') ?? 'localhost',
-      port: config.get<number>('database.port') ?? 3306,
-      username: config.get<string>('database.username') ?? 'smartwardrobe',
-      password: config.get<string>('database.password') ?? '',
-      database: config.get<string>('database.database') ?? 'smartwardrobe',
-      charset: 'utf8mb4',
-    } as DataSourceOptions;
-  }
-
-  return {
-    ...base,
-    type: 'better-sqlite3',
-    /**
-     * Injected pure-JS shim over `node:sqlite`. TypeORM's better-sqlite3 driver
-     * accepts a replacement driver constructor, so no native build is required.
-     */
-    driver: SqliteDatabase as never,
-    database: config.get<string>('database.database') ?? 'data/smartwardrobe.sqlite',
-    enableWAL: true,
   } as DataSourceOptions;
 }
 
 /**
- * Resolves the effective driver and exposes the resolved datasource name, so
- * the rest of the app can log "postgres" or "sqlite" without guessing.
+ * Resolves the MySQL connection and exposes the datastore name for logging.
+ * MySQL is the only supported datastore: when the server cannot be reached
+ * the API fails fast instead of silently falling back to another engine.
  */
 @Injectable()
 export class DataSourceFactory implements OnApplicationBootstrap {
   private readonly logger = new Logger(DataSourceFactory.name);
-  private resolvedType: 'postgres' | 'better-sqlite3' | 'mysql' = 'better-sqlite3';
 
   constructor(private readonly config: ConfigService) {}
 
-  get type(): 'postgres' | 'better-sqlite3' | 'mysql' {
-    return this.resolvedType;
+  get type(): 'mysql' {
+    return 'mysql';
   }
 
   get options(): DataSourceOptions {
-    return buildDataSourceOptions(this.config, this.resolvedType);
+    return buildDataSourceOptions(this.config);
   }
 
-  /**
-   * PostgreSQL is the documented primary database. When `DB_TYPE=postgres` but
-   * the server cannot be reached (typical on a fresh laptop with no Docker) we
-   * fall back to the local SQLite file so the whole API still boots.
-   */
   async resolve(): Promise<DataSourceOptions> {
-    const requested = this.config.get<string>('database.type') ?? 'sqlite';
-
-    if (requested === 'postgres') {
-      this.logger.log('Database type is postgres - probing server...');
-      const probe = new DataSource(buildDataSourceOptions(this.config, 'postgres'));
-      try {
-        await probe.initialize();
-        await probe.destroy();
-        this.resolvedType = 'postgres';
-        this.logger.log('Connected to PostgreSQL.');
-        return this.options;
-      } catch (error) {
-        const message = (error as Error).message;
-        this.logger.warn(`PostgreSQL unavailable (${message}).`);
-        this.logger.warn('Falling back to the embedded SQLite database.');
-        this.resolvedType = 'better-sqlite3';
-        return this.options;
-      }
+    const options = this.options;
+    this.logger.log(
+      `Connecting to MySQL at ${(options as any).host}:${(options as any).port}...`,
+    );
+    const probe = new DataSource(options);
+    try {
+      await probe.initialize();
+      await probe.destroy();
+      this.logger.log('Connected to MySQL.');
+      return options;
+    } catch (error) {
+      const message = (error as Error).message;
+      this.logger.error(`MySQL unavailable (${message}).`);
+      this.logger.error(
+        'MySQL is required. Start a MySQL server and check DB_HOST / DB_PORT / ' +
+          'DB_USERNAME / DB_PASSWORD / DB_NAME in your environment.',
+      );
+      throw error;
     }
-
-    if (requested === 'mysql') {
-      this.logger.log('Database type is mysql - probing server...');
-      const probe = new DataSource(buildDataSourceOptions(this.config, 'mysql'));
-      try {
-        await probe.initialize();
-        await probe.destroy();
-        this.resolvedType = 'mysql';
-        this.logger.log('Connected to MySQL.');
-        return this.options;
-      } catch (error) {
-        const message = (error as Error).message;
-        this.logger.warn(`MySQL unavailable (${message}).`);
-        this.logger.warn('Falling back to the embedded SQLite database.');
-        this.resolvedType = 'better-sqlite3';
-        return this.options;
-      }
-    }
-
-    this.resolvedType = 'better-sqlite3';
-    return this.options;
   }
 
   onApplicationBootstrap() {

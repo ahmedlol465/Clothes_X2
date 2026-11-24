@@ -1,9 +1,9 @@
 # SmartWardrobe backend (§5–§8)
 
 The canonical backend is the **NestJS** application in `src/`. It uses a
-normalised TypeORM schema (PostgreSQL/MySQL) and automatically falls back to an
-embedded SQLite file when no database server is reachable, so a fresh clone
-still boots.
+normalised TypeORM schema on **MySQL only** (utf8mb4). A reachable MySQL
+server is required: there is no SQLite fallback, so set `DB_HOST`/`DB_PORT`/
+`DB_USERNAME`/`DB_PASSWORD`/`DB_NAME` (see `.env.example`) before booting.
 
 The legacy Express runtime and the file-backed JSON store have been removed.
 The NestJS app is the only runtime, and TypeORM is the only source of truth for
@@ -144,4 +144,4 @@ uvicorn main:app --port 8000
 
 `/ai/chat` and `/ai/generate-outfit` no longer depend on it — they use the
 in-process engine. Auth is demo-grade SHA-256 — swap for `@nestjs/jwt` +
-bcrypt + PostgreSQL per §6 before production.
+bcrypt per §6 before production.

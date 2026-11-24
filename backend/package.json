@@ -1,7 +1,7 @@
 {
   "name": "smartwardrobe-backend",
   "version": "1.0.0",
-  "description": "SmartWardrobe backend: NestJS API for auth, wardrobe, AI styling, outfits, planner, shopping and admin. All application data lives in TypeORM; the legacy JSON runtime has been removed.",
+  "description": "SmartWardrobe backend: NestJS API for auth, wardrobe, AI styling, outfits, planner, shopping and admin. All application data lives in MySQL via TypeORM; the legacy JSON runtime and the SQLite fallback have been removed.",
   "author": "SmartWardrobe Team",
   "private": true,
   "license": "UNLICENSED",
@@ -59,7 +59,6 @@
     "mysql2": "^3.24.6",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
-    "pg": "^8.14.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "sharp": "^0.35.4",

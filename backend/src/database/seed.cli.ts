@@ -6,26 +6,18 @@ import { buildDataSourceOptions } from './data-source';
 import { seedDemoDatabase } from './seed.service';
 import { DEMO_EMAIL, DEMO_PASSWORD } from './demo-data';
 
-type Mode = 'postgres' | 'better-sqlite3' | 'mysql';
-
-const mode = resolveMode();
-
 const booleanKeys = new Set([
-  'database.ssl',
   'database.synchronize',
   'database.logging',
 ]);
 
 const configMap: Record<string, string | undefined> = {
-  'database.type': process.env.DB_TYPE,
+  'database.type': 'mysql',
   'database.host': process.env.DB_HOST,
   'database.port': process.env.DB_PORT,
   'database.username': process.env.DB_USERNAME,
   'database.password': process.env.DB_PASSWORD,
-  'database.database': mode === 'better-sqlite3'
-    ? (process.env.DB_SQLITE_PATH ?? 'data/smartwardrobe.sqlite')
-    : process.env.DB_NAME,
-  'database.ssl': process.env.DB_SSL,
+  'database.database': process.env.DB_NAME,
   'database.synchronize': process.env.DB_SYNCHRONIZE,
   'database.logging': process.env.DB_LOGGING,
 };
@@ -41,19 +33,12 @@ const config: any = {
   },
 };
 
-function resolveMode(): Mode {
-  const requested = (process.env.DB_TYPE ?? 'sqlite').toLowerCase();
-  if (requested === 'postgres') return 'postgres';
-  if (requested === 'mysql') return 'mysql';
-  return 'better-sqlite3';
-}
-
 async function main(): Promise<void> {
-  const ds = new DataSource(buildDataSourceOptions(config, mode));
+  const ds = new DataSource(buildDataSourceOptions(config));
 
   try {
     await ds.initialize();
-    console.log(`Connected to ${mode}. Seeding demo data...`);
+    console.log('Connected to MySQL. Seeding demo data...');
 
     // Explicit seed operation: it only inserts rows whose deterministic demo
     // id is missing. Existing user-generated records are never touched, and
