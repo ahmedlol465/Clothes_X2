@@ -61,7 +61,7 @@ export class UsersService {
   private async requireUserWithProfile(userId: string): Promise<[User, StyleProfile | null]> {
     const user = await this.userRepo.findOne({
       where: { id: userId },
-      relations: ['styleProfile'],
+      relations: { styleProfile: true },
     });
     if (!user) throw new NotFoundException('User not found.');
     return [user, user.styleProfile ?? null];

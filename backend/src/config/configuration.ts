@@ -12,7 +12,8 @@ const int = (value: string | undefined, fallback: number): number => {
 
 export const appConfig = registerAs('app', () => ({
   env: process.env.NODE_ENV ?? 'development',
-  port: int(process.env.PORT, 3000),
+  // Flutter and .env.example default to 3002; keep the fallback in sync.
+  port: int(process.env.PORT, 3002),
   globalPrefix: process.env.API_PREFIX ?? 'api',
   corsOrigins: (process.env.CORS_ORIGINS ?? '*')
     .split(',')
