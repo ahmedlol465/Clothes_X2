@@ -98,16 +98,22 @@ async function bootstrap() {
   // CORS: never combine wildcard origins with credentials. Default origins are
   // localhost dev ports only; production must set CORS_ORIGINS explicitly.
   const configuredOrigins = config.get<string[]>('app.corsOrigins') ?? [];
-  const hasExplicitOrigins = configuredOrigins.length > 0 &&
-    !configuredOrigins.includes('*');
-  const corsOrigins = hasExplicitOrigins
-    ? configuredOrigins
-    : ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'];
-  app.enableCors({
-    origin: corsOrigins,
-    credentials: hasExplicitOrigins,
-    exposedHeaders: ['X-Total-Count'],
-  });
+  // An explicit `*` means dev-permissive: reflect any origin, no credentials.
+  if (configuredOrigins.includes('*')) {
+    app.enableCors({ origin: true, exposedHeaders: ['X-Total-Count'] });
+  } else {
+    const hasExplicitOrigins = configuredOrigins.length > 0;
+    // Default: the Flutter dev/web server picks a free localhost port, so any
+    // localhost or 127.0.0.1 port is allowed (no credentials).
+    const corsOrigins = hasExplicitOrigins
+      ? configuredOrigins
+      : [/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/];
+    app.enableCors({
+      origin: corsOrigins,
+      credentials: hasExplicitOrigins,
+      exposedHeaders: ['X-Total-Count'],
+    });
+  }
 
   if (config.get<boolean>('app.enableSwagger') ?? true) {
     const documentConfig = new DocumentBuilder()
