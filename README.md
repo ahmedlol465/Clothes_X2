@@ -23,8 +23,10 @@ bash start.sh
 
 Backend runs at http://localhost:3002/api, the web app at
 http://localhost:8080. Demo login: karim@fashiontech.com / wardrobe2024.
-Keep `DB_SYNCHRONIZE=false` in `backend/.env`. The full guide with manual
-steps, the scraper trigger and common errors is in [RUNNING.md](RUNNING.md).
+Both scripts print one line per step; details land in `setup.log` and
+`logs/`. Keep `DB_SYNCHRONIZE=false` in `backend/.env`. The full guide
+with manual steps, the scraper trigger and common errors is in
+[RUNNING.md](RUNNING.md).
 
 Flutter implementation of the **SmartWardrobe – Your AI Personal Stylist** Figma
 design (24 frames, iPhone 393 × 852).

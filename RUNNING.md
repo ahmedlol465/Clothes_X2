@@ -30,9 +30,22 @@ git checkout feature/creative-round
 bash setup.sh
 ```
 
-This checks the prerequisites, creates the MySQL database, copies
-`backend/.env.example` to `backend/.env`, installs backend and Flutter
-dependencies. If you prefer to do it by hand, the steps are 3a-3d below.
+Quiet by design: one line per step, all command output goes to `setup.log`.
+Safe to re-run - every step skips what is already done. It checks Node and
+Flutter (version mismatches warn, they don't stop), creates the MySQL
+database, copies `backend/.env.example` to `backend/.env`, and installs
+backend and Flutter dependencies. If a step fails you get one ERROR line and
+one FIX line; the details are always in `setup.log`.
+
+Database notes: if the DB and the configured user already work, setup skips
+creation. Otherwise it tries `mysql -u root` (socket auth, the Debian/
+MariaDB default) and `sudo mysql`, creates the `smartwardrobe` database,
+and - because Debian's root cannot log in over TCP - creates a dedicated
+`smartwardrobe` app user and writes its generated password into
+`backend/.env`. If no root route works it asks for a MySQL user with rights
+on the database.
+
+If you prefer to do it by hand, the steps are 3a-3d below.
 
 ### 3a. Database (by hand)
 
@@ -73,6 +86,11 @@ cd .. && flutter pub get
 bash start.sh
 ```
 
+Starts the backend and the web app, waits for each to be ready, and
+prints the two URLs. Both run in the background with their full output in
+`logs/backend.log` and `logs/flutter.log`; Ctrl+C stops both. The first
+run compiles the app and can take a few minutes.
+
 or by hand, in two terminals:
 
 ```
@@ -84,7 +102,8 @@ flutter run -d chrome --web-port 8080
 ```
 
 - Backend API: http://localhost:3002/api (health: /api/health)
-- Web app: http://localhost:8080
+- Web app: http://localhost:8080 (start.sh serves it without opening a
+  browser window; open the URL yourself)
 - On first boot with an empty database the demo data seeds itself
   (`SEED_ON_BOOT=true`). Demo login: karim@fashiontech.com / wardrobe2024
 - Android emulator instead of Chrome: `flutter run` (the app already points
@@ -114,10 +133,16 @@ skipped on purpose.
   cache. Install Redis only if you want the shared cache.
 - `ECONNREFUSED 127.0.0.1:3306`: MySQL/MariaDB is not running or not on TCP
   3306. Start it, or fix `DB_HOST`/`DB_PORT` in `backend/.env`.
-- Access denied for user root: set `DB_USERNAME`/`DB_PASSWORD` in
-  `backend/.env` to a MySQL user with rights on `smartwardrobe`.
+- Access denied for user root (backend cannot log into MySQL): on
+  Debian/Ubuntu, MySQL/MariaDB root only works over the local socket, not
+  TCP. Re-run `bash setup.sh` - it creates a dedicated `smartwardrobe`
+  user and writes it into `backend/.env` - or set
+  `DB_USERNAME`/`DB_PASSWORD` there yourself.
 - Port 3002 or 8080 already in use: stop the old process (`pkill -f
   "node dist/main.js"` / close the other `flutter run`).
+- A setup step failed: read the ERROR/FIX lines it printed, then the end
+  of `setup.log`. Runtime output lives in `logs/backend.log` and
+  `logs/flutter.log`.
 - Flutter version errors: the app is built with Flutter 3.50.x; older SDKs
   fail on pub get. `flutter upgrade` on the stable channel.
 - Products missing in Smart Shopping: run a scraper (section 5); the demo
