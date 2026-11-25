@@ -170,3 +170,27 @@ export class OverpoweredScraper extends ShopifyScraper {
   protected readonly baseUrl = 'https://overpowered.store';
   protected readonly currency = 'EGP';
 }
+
+export class CloudClothingScraper extends ShopifyScraper {
+  readonly store = 'Cloud Clothing';
+  protected readonly baseUrl = 'https://cloud-clothing.co';
+  protected readonly currency = 'EGP';
+}
+
+export class GoNativeScraper extends ShopifyScraper {
+  readonly store = 'GoNative';
+  protected readonly baseUrl = 'https://gonative.eg';
+  protected readonly currency = 'EGP';
+}
+
+export class OnyuScraper extends ShopifyScraper {
+  readonly store = 'ONYU';
+  protected readonly baseUrl = 'https://onyuclothing.com';
+  protected readonly currency = 'EGP';
+}
+
+export class VevaceScraper extends ShopifyScraper {
+  readonly store = 'Vevace';
+  protected readonly baseUrl = 'https://vevace.co';
+  protected readonly currency = 'EGP';
+}

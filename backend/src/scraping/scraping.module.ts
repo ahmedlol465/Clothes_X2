@@ -12,6 +12,10 @@ import {
   OverpoweredScraper,
   PulpScraper,
   WaveScraper,
+  CloudClothingScraper,
+  GoNativeScraper,
+  OnyuScraper,
+  VevaceScraper,
 } from './shopify.scraper';
 
 /** Adding a store = one scraper class plus one entry here. */
@@ -23,6 +27,10 @@ const SCRAPER_CLASSES: (new () => StoreScraper)[] = [
   PulpScraper,
   CaliceScraper,
   OverpoweredScraper,
+  CloudClothingScraper,
+  GoNativeScraper,
+  OnyuScraper,
+  VevaceScraper,
 ];
 
 @Module({
