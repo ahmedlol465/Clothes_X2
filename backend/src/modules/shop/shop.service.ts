@@ -32,12 +32,57 @@ export class ShopService {
   async recommended(userId: string) {
     const wardrobe = await this.userWardrobeLegacyItems(userId);
     const gap = aiEngine.wardrobeGap(wardrobe);
-    const products = await this.productRepo.find({ order: { createdAt: 'ASC' } });
+    const products = await this.productRepo.find({
+      where: { inStock: true },
+      order: { compatibilityScore: 'DESC' },
+      take: 12,
+    });
     const picks = products.map((product, index) => ({
       ...product,
       reason: gap.gaps[index]?.reason || product.reason,
     }));
     return { picks, gaps: gap.gaps };
+  }
+
+  /** Browseable catalog with optional filters. */
+  async products(query: Record<string, any>) {
+    const qb = this.productRepo
+      .createQueryBuilder('p')
+      .orderBy('p.compatibilityScore', 'DESC');
+    const store = `${query?.store ?? ''}`.trim();
+    const category = `${query?.category ?? ''}`.trim();
+    const color = `${query?.color ?? ''}`.trim();
+    const q = `${query?.q ?? ''}`.trim();
+    const maxPrice = Number(query?.maxPrice);
+    if (store) qb.andWhere('p.store = :store', { store });
+    if (category && category.toLowerCase() !== 'all') {
+      qb.andWhere('p.category = :category', { category });
+    }
+    if (color) qb.andWhere('p.color = :color', { color });
+    if (Number.isFinite(maxPrice) && maxPrice > 0) {
+      qb.andWhere('p.price <= :maxPrice', { maxPrice });
+    }
+    if (q) qb.andWhere('p.name LIKE :q', { q: `%${q}%` });
+    if (query?.inStock !== 'all') qb.andWhere('p.inStock = true');
+    const rows = await qb.take(100).getMany();
+    return { products: rows, count: rows.length };
+  }
+
+  async product(id: string) {
+    const row = await this.productRepo.findOne({ where: { id } });
+    return { product: row };
+  }
+
+  /** Distinct filter values for the catalog UI. */
+  async facets() {
+    const rows = await this.productRepo.find();
+    const uniq = (vals: (string | null)[]) =>
+      [...new Set(vals.filter((v): v is string => !!v && !!v.trim()))].sort();
+    return {
+      stores: uniq(rows.map((r) => r.store)),
+      categories: uniq(rows.map((r) => r.category)),
+      colors: uniq(rows.map((r) => r.color)),
+    };
   }
 
   async beforeYouBuy(userId: string, body: Record<string, any>) {

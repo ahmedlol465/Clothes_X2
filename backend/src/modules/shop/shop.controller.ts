@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../common/decorators/auth.decorators';
@@ -13,6 +13,21 @@ export class ShopController {
   @Get('recommended')
   recommended(@CurrentUser('id') userId: string) {
     return this.shop.recommended(userId);
+  }
+
+  @Get('products')
+  products(@Query() query: Record<string, any>) {
+    return this.shop.products(query);
+  }
+
+  @Get('products/facets')
+  facets() {
+    return this.shop.facets();
+  }
+
+  @Get('products/:id')
+  product(@Param('id') id: string) {
+    return this.shop.product(id);
   }
 
   @Post('before-you-buy')
