@@ -12,6 +12,7 @@ import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
 import '../../data/controllers/account_controller.dart';
+import 'profile_settings_screens.dart';
 import 'widgets.dart';
 
 /// Frame 24 - account, style blueprint and app settings.
@@ -57,6 +58,65 @@ class _ProfileScreenState extends State<ProfileScreen> {
   /// profile into [AppState], which this screen listens to, and backing out
   /// without saving leaves [AppState] untouched. Re-fetching here would only
   /// flash the loading skeleton over data the user is looking at.
+  /// Three-dots menu in the header: quick access to the profile actions.
+  void _openMoreMenu(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        Widget entry(String label, VoidCallback onTap) => ListTile(
+              title: Text(label, style: AppText.bodyStrong),
+              trailing: const SwIconView(
+                SwIcon.chevronRight,
+                size: 16,
+                color: AppColors.textTertiary,
+              ),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                onTap();
+              },
+            );
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: Insets.md),
+              entry('My Style Profile', _openStyleProfile),
+              entry(
+                'AI Stylist Settings',
+                () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const StylistSettingsScreen(),
+                  ),
+                ),
+              ),
+              entry(
+                'Notifications',
+                () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const NotificationSettingsScreen(),
+                  ),
+                ),
+              ),
+              entry(
+                'Privacy',
+                () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const PrivacySettingsScreen(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: Insets.md),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   void _openStyleProfile() {
     Navigator.of(context).pushNamed(Routes.styleProfile);
   }
@@ -307,7 +367,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     SwIconButton(
                       icon: SwIconButtonKind.more,
-                      onTap: () => _toast(context, 'Nothing else to manage yet.'),
+                      onTap: () => _openMoreMenu(context),
                     ),
                   ],
                 ),
@@ -349,12 +409,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 icon: SwIcon.sparkle,
                                 title: 'AI Stylist Settings',
                                 subtitle: 'Modify tone and response type',
-                                onTap: () => _openComingSoon(
-                                  title: 'AI Stylist Settings',
-                                  subtitle:
-                                      'Tone and response preferences are '
-                                      'coming soon.',
-                                  icon: SwIcon.sparkle,
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const StylistSettingsScreen(),
+                                  ),
                                 ),
                               ),
                             ],
@@ -387,12 +446,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 icon: SwIcon.circleInfo,
                                 title: 'Notifications',
                                 subtitle: 'Reminders and tips',
-                                onTap: () => _openComingSoon(
-                                  title: 'Notifications',
-                                  subtitle:
-                                      'Reminders and styling tips are coming '
-                                      'soon.',
-                                  icon: SwIcon.circleInfo,
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const NotificationSettingsScreen(),
+                                  ),
                                 ),
                               ),
                               SettingRow(
@@ -400,12 +458,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 title: 'Privacy',
                                 subtitle:
                                     'Data storage & model training options',
-                                onTap: () => _openComingSoon(
-                                  title: 'Privacy',
-                                  subtitle:
-                                      'Data storage and model training '
-                                      'options are coming soon.',
-                                  icon: SwIcon.box,
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const PrivacySettingsScreen(),
+                                  ),
                                 ),
                               ),
                             ],

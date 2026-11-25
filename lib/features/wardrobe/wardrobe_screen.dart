@@ -35,6 +35,12 @@ class WardrobeScreen extends StatefulWidget {
 class _WardrobeScreenState extends State<WardrobeScreen> {
   final _search = TextEditingController();
   String _filter = 'All';
+
+  // Advanced filters (client side, on top of the category/search reload).
+  final Set<String> _colorFilters = {};
+  final Set<String> _seasonFilters = {};
+  final Set<String> _formalityFilters = {};
+  String _sort = 'newest'; // newest | mostWorn | az
   Timer? _debounce;
   late final WardrobeController _wardrobeController;
   late final BackendStatus _backendStatus;
@@ -73,6 +79,178 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
     _wardrobeController.load(search: _search.text.trim(), category: _filter);
   }
 
+  /// Applies the advanced filter state to the loaded items.
+  List<ClothingItem> _applyAdvancedFilters(List<ClothingItem> items) {
+    var out = items.where((item) {
+      if (_colorFilters.isNotEmpty &&
+          !_colorFilters.any(
+            (c) => item.color.toLowerCase().contains(c.toLowerCase()),
+          )) {
+        return false;
+      }
+      if (_seasonFilters.isNotEmpty &&
+          !_seasonFilters.any(
+            (v) => item.season.toLowerCase() == v.toLowerCase(),
+          )) {
+        return false;
+      }
+      if (_formalityFilters.isNotEmpty &&
+          !_formalityFilters.any(
+            (v) => item.formality.toLowerCase() == v.toLowerCase(),
+          )) {
+        return false;
+      }
+      return true;
+    }).toList();
+    switch (_sort) {
+      case 'mostWorn':
+        out.sort((a, b) => b.timesWorn.compareTo(a.timesWorn));
+      case 'az':
+        out.sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        );
+    }
+    return out;
+  }
+
+  bool get _advancedFiltersActive =>
+      _colorFilters.isNotEmpty ||
+      _seasonFilters.isNotEmpty ||
+      _formalityFilters.isNotEmpty;
+
+  void _openFilterSheet(List<ClothingItem> items) {
+    final colors = <String>{
+      for (final i in items)
+        if (i.color.trim().isNotEmpty) i.color.trim(),
+    }.toList()
+      ..sort();
+    final seasons = <String>{
+      for (final i in items)
+        if (i.season.trim().isNotEmpty) i.season.trim(),
+    }.toList()
+      ..sort();
+    final formalities = <String>{
+      for (final i in items)
+        if (i.formality.trim().isNotEmpty) i.formality.trim(),
+    }.toList()
+      ..sort();
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheet) {
+            Widget chips(
+              String title,
+              List<String> options,
+              Set<String> selected,
+            ) =>
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: AppText.label),
+                    const SizedBox(height: Insets.sm),
+                    Wrap(
+                      spacing: Insets.sm,
+                      runSpacing: Insets.sm,
+                      children: [
+                        for (final o in options)
+                          SwChip(
+                            label: o,
+                            selected: selected.contains(o),
+                            tone: SwChipTone.tinted,
+                            dense: true,
+                            onTap: () => setSheet(() {
+                              if (!selected.remove(o)) selected.add(o);
+                            }),
+                          ),
+                      ],
+                    ),
+                  ],
+                );
+            return SafeArea(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(Insets.gutter),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(child: Text('Filters', style: AppText.h4)),
+                        TextButton(
+                          onPressed: () => setSheet(() {
+                            _colorFilters.clear();
+                            _seasonFilters.clear();
+                            _formalityFilters.clear();
+                            _sort = 'newest';
+                          }),
+                          child: const Text('Clear all'),
+                        ),
+                      ],
+                    ),
+                    if (colors.isNotEmpty) ...[
+                      chips('Color', colors, _colorFilters),
+                      const SizedBox(height: Insets.lg),
+                    ],
+                    if (seasons.isNotEmpty) ...[
+                      chips('Season', seasons, _seasonFilters),
+                      const SizedBox(height: Insets.lg),
+                    ],
+                    if (formalities.isNotEmpty) ...[
+                      chips('Formality', formalities, _formalityFilters),
+                      const SizedBox(height: Insets.lg),
+                    ],
+                    Text('Sort by', style: AppText.label),
+                    const SizedBox(height: Insets.sm),
+                    Wrap(
+                      spacing: Insets.sm,
+                      runSpacing: Insets.sm,
+                      children: [
+                        for (final (value, label) in const [
+                          ('newest', 'Newest'),
+                          ('mostWorn', 'Most worn'),
+                          ('az', 'A-Z'),
+                        ])
+                          SwChip(
+                            label: label,
+                            selected: _sort == value,
+                            tone: SwChipTone.tinted,
+                            dense: true,
+                            onTap: () => setSheet(() => _sort = value),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: Insets.xl),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: () {
+                          Navigator.of(sheetContext).pop();
+                          setState(() {});
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Text('Apply'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).then((_) => setState(() {}));
+  }
+
   Future<void> _openAdd() async {
     await Navigator.of(context).pushNamed(Routes.addClothing);
     if (mounted) _reload();
@@ -88,7 +266,8 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
           _backendStatus,
         ]),
         builder: (context, _) {
-          final items = _wardrobeController.items;
+          final rawItems = _wardrobeController.items;
+          final items = _applyAdvancedFilters(rawItems);
           return Column(
             children: [
               Padding(
@@ -103,8 +282,7 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
                     Expanded(child: Text('My Wardrobe', style: AppText.h1)),
                     SwIconButton(
                       icon: SwIconButtonKind.filter,
-                      onTap: () =>
-                          _toast(context, 'Advanced filters coming soon.'),
+                      onTap: () => _openFilterSheet(rawItems),
                     ),
                   ],
                 ),

@@ -252,6 +252,7 @@ UserProfile userProfileFromJson(Map<String, dynamic> json) {
         : '${json['avatarUrl']}'.trim().isEmpty
             ? null
             : '${json['avatarUrl']}',
+    gender: _genderOrNull(style['gender']),
     favoriteColors: _strings(style['favoriteColors']),
     preferredStyles: _strings(style['preferredStyles']),
     heightCm: _intOrNull(style['heightCm']),
@@ -265,6 +266,7 @@ UserProfile userProfileFromJson(Map<String, dynamic> json) {
 
 /// Only the editable style fields, shaped for `PATCH /users/me/style-profile`.
 Map<String, dynamic> styleProfileToJson(UserProfile profile) => {
+      'gender': profile.gender,
       'favoriteColors': profile.favoriteColors,
       'preferredStyles': profile.preferredStyles,
       'heightCm': profile.heightCm,
@@ -276,6 +278,11 @@ Map<String, dynamic> styleProfileToJson(UserProfile profile) => {
         'shoe': profile.shoeSize,
       },
     };
+
+String? _genderOrNull(Object? value) {
+  final v = '${value ?? ''}'.trim().toLowerCase();
+  return (v == 'male' || v == 'female') ? v : null;
+}
 
 List<String> _strings(Object? value) => [
       for (final v in (value as List? ?? const [])) '$v'.trim(),

@@ -542,6 +542,7 @@ class UserProfile {
     required this.email,
     required this.createdAt,
     this.avatarUrl,
+    this.gender,
     this.favoriteColors = const [],
     this.preferredStyles = const [],
     this.heightCm,
@@ -561,6 +562,10 @@ class UserProfile {
 
   /// Optional remote avatar. Null falls back to the bundled placeholder.
   final String? avatarUrl;
+
+  /// 'male' or 'female', or null when the user has not said. The stylist uses
+  /// this to keep recommendations and outfit building in the right lane.
+  final String? gender;
 
   final List<String> favoriteColors;
   final List<String> preferredStyles;
@@ -633,6 +638,7 @@ class UserProfile {
 
   UserProfile copyWith({
     String? name,
+    String? gender,
     String? email,
     String? avatarUrl,
     List<String>? favoriteColors,
@@ -650,6 +656,7 @@ class UserProfile {
         email: email ?? this.email,
         createdAt: createdAt,
         avatarUrl: avatarUrl ?? this.avatarUrl,
+        gender: gender ?? this.gender,
         favoriteColors: favoriteColors ?? this.favoriteColors,
         preferredStyles: preferredStyles ?? this.preferredStyles,
         heightCm: heightCm ?? this.heightCm,
