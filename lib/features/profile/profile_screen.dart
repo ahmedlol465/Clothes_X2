@@ -121,21 +121,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     Navigator.of(context).pushNamed(Routes.styleProfile);
   }
 
-  void _openComingSoon({
-    required String title,
-    required String subtitle,
-    required SwIcon icon,
-  }) {
-    Navigator.of(context).pushNamed(
-      Routes.comingSoon,
-      arguments: {
-        'title': title,
-        'subtitle': subtitle,
-        'icon': icon,
-      },
-    );
-  }
-
   /// Tapping the avatar: pick a source, preview, then upload.
   ///
   /// The picker's cancel is a silent no-op, and nothing is written locally

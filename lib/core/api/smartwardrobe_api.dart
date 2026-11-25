@@ -232,12 +232,14 @@ class SmartWardrobeApi {
     String message, {
     List<Map<String, dynamic>> history = const [],
     String? conversationId,
+    String? language,
   }) async =>
       Map<String, dynamic>.from(
         await _client.postAi('/ai/chat', {
           'message': message,
           'history': history,
           'conversationId': ?conversationId,
+          'language': ?language,
         }),
       );
 
@@ -248,11 +250,13 @@ class SmartWardrobeApi {
     String message, {
     List<Map<String, dynamic>> history = const [],
     String? conversationId,
+    String? language,
   }) =>
       _client.streamPost('/ai/chat/stream', {
         'message': message,
         'history': history,
         'conversationId': ?conversationId,
+        'language': ?language,
       });
 
   /// Match a photo of an outfit someone else wears against the user's own

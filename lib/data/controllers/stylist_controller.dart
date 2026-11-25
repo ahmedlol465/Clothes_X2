@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/smartwardrobe_api.dart';
 import '../backend_status.dart';
@@ -18,6 +19,22 @@ class StylistController extends ChangeNotifier {
 
   String? _conversationId;
   final List<Map<String, dynamic>> _history = [];
+
+  /// The user's reply-language preference from AI Stylist Settings
+  /// ('ar'/'en'), or null for auto-detect. Loaded once and refreshed on
+  /// [resetConversation]; absent pref or 'auto' both mean null.
+  String? _language;
+  bool _languageLoaded = false;
+
+  Future<String?> _replyLanguage() async {
+    if (!_languageLoaded) {
+      final prefs = await SharedPreferences.getInstance();
+      final v = prefs.getString('stylist_language');
+      _language = (v == 'ar' || v == 'en') ? v : null;
+      _languageLoaded = true;
+    }
+    return _language;
+  }
 
   String? styleDnaSummary;
   double styleDnaConfidence = 0;
@@ -48,6 +65,7 @@ class StylistController extends ChangeNotifier {
         message,
         history: useHistory ? chatHistory() : const [],
         conversationId: _conversationId,
+        language: await _replyLanguage(),
       );
       final text = '${res['reply'] ?? ''}';
       final outfit = res['outfit'] is Map
@@ -85,6 +103,7 @@ class StylistController extends ChangeNotifier {
         message,
         history: chatHistory(),
         conversationId: _conversationId,
+        language: await _replyLanguage(),
       )) {
         switch (frame.event) {
           case 'delta':

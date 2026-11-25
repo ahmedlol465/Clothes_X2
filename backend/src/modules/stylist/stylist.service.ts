@@ -253,7 +253,10 @@ export class StylistService {
     }
 
     const ctx = await this.contextService.assembleContext(userId, message);
-    const language = detectLanguage(message);
+    const language =
+      body?.language === 'ar' || body?.language === 'en'
+        ? body.language
+        : detectLanguage(message);
     let source = 'rules';
     let reply = '';
     let intent = 'chat';
