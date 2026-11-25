@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_client.dart';
@@ -106,6 +107,48 @@ class AccountController extends ChangeNotifier {
     } catch (e) {
       _status.markOffline(e);
       _lastError = _friendlyError(e);
+      return false;
+    }
+  }
+
+  /// Google sign-in: runs the Google Identity flow with the server's public
+  /// Client ID, then exchanges the Google ID token for our own session
+  /// (POST /auth/google). Returns false without an error when the user
+  /// cancels the Google sheet.
+  Future<bool> loginWithGoogle() async {
+    _lastError = null;
+    try {
+      final status = await api.googleClientStatus();
+      final clientId = '${status['clientId'] ?? ''}';
+      if (status['configured'] != true || clientId.isEmpty) {
+        _lastError = 'Google sign-in is not configured on the server yet.';
+        return false;
+      }
+      final google = GoogleSignIn(
+        clientId: clientId,
+        scopes: const ['email', 'profile'],
+      );
+      final account = await google.signIn();
+      if (account == null) return false; // user cancelled
+      final auth = await account.authentication;
+      final idToken = auth.idToken;
+      if (idToken == null || idToken.isEmpty) {
+        _lastError = 'Google did not return an ID token. Try again.';
+        return false;
+      }
+      final res = await api.loginWithGoogle(idToken);
+      final user = res['user'];
+      if (user is Map) {
+        _profile = userProfileFromJson(user.cast<String, dynamic>());
+      }
+      await _persistToken('${res['accessToken'] ?? ''}');
+      _status.markOnline();
+      notifyListeners();
+      return true;
+    } catch (e) {
+      if (e is ApiException) _status.markOffline(e);
+      _lastError =
+          _friendlyError(e) ?? 'Google sign-in failed. Please try again.';
       return false;
     }
   }

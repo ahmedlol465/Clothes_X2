@@ -66,7 +66,13 @@ For local use the defaults work as-is. Two things matter:
   saved style profiles.
 - Optional: replace the two `JWT_*_SECRET=CHANGE_ME...` values with your own
   (`openssl rand -hex 32` twice). Empty `GOOGLE_CLIENT_ID` is fine locally;
-  the Google button just answers "not configured".
+  the Google button just answers "not configured". To turn Google sign-in
+  on: Google Cloud Console > APIs & Services > Credentials > Create
+  Credentials > OAuth client ID (type: Web application), add
+  `http://localhost:8080` under Authorized JavaScript origins, then paste
+  the Client ID into `GOOGLE_CLIENT_ID` and restart the backend. The app
+  fetches the Client ID from the server (`GET /auth/google/config`), so
+  nothing else needs to change.
 
 ### 3c. Backend dependencies
 
