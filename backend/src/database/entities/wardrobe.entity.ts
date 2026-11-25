@@ -130,6 +130,10 @@ export class WardrobeItem {
   @Column({ length: 40, nullable: true })
   formality: string | null;
 
+  /** Male | Female | Unisex, from the photo analysis (or set by the user). */
+  @Column({ length: 20, nullable: true })
+  gender: string | null;
+
   @Column({ length: 40, nullable: true })
   fit: string | null;
 

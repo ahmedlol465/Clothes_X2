@@ -6,10 +6,12 @@ import { NestFactory, Reflector } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { useContainer } from 'class-validator';
 import compression from 'compression';
+import express from 'express';
 import helmet from 'helmet';
 
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { STORAGE_DIR } from './common/storage/storage';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 
 // ----------------------------------------------------------------- rate limit
@@ -147,8 +149,16 @@ async function bootstrap() {
     logger.log(`Swagger UI:  http://localhost:${port}/docs`);
   }
 
+  // Uploaded photos are saved in backend/storage and their URLs are
+  // http://<host>/storage/<file>. Nothing served that folder, so every
+  // saved item showed the placeholder icon. Serve it (outside the /api prefix).
+  app.use('/storage', express.static(STORAGE_DIR, { maxAge: '7d', index: false }));
+
   await app.listen(port, '0.0.0.0');
   logger.log(`SmartWardrobe API listening on http://localhost:${port}/${prefix}`);
+  // Load the clothing model and build the label bank now, in the background,
+  // so the first photo a user uploads is not the slow one.
+  void import('./clothing-vision/encoder').then((e) => e.warmup()).catch(() => undefined);
   logger.log(`Health check:  http://localhost:${port}/${prefix}/health`);
 }
 

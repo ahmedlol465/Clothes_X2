@@ -175,6 +175,83 @@ class OutfitsController extends ChangeNotifier {
     }
   }
 
+  bool _toggling = false;
+
+  /// The saved copy of [candidate], or null when it is not saved.
+  Outfit? findSaved(Outfit candidate) {
+    for (final o in saved) {
+      if (sameOutfit(o, candidate)) return o;
+    }
+    return null;
+  }
+
+  /// Star button: saves the outfit, or removes it from Saved when it is
+  /// already there. Returns true when it is saved afterwards, false when it
+  /// was removed, null on failure. Taps while a call is running are ignored,
+  /// and the list is refreshed first, so repeated taps never store it twice.
+  Future<bool?> toggleSaved({
+    required String name,
+    required List<String> itemIds,
+    String occasion = 'Casual',
+  }) async {
+    if (_toggling || itemIds.isEmpty) return null;
+    _toggling = true;
+    try {
+      await loadSaved();
+      final candidate = Outfit(
+        id: '', name: name, image: '', occasion: occasion,
+        match: 0, pieces: const <String>[], itemIds: itemIds,
+      );
+      final existing = findSaved(candidate);
+      if (existing != null) {
+        await _api.deleteOutfit(existing.id);
+        await loadSaved();
+        return false;
+      }
+      await _api.createOutfit(name, itemIds, occasion: occasion);
+      await loadSaved();
+      return true;
+    } catch (e) {
+      _status.markOffline(e);
+      return null;
+    } finally {
+      _toggling = false;
+    }
+  }
+
+  /// Favorite button: makes sure the outfit is saved (once), then flips its
+  /// favorite flag. Returns the new favorite state, or null on failure.
+  Future<bool?> toggleFavoriteFor({
+    required String name,
+    required List<String> itemIds,
+    String occasion = 'Casual',
+  }) async {
+    if (_toggling || itemIds.isEmpty) return null;
+    _toggling = true;
+    try {
+      await loadSaved();
+      final candidate = Outfit(
+        id: '', name: name, image: '', occasion: occasion,
+        match: 0, pieces: const <String>[], itemIds: itemIds,
+      );
+      var existing = findSaved(candidate);
+      if (existing == null) {
+        await _api.createOutfit(name, itemIds, occasion: occasion);
+        await loadSaved();
+        existing = findSaved(candidate);
+        if (existing == null) return null;
+      }
+      await _api.toggleFavorite(existing.id);
+      await loadSaved();
+      return findSaved(candidate)?.favorite ?? false;
+    } catch (e) {
+      _status.markOffline(e);
+      return null;
+    } finally {
+      _toggling = false;
+    }
+  }
+
   Future<bool> toggleFavorite(Outfit outfit) async {
     try {
       await _api.toggleFavorite(outfit.id);

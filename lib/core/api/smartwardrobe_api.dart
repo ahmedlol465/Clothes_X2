@@ -121,12 +121,16 @@ class SmartWardrobeApi {
     String search = '',
     String category = 'All',
     String sort = 'recent',
+    int page = 1,
+    int limit = 50,
   }) async =>
       Map<String, dynamic>.from(
         await _client.get('/wardrobe/items', {
           'search': search,
           'category': category,
           'sort': sort,
+          'page': '$page',
+          'limit': '$limit',
         }),
       );
 
@@ -385,6 +389,10 @@ class SmartWardrobeApi {
       'rating': rating,
       'comment': comment,
     });
+  }
+
+  Future<void> deleteOutfit(String outfitId) async {
+    await _client.delete('/outfits/$outfitId');
   }
 
   Future<List<dynamic>> outfits({bool? favorite}) async {

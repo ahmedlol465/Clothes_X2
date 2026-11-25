@@ -10,6 +10,8 @@ export const ClothingCategory = {
   BOTTOM: 'Bottoms',
   SHOES: 'Shoes',
   OUTERWEAR: 'Outerwear',
+  /** One-piece garments (dresses, jumpsuits): fill top AND bottom on their own. */
+  DRESSES: 'Dresses',
   ACCESSORIES: 'Accessories',
   BAGS: 'Bags',
   WATCHES: 'Watches',

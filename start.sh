@@ -7,11 +7,13 @@ mkdir -p logs
 
 BACK_PID=""
 APP_PID=""
+AI_PID=""
 cleanup() {
   # Each component runs in its own process group; kill the whole group so
   # npm/flutter wrapper children cannot survive.
   [ -n "$BACK_PID" ] && kill -- -"$BACK_PID" 2>/dev/null
   [ -n "$APP_PID" ] && kill -- -"$APP_PID" 2>/dev/null
+  [ -n "$AI_PID" ] && kill -- -"$AI_PID" 2>/dev/null
   exit 0
 }
 trap cleanup EXIT INT TERM
@@ -31,6 +33,17 @@ port_busy 3002 && die "port 3002 is already in use." "Stop the old backend: pkil
 port_busy 8080 && die "port 8080 is already in use." "Stop the old app: pkill -f 'flutter_tools.*web-server', then re-run bash start.sh."
 
 echo "Starting SmartWardrobe (full logs in logs/)"
+
+# Garment-cutout service (colour). Optional: without it colour uses the whole photo.
+if port_busy 8000; then
+  echo "  ai-service already running on port 8000"
+elif ( cd ai-service; [ -f .venv/bin/activate ] && . .venv/bin/activate; python3 -c 'import fastapi, torch, transformers, scipy' ) >/dev/null 2>&1; then
+  setsid bash ai-service/run.sh >logs/ai-service.log 2>&1 &
+  AI_PID=$!
+  echo "  ai-service starting (colour cutout, first photo is slow)"
+else
+  echo "  ai-service skipped (Python packages missing, see ai-service/README.md); colour uses the whole photo"
+fi
 
 printf '  backend   '
 setsid bash -c 'cd backend && exec npm run dev' >logs/backend.log 2>&1 &

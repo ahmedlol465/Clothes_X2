@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsIn, IsBooleanString } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, IsIn, IsBooleanString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { CLOTHING_CATEGORIES } from '../../../common/vocabularies';
@@ -41,6 +41,16 @@ export class CreateWardrobeItemDto {
   @IsOptional()
   @IsString()
   formality?: string;
+
+  @ApiPropertyOptional({ description: 'Save even if the same piece already exists.' })
+  @IsOptional()
+  @IsBoolean()
+  allowDuplicate?: boolean;
+
+  @ApiPropertyOptional({ example: 'Unisex', enum: ['Male', 'Female', 'Unisex'] })
+  @IsOptional()
+  @IsIn(['Male', 'Female', 'Unisex'])
+  gender?: string;
 
   @ApiPropertyOptional({ example: 'Plain' })
   @IsOptional()

@@ -192,25 +192,102 @@ class _AddClothingScreenState extends State<AddClothingScreen> {
       }
     });
     var saved = 0;
+    var declined = 0;
     String? firstError;
     for (final p in ready) {
+      final payload = <String, dynamic>{
+        'name': '${p.analysis['suggestedName'] ?? p.filename.split('.').first}',
+        'image': p.url,
+        'category': tagValue(p.analysis, 'CATEGORY'),
+        'color': tagValue(p.analysis, 'COLOR'),
+        'style': tagValue(p.analysis, 'STYLE'),
+        'pattern': tagValue(p.analysis, 'PATTERN'),
+        'material': tagValue(p.analysis, 'MATERIAL'),
+        'season': tagValue(p.analysis, 'SEASON'),
+        'formality': tagValue(p.analysis, 'FORMALITY'),
+        if (p.analysis['gender'] is String) 'gender': p.analysis['gender'],
+        'analysisSource': p.source,
+      };
+      // An item labelled for the other gender than the profile asks first.
+      // Same gender, Unisex or unknown are added without asking.
+      final itemGender = '${p.analysis['gender'] ?? ''}'.toLowerCase();
+      final myGender =
+          (AppState.instance.accountController.profile?.gender ?? '').toLowerCase();
+      if ((itemGender == 'male' || itemGender == 'female') &&
+          (myGender == 'male' || myGender == 'female') &&
+          itemGender != myGender &&
+          mounted) {
+        final add = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Different gender'),
+            content: Text(
+              '"${payload['name']}" looks like a ${itemGender == 'male' ? "men's" : "women's"} item. Add it?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('No'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Yes'),
+              ),
+            ],
+          ),
+        );
+        if (add != true) {
+          p.phase = Phase.ready;
+          declined++;
+          continue;
+        }
+      }
       try {
-        await widget._wardrobeController.addItem({
-          'name':
-              '${p.analysis['suggestedName'] ?? p.filename.split('.').first}',
-          'image': p.url,
-          'category': tagValue(p.analysis, 'CATEGORY'),
-          'color': tagValue(p.analysis, 'COLOR'),
-          'style': tagValue(p.analysis, 'STYLE'),
-          'pattern': tagValue(p.analysis, 'PATTERN'),
-          'material': tagValue(p.analysis, 'MATERIAL'),
-          'season': tagValue(p.analysis, 'SEASON'),
-          'formality': tagValue(p.analysis, 'FORMALITY'),
-          'analysisSource': p.source,
-        });
+        await widget._wardrobeController.addItem(payload);
         p.phase = Phase.done;
         saved++;
       } on ApiException catch (e) {
+        // 409 = the same piece is already in the wardrobe. Tell the user and
+        // offer "Add anyway" instead of failing silently.
+        if (e.status == 409 && mounted) {
+          final addAnyway = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Already in your wardrobe'),
+              content: Text(
+                '"${payload['name']}" looks like a piece you already have.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('Skip'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: const Text('Add anyway'),
+                ),
+              ],
+            ),
+          );
+          if (addAnyway == true) {
+            try {
+              await widget._wardrobeController
+                  .addItem({...payload, 'allowDuplicate': true});
+              p.phase = Phase.done;
+              saved++;
+              continue;
+            } on ApiException catch (e2) {
+              p.phase = Phase.error;
+              p.error = e2.message;
+              firstError ??= e2.message;
+              continue;
+            }
+          }
+          p.phase = Phase.error;
+          p.error = 'Already in your wardrobe.';
+          firstError ??= 'Already in your wardrobe.';
+          continue;
+        }
         p.phase = Phase.error;
         p.error = e.message;
         firstError ??= e.message;
@@ -218,6 +295,7 @@ class _AddClothingScreenState extends State<AddClothingScreen> {
     }
     if (!mounted) return;
     setState(() => _saving = false);
+    if (saved == 0 && declined > 0 && firstError == null) return;
     if (saved == 0) {
       _fail('Nothing saved: ${firstError ?? 'unknown error'}');
       return;
@@ -302,6 +380,13 @@ class _AddClothingScreenState extends State<AddClothingScreen> {
                       ready.first.analysis[tagFields[label]!] = value;
                     }),
                   ),
+                for (var n = 0; n < ready.length; n++)
+                  if (_needsTypeConfirm(ready[n]))
+                    _TypeConfirmCard(
+                      number: ready.length > 1 ? n + 1 : null,
+                      photo: ready[n],
+                      onPick: (option) => setState(() => _applyType(ready[n], option)),
+                    ),
                 if (ready.length > 1)
                   Text(
                     '${ready.length} photos analyzed — saving keeps every detected tag. Edit details later from each item.',
@@ -323,6 +408,81 @@ class _AddClothingScreenState extends State<AddClothingScreen> {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// True when the photo's type guess was weak and the user has not confirmed it.
+bool _needsTypeConfirm(Staged photo) {
+  final check = photo.analysis['typeCheck'];
+  if (check is! Map || check['needsConfirm'] != true) return false;
+  final options = check['options'];
+  return options is List && options.length > 1;
+}
+
+/// Applies the user's one-tap choice: category, one-piece flag and the
+/// suggested name (colour + type), then clears the question.
+void _applyType(Staged photo, Map option) {
+  final sub = '${option['subcategory']}';
+  final color = '${photo.analysis['color'] ?? ''}'.trim();
+  photo.analysis['subcategory'] = sub;
+  if (option['category'] is String) photo.analysis['category'] = option['category'];
+  photo.analysis['isOnePiece'] = sub == 'Dress' || sub == 'Jumpsuit';
+  photo.analysis['suggestedName'] = color.isEmpty ? sub : '$color $sub';
+  final check = Map<String, dynamic>.from(photo.analysis['typeCheck'] as Map);
+  check['needsConfirm'] = false;
+  photo.analysis['typeCheck'] = check;
+}
+
+/// One-tap question shown under a photo whose garment type is uncertain.
+class _TypeConfirmCard extends StatelessWidget {
+  const _TypeConfirmCard({
+    required this.photo,
+    required this.onPick,
+    this.number,
+  });
+
+  final Staged photo;
+  final int? number;
+  final void Function(Map option) onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final options = (photo.analysis['typeCheck']['options'] as List)
+        .whereType<Map>()
+        .toList();
+    final current = '${photo.analysis['subcategory'] ?? ''}';
+    return Padding(
+      padding: const EdgeInsets.only(top: Insets.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            number == null
+                ? 'Not sure about this one. What is it?'
+                : 'Photo $number: not sure about this one. What is it?',
+            style: AppText.label,
+          ),
+          const SizedBox(height: Insets.sm),
+          Wrap(
+            spacing: Insets.sm,
+            runSpacing: Insets.sm,
+            children: [
+              for (final option in options)
+                SwChip(
+                  label: '${option['subcategory']}',
+                  selected: current == '${option['subcategory']}',
+                  onTap: () => onPick(option),
+                ),
+            ],
+          ),
+          const SizedBox(height: Insets.xs),
+          Text(
+            'Another type? Change it in the tags above or edit it later.',
+            style: AppText.caption,
           ),
         ],
       ),

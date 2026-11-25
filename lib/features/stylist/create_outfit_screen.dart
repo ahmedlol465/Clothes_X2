@@ -118,6 +118,8 @@ class _CreateOutfitScreenState extends State<CreateOutfitScreen> {
                     ),
                     const SizedBox(height: Insets.md),
                     _buildPieces(),
+                    const SizedBox(height: Insets.lg),
+                    _buildCanvas(),
                     const SizedBox(height: Insets.xl),
                     Text(
                       'STYLE TONE INSPIRATION',
@@ -168,6 +170,59 @@ class _CreateOutfitScreenState extends State<CreateOutfitScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// Preview board: each picked piece can be dragged to arrange the look.
+  /// Positions are for the preview only; the saved outfit stores the pieces.
+  final _pos = <String, Offset>{};
+
+  Widget _buildCanvas() {
+    if (_selected.isEmpty) return const SizedBox.shrink();
+    const w = 300.0, h = 340.0, size = 96.0;
+    const defaults = {
+      'TOP': Offset(100, 10),
+      'BOTTOM': Offset(100, 120),
+      'SHOES': Offset(100, 235),
+      'ACCESSORIES': Offset(10, 110),
+    };
+    return Center(
+      child: Container(
+        width: w,
+        height: h,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: AppColors.background,
+          borderRadius: Radii.tileRadius,
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Stack(
+          children: [
+            for (final e in _selected.entries)
+              Positioned(
+                left: (_pos[e.key] ?? defaults[e.key] ?? Offset.zero).dx,
+                top: (_pos[e.key] ?? defaults[e.key] ?? Offset.zero).dy,
+                width: size,
+                height: size,
+                child: GestureDetector(
+                  onPanUpdate: (d) => setState(() {
+                    final cur = _pos[e.key] ?? defaults[e.key] ?? Offset.zero;
+                    _pos[e.key] = Offset(
+                      (cur.dx + d.delta.dx).clamp(0.0, w - size),
+                      (cur.dy + d.delta.dy).clamp(0.0, h - size),
+                    );
+                  }),
+                  child: SwProductImage(image: e.value.image, height: size, width: size),
+                ),
+              ),
+            const Positioned(
+              right: 8,
+              bottom: 6,
+              child: Text('Drag pieces to arrange', style: TextStyle(fontSize: 10, color: AppColors.textTertiary)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -250,10 +305,9 @@ class _CreateOutfitScreenState extends State<CreateOutfitScreen> {
   /// Opens the item picker for one slot, filtered to that slot's categories.
   Future<void> _pickSlot((String, String, List<String>) slot) async {
     final (label, _, categories) = slot;
-    final candidates = [
-      for (final item in _state.wardrobe)
-        if (categories.contains(item.category)) item,
-    ];
+    // Every wardrobe item is offered. The sheet opens on "All" and has one
+    // chip per category, so nothing is hidden behind the slot's own category.
+    final candidates = List<ClothingItem>.of(_state.wardrobe);
     final result = await showModalBottomSheet<_SlotPick>(
       context: context,
       isScrollControlled: true,
@@ -262,6 +316,7 @@ class _CreateOutfitScreenState extends State<CreateOutfitScreen> {
         slot: label,
         items: candidates,
         selected: _selected[label],
+        slotCategories: categories,
       ),
     );
     if (result == null || !mounted) return;
@@ -396,22 +451,41 @@ class _SlotRow extends StatelessWidget {
 /// Pops `(clear: true, item: null)` when the slot should be emptied,
 /// `(clear: false, item: picked)` when an item is chosen, and `null` when the
 /// sheet is dismissed without a decision.
-class _ItemPickerSheet extends StatelessWidget {
+class _ItemPickerSheet extends StatefulWidget {
   const _ItemPickerSheet({
     required this.slot,
     required this.items,
     required this.selected,
+    this.slotCategories = const [],
   });
 
   final String slot;
   final List<ClothingItem> items;
   final ClothingItem? selected;
+  final List<String> slotCategories;
+
+  @override
+  State<_ItemPickerSheet> createState() => _ItemPickerSheetState();
+}
+
+class _ItemPickerSheetState extends State<_ItemPickerSheet> {
+  String _cat = 'All';
+
+  String get slot => widget.slot;
+  ClothingItem? get selected => widget.selected;
 
   static String _titleFor(String slot) =>
       'Choose ${slot[0]}${slot.substring(1).toLowerCase()}';
 
   @override
   Widget build(BuildContext context) {
+    final cats = <String>[
+      'All',
+      ...{for (final i in widget.items) i.category},
+    ];
+    final items = _cat == 'All'
+        ? widget.items
+        : [for (final i in widget.items) if (i.category == _cat) i];
     return SizedBox(
       height: MediaQuery.sizeOf(context).height * 0.6,
       child: SafeArea(
@@ -446,6 +520,25 @@ class _ItemPickerSheet extends StatelessWidget {
                   ),
                 ),
               ],
+              const SizedBox(height: Insets.md),
+              SizedBox(
+                height: 36,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    for (final c in cats)
+                      Padding(
+                        padding: const EdgeInsets.only(right: Insets.sm),
+                        child: SwChip(
+                          label: c,
+                          selected: c == _cat,
+                          dense: true,
+                          onTap: () => setState(() => _cat = c),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
               const SizedBox(height: Insets.md),
               Expanded(
                 child: items.isEmpty

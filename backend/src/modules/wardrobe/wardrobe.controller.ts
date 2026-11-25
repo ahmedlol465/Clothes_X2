@@ -56,6 +56,11 @@ export class WardrobeController {
     return this.wardrobe.create(userId, dto).then((item) => ({ item }));
   }
 
+  @Post('items/analyze-batch')
+  analyzeBatch(@Body() body: Record<string, any>) {
+    return this.wardrobe.analyzeBatch(body);
+  }
+
   @Post('items/batch-upload')
   batch(
     @CurrentUser('id') userId: string,

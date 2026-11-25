@@ -109,3 +109,7 @@ ai-service/data/raw/
 # Local run scripts output
 setup.log
 logs/
+
+# Local patch files used during review
+*.patch
+vision-update-*

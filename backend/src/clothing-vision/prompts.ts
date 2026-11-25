@@ -82,7 +82,8 @@ const GARMENTS = [
     category: 'Bottoms',
     phrases: ['skirt', 'denim skirt', 'mini skirt', 'pleated skirt', 'pencil skirt', 'a skirt with a waistband'],
   },
-  { subcategory: 'Dress', category: 'Bottoms', phrases: ['dress', 'womens dress', 'maxi dress', 'little black dress', 'evening gown'] },
+  { subcategory: 'Dress', category: 'Dresses', phrases: ['dress', 'womens dress', 'maxi dress', 'little black dress', 'evening gown'] },
+  { subcategory: 'Jumpsuit', category: 'Dresses', phrases: ['jumpsuit', 'a one piece jumpsuit with pants and top joined', 'romper', 'overalls'] },
   { subcategory: 'Sneakers', category: 'Shoes', phrases: ['sneakers', 'running shoes', 'trainers', 'white sneakers'] },
   { subcategory: 'Dress Shoes', category: 'Shoes', phrases: ['dress shoes', 'oxford shoes', 'loafers', 'high heels', 'leather dress shoes'] },
   { subcategory: 'Boots', category: 'Shoes', phrases: ['boots', 'leather boots', 'ankle boots', 'chelsea boots'] },
@@ -128,6 +129,17 @@ const STYLES = [
   { value: 'Boho', phrases: ['a bohemian boho look'] },
   { value: 'Minimal', phrases: ['a minimalist monochrome look'] },
   { value: 'Vintage', phrases: ['a vintage retro look'] },
+];
+
+/**
+ * Intended wearer. 'Unisex' is a real answer, not a fallback: most tees, hoodies,
+ * jeans and sneakers are worn by anyone. The classifier only reports Male or
+ * Female when the image clearly separates them (see GATE.genderMargin).
+ */
+const GENDERS = [
+  { value: 'Male', phrases: ["men's clothing", 'a garment designed for men', "a men's fashion item", 'menswear'] },
+  { value: 'Female', phrases: ["women's clothing", 'a garment designed for women', "a women's fashion item", 'womenswear', 'ladies fashion'] },
+  { value: 'Unisex', phrases: ['unisex clothing', 'a gender neutral garment', 'a garment anyone can wear'] },
 ];
 
 /** Season labels. 'All Season' is the honest answer for a plain mid-layer. */
@@ -179,22 +191,25 @@ const MATERIALS = [
  */
 const GATE = {
   logitScale: 100,
-  clothingMargin: 0.01,
-  clothingMass: 0.4,
+  // Gate thresholds were tuned per model on the dev half of the eval set (cosine ranges differ).
+  clothingMargin: process.env.VISION_MODEL === 'clip' ? 0.01 : 0.015,
+  clothingMass: process.env.VISION_MODEL === 'clip' ? 0.4 : 0.65,
   // Below this top-class share the attribute is reported but flagged uncertain.
   attributeFloor: 0.5,
+  // Male/Female must beat Unisex AND each other by this share, else we say Unisex.
+  genderShare: 0.5,
   // A runner-up holding at least this share means two classes are live, so the
   // winner is reported as a tie rather than a fact.
   tieShare: 0.2,
 };
 
 /** Model id + licence note, surfaced by GET /admin/system-health. */
-const MODEL = {
-  id: 'Marqo/marqo-fashionCLIP',
-  licence: 'Apache-2.0',
-  dtype: 'q8',
-  embeddingDim: 512,
+const MODELS = {
+  clip: { id: 'Marqo/marqo-fashionCLIP', licence: 'Apache-2.0', dtype: 'q8', embeddingDim: 512, family: 'clip', contextLength: 77 },
+  siglip: { id: 'Marqo/marqo-fashionSigLIP', licence: 'Apache-2.0', dtype: 'q8', embeddingDim: 768, family: 'siglip', contextLength: 64 },
 };
+// Default fashionSigLIP (measured better on the eval set); VISION_MODEL=clip switches back.
+const MODEL = MODELS[String(process.env.VISION_MODEL || 'siglip').toLowerCase()] || MODELS.siglip;
 
 export {
   GARMENT_TEMPLATES,
@@ -202,6 +217,7 @@ export {
   GARMENTS,
   NON_CLOTHING,
   STYLES,
+  GENDERS,
   SEASONS,
   PATTERNS,
   MATERIALS,

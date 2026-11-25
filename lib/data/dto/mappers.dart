@@ -43,6 +43,9 @@ ClothingItem clothingItemFromJson(Map<String, dynamic> json) {
         : null,
     analysisRejected: rejected != null && rejected != false,
     analyzedAt: DateTime.tryParse('${legacy['analyzedAt'] ?? ''}'),
+    gender: json['gender'] is String && (json['gender'] as String).isNotEmpty
+        ? json['gender'] as String
+        : null,
   );
 }
 

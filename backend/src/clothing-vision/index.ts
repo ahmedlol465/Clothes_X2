@@ -30,9 +30,12 @@ import * as path from 'node:path';
 import * as encoder from './encoder';
 import { classify } from './classify';
 import { analyzeColor } from './color';
-import { MODEL } from './prompts';
+import { garmentPixels } from './garment-pixels';
+import { MODEL, GARMENTS } from './prompts';
+import { checkPhoto, LIMITS } from './quality';
 
-const MAX_BYTES = 12 * 1024 * 1024;
+const MAX_BYTES = LIMITS.maxBytes;
+
 
 /** Magic-byte sniff. Upload endpoints lose the extension, so trust the bytes. */
 function mimeFor(buf) {
@@ -43,7 +46,7 @@ function mimeFor(buf) {
 }
 
 /** Attribute keys that must be certain before they are reported as a fact. */
-const ATTRIBUTES = ['style', 'season', 'pattern', 'material'];
+const ATTRIBUTES = ['style', 'season', 'pattern', 'material', 'gender'];
 
 /**
  * Analyse one image.
@@ -61,16 +64,20 @@ async function analyzeClothingImage(bytes: any, opts: any = {}) {
     model: { id: MODEL.id, licence: MODEL.licence, dtype: MODEL.dtype, embeddingDim: MODEL.embeddingDim },
   };
 
-  if (!bytes || !bytes.length) {
-    return { ...base, error_type: 'unreadable_image', error: 'no image bytes supplied' };
-  }
-  if (bytes.length > MAX_BYTES) {
+  // Quality gate first: wrong file type, huge/tiny, dark, blurry, washed out.
+  // Also applies the EXIF rotation, so a portrait phone photo is not read sideways.
+  const quality: any = await checkPhoto(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || []));
+  if (!quality.ok) {
     return {
       ...base,
-      error_type: 'unreadable_image',
-      error: `image is ${(bytes.length / 1048576).toFixed(1)}MB, limit is ${MAX_BYTES / 1048576}MB`,
+      error_type: quality.error_type,
+      error: quality.error,
+      retake: quality.retake,
+      photoStats: quality.stats,
+      filename,
     };
   }
+  bytes = quality.bytes;
 
   // Model first: a missing model is a deployment problem, not a photo problem,
   // and it must not be reported as "this is not clothing".
@@ -118,7 +125,9 @@ async function analyzeClothingImage(bytes: any, opts: any = {}) {
     return {
       ...base,
       error_type: 'non_clothing',
-      error: verdict.reason,
+      error: 'This does not look like a piece of clothing.',
+      reason: verdict.reason,
+      retake: ['Photograph one garment, laid flat or on a hanger, with the whole item in frame.'],
       rejected: verdict.rejected,
       filename,
     };
@@ -128,7 +137,21 @@ async function analyzeClothingImage(bytes: any, opts: any = {}) {
   // fails to segment cannot silently contribute background pixels.
   let color;
   try {
-    color = await analyzeColor(bytes);
+    // Optional: read the colour from the garment's own pixels (ai-service
+    // cutout). Any problem there falls back to the original photo.
+    const cut = await garmentPixels(bytes);
+    let measured = null;
+    if (cut) {
+      try {
+        measured = await analyzeColor(cut);
+      } catch {
+        measured = null;
+      }
+    }
+    // A cutout that gives no colour falls back to the whole photo.
+    const usedCut = !!(measured && measured.color);
+    color = usedCut ? measured : await analyzeColor(bytes);
+    color = { ...color, cutout: usedCut ? 'ai-service' : 'none' };
   } catch (e) {
     color = {
       color: null,
@@ -159,7 +182,10 @@ async function analyzeClothingImage(bytes: any, opts: any = {}) {
     material: verdict.material.value,
     style: verdict.style.value,
     season: verdict.season.value,
+    gender: verdict.gender.value,
     formality: formalityFor(verdict),
+    isOnePiece: verdict.subcategory === 'Dress' || verdict.subcategory === 'Jumpsuit',
+    isWinterWear: verdict.season.value === 'Autumn / Winter',
     suggestedName: titleCase([color.color, verdict.subcategory]),
     gate: verdict.gate,
     agreement: verdict.agreement,
@@ -168,14 +194,31 @@ async function analyzeClothingImage(bytes: any, opts: any = {}) {
       category: verdict.categoryEvidence,
       style: verdict.style,
       season: verdict.season,
+      gender: verdict.gender,
       pattern: verdict.pattern,
       material: verdict.material,
     },
     uncertainAttributes: uncertain,
+    typeCheck: typeCheckFor(verdict, agreement),
     filename,
   };
 
   return applyOverrides(result, opts);
+}
+
+/**
+ * "Confirm the type" hint for the app. Below the threshold the app asks the
+ * user one tap: is it the top guess or the runner-up? On 219 worn-clothes
+ * photos, 0.15 flagged 19% of photos; those were right 46% of the time, the
+ * rest 85% (overall 78%). Override with TYPE_CONFIRM_BELOW.
+ */
+function typeCheckFor(verdict, agreement) {
+  const below = Number(process.env.TYPE_CONFIRM_BELOW);
+  const threshold = Number.isFinite(below) && process.env.TYPE_CONFIRM_BELOW !== undefined && process.env.TYPE_CONFIRM_BELOW !== '' ? below : 0.15;
+  const slotOf = Object.fromEntries(GARMENTS.map((g) => [g.subcategory, g.category]));
+  const names = [verdict.subcategory, verdict.categoryEvidence.runnerUp].filter(Boolean);
+  const options = names.filter((n, i) => names.indexOf(n) === i).map((n) => ({ subcategory: n, category: slotOf[n] || verdict.category }));
+  return { needsConfirm: agreement < threshold && options.length > 1, threshold, options };
 }
 
 /**
@@ -211,7 +254,7 @@ function applyOverrides(result, overrides = {}) {
   if (!result || result.success === false) return result;
   const out = { ...result };
   const applied = [];
-  for (const key of ['category', 'color', 'style', 'pattern', 'material', 'season', 'formality', 'name']) {
+  for (const key of ['category', 'color', 'style', 'pattern', 'material', 'season', 'gender', 'formality', 'name']) {
     const val = overrides[key];
     if (!val) continue;
     out[key] = val;

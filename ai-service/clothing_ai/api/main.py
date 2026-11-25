@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from ..common.logging import configure_logging, get_logger
 from ..config.settings import get_settings
 from .analyze import router as clothing_router
+from .garment_pixels import router as garment_pixels_router
 
 log = get_logger(__name__)
 
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
         ),
     )
     app.include_router(clothing_router)
+    app.include_router(garment_pixels_router)
 
     @app.get("/health", tags=["ops"], summary="Liveness and readiness")
     async def health(request: Request) -> JSONResponse:

@@ -133,6 +133,7 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
       (SwIcon.box, 'Material', item.material),
       (SwIcon.sun, 'Season', item.season),
       (SwIcon.tag, 'Formality', item.formality),
+      if (item.gender != null) (SwIcon.tag, 'Gender', item.gender!),
     ];
 
     return SwScreen(

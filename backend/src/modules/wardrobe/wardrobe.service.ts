@@ -1,7 +1,9 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -131,11 +133,23 @@ export class WardrobeService {
           ...(b.material ? { material: b.material } : {}),
           ...(b.season ? { season: b.season } : {}),
           ...(b.formality ? { formality: b.formality } : {}),
+          ...(b.gender ? { gender: b.gender } : {}),
         });
 
       if (result) {
         analysis = result;
-        if (result.success !== false) {
+        // A photo that fails the checks must not be saved as a default
+        // "white cotton top". Tell the app why and how to retake it.
+        if (result.success === false) {
+          throw new UnprocessableEntityException({
+            statusCode: 422,
+            error_type: result.error_type,
+            message: result.error,
+            retake: (result as any).retake ?? [],
+          });
+        }
+        {
+          b.gender = b.gender || (result as any).gender;
           b.category = b.category || result.category;
           b.color = b.color || result.color;
           b.style = b.style || result.style;
@@ -151,6 +165,20 @@ export class WardrobeService {
     const name = b.name;
     if (!name) throw new BadRequestException('name is required.');
 
+    // Already in the wardrobe? Say so, and let the app offer "Add anyway".
+    if (!(b as any).allowDuplicate) {
+      const existing = await this.findDuplicate(wardrobe.id, { name, category: b.category, color: b.color });
+      if (existing) {
+        throw new ConflictException({
+          statusCode: 409,
+          error_type: 'duplicate_item',
+          message: 'This item is already in your wardrobe.',
+          canAddAnyway: true,
+          existing: { id: existing.id, name: existing.name, imageUrl: existing.imageUrl, category: existing.category, color: existing.color },
+        });
+      }
+    }
+
     const item = this.itemRepo.create({
       wardrobeId: wardrobe.id,
       name,
@@ -161,6 +189,7 @@ export class WardrobeService {
       material: b.material || 'Cotton',
       season: b.season || 'All Season',
       formality: b.formality || 'Casual',
+      gender: b.gender || null,
       pattern: b.pattern || 'Plain',
       // `brand` is a relation to the `brands` table, not free text: assigning a
       // string here writes `brandId = ''` and fails the foreign key. A typed
@@ -216,29 +245,109 @@ export class WardrobeService {
     return { ok: true };
   }
 
-  async batchUpload(userId: string, body: Record<string, any>) {
-    const wardrobe = await this.userWardrobe(userId);
+  /**
+   * Check several photos in one call WITHOUT saving anything. Returns one entry
+   * per photo, numbered from 1 in upload order, so the app can say
+   * "Photo 3 is too dark, retake just that one".
+   * Body: { items: [{ image | imageUrl | imageBase64 | dataUrl, filename? }] }
+   */
+  async analyzeBatch(body: Record<string, any>) {
     const rows = Array.isArray(body?.items) ? body.items : [];
-    const created = rows.map((b: Record<string, any>) =>
-      this.itemRepo.create({
-        wardrobeId: wardrobe.id,
-        name: b.name || 'Imported piece',
-        imageUrl: b.image || b.imageUrl || DEFAULT_IMAGE,
-        category: b.category || 'Tops',
-        color: b.color || 'White',
-        style: b.style || 'Casual',
-        material: b.material || 'Cotton',
-        season: b.season || 'All Season',
-        formality: b.formality || 'Casual',
-        pattern: b.pattern || 'Plain',
-        // See `create`: brand is a relation, so free text must not go here.
-        timesWorn: 0,
-        lastWornLabel: 'Just added',
-        status: ItemStatus.ACTIVE,
-      }),
+    if (!rows.length) throw new BadRequestException('items[] is required.');
+    if (rows.length > 20) throw new BadRequestException('At most 20 photos per request.');
+    const results: any[] = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const b = rows[i] || {};
+      const photo = i + 1;
+      const bytes = aiEngine.imageBytesFor(b) || readStoredImage(b.imageUrl || b.image);
+      if (!bytes) {
+        results.push({ photo, ok: false, error_type: 'unreadable_image', error: 'No image was received for this photo.', retake: ['Select the photo again.'] });
+        continue;
+      }
+      const r: any = await this.analyzer.analyze({ filename: b.filename, bytes });
+      if (!r || r.success === false) {
+        results.push({
+          photo,
+          ok: false,
+          error_type: r?.error_type || 'analysis_failed',
+          error: r?.error || 'We could not analyse this photo.',
+          retake: r?.retake ?? [],
+        });
+      } else {
+        results.push({ photo, ok: true, analysis: r });
+      }
+    }
+    const bad = results.filter((r) => !r.ok).map((r) => r.photo);
+    return {
+      ok: bad.length === 0,
+      retakePhotos: bad,
+      message: bad.length
+        ? `Please retake photo ${bad.join(', ')}. The other photos are fine.`
+        : null,
+      results,
+    };
+  }
+
+  /** Same name, category and colour among the user's active pieces. */
+  private async findDuplicate(
+    wardrobeId: string,
+    k: { name?: string; category?: string; color?: string },
+  ) {
+    const norm = (v?: string | null) => String(v || '').trim().toLowerCase();
+    const rows = await this.itemRepo.find({
+      where: { wardrobeId, status: ItemStatus.ACTIVE },
+    });
+    return (
+      rows.find(
+        (r) =>
+          norm(r.name) === norm(k.name) &&
+          norm(r.category) === norm(k.category) &&
+          norm(r.color) === norm(k.color),
+      ) || null
     );
-    await this.itemRepo.save(created);
-    return { items: created, total: created.length };
+  }
+
+  /**
+   * Multi-photo save. Every photo goes through the same analysis as a single
+   * upload; nothing is filled with default data. Good photos are saved. Bad
+   * ones come back numbered (from 1, in upload order) with how to retake them.
+   */
+  async batchUpload(userId: string, body: Record<string, any>) {
+    const rows = Array.isArray(body?.items) ? body.items : [];
+    const items: WardrobeItem[] = [];
+    const failed: any[] = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const photo = i + 1;
+      const row = rows[i] || {};
+      const hasImage =
+        aiEngine.imageBytesFor(row) || readStoredImage(row.imageUrl || row.image);
+      if (!hasImage) {
+        failed.push({ photo, error_type: 'unreadable_image', error: 'No image was received for this photo.', retake: ['Select the photo again.'] });
+        continue;
+      }
+      try {
+        const saved: any = await this.create(userId, { ...row, name: row.name } as any);
+        items.push(saved);
+      } catch (e: any) {
+        const r = typeof e?.getResponse === 'function' ? e.getResponse() : {};
+        failed.push({
+          photo,
+          error_type: r.error_type || 'save_failed',
+          error: r.message || 'This photo could not be saved.',
+          retake: r.retake ?? [],
+          existing: r.existing,
+        });
+      }
+    }
+    return {
+      items,
+      total: items.length,
+      failed,
+      retakePhotos: failed.filter((f) => f.error_type !== 'duplicate_item').map((f) => f.photo),
+      message: failed.length
+        ? `Photo ${failed.map((f) => f.photo).join(', ')} could not be saved. See the reason for each; the other photos were saved.`
+        : null,
+    };
   }
 
   async collections(userId: string) {

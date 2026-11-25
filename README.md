@@ -31,6 +31,43 @@ Both scripts print one line per step; details land in `setup.log` and
 with manual steps, the scraper trigger and common errors is in
 [RUNNING.md](RUNNING.md).
 
+## Photo analysis: setup and what to expect
+
+The photo analysis (add clothes from a picture) runs on local models only. No
+API key is needed for it.
+
+| Role | Model | Licence | Runs in |
+| --- | --- | --- | --- |
+| Garment detector | `yainage90/fashion-object-detection` (commit `fb0a4ff2`) | MIT | `ai-service` (Python) |
+| Cutout | `facebook/sam2.1-hiera-tiny` (commit `de431c40`) | Apache-2.0 | `ai-service` |
+| Type, style, season, pattern, material, gender | `Marqo/marqo-fashionSigLIP` (commit `c56244cc`) | Apache-2.0 | `ai-service` and the Node backend (`backend/.model-cache`) |
+| Stylist text search | `Xenova/all-MiniLM-L6-v2` | Apache-2.0 | Node backend |
+
+The pins are in `ai-service/clothing_ai/config/pins.py`; check them with
+`python -m clothing_ai.config.pins`.
+
+First run downloads about 550 MB of models (about 330 MB for `ai-service`,
+about 230 MB for the backend). The backend builds a label bank on its first
+start (about a minute, in the background) and caches it in
+`backend/.model-cache`, so wait a minute before the first photo.
+
+1. Copy `backend/.env.example` to `backend/.env` and `ai-service/.env.example`
+   to `ai-service/.env`. Set the DB values and your own JWT secrets.
+2. `GEMINI_API_KEY` is optional and belongs to each developer. It only powers
+   the AI stylist chat. It never touches the photo analysis, which is local
+   models only, so everyone gets the same result for the same photo.
+3. Pending database migrations run on backend start (they add
+   `wardrobe_items.gender`). Keep `DB_SYNCHRONIZE=false`.
+4. Uploaded photos are saved in `backend/storage` (ignored by git) and served
+   at `/storage`.
+
+Measured honestly (local models only, small test sets, not a guarantee):
+colour right on 45 of 57 worn photos; on a varied 30-photo set about 18 of 30
+(product photos 10/12, casual 5/10, street 3/8). Worn and street photos are
+the weak point. Gender and season are guesses from the photo. Not verified:
+Flutter changes were not compiled by the author before review, and the speed
+of the first photo on other laptops is not measured.
+
 Flutter implementation of the **SmartWardrobe – Your AI Personal Stylist** Figma
 design (24 frames, iPhone 393 × 852).
 

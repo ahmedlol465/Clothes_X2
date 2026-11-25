@@ -46,10 +46,10 @@ def analyze_clothing(body: AnalyzeIn):
         import re
         return val if re.search(pat, name) else fb
 
-    category = body.category or g(r"shoe|sneaker|loafer|boot", "Shoes",
+    category = body.category or g(r"dress shirt", "Tops", g(r"dress|gown|jumpsuit|romper|overall", "Dresses", g(r"shoe|sneaker|loafer|boot", "Shoes",
         g(r"jean|trouser|chino|short|skirt|pant|denim", "Bottoms",
         g(r"jacket|blazer|coat|hoodie|sweater|knit", "Outerwear",
-        g(r"belt|scarf|watch|bag|hat|sunglass|tie", "Accessories", "Tops"))))
+        g(r"belt|scarf|watch|bag|hat|sunglass|tie", "Accessories", "Tops"))))))
     color = body.color or g(r"white", "White", g(r"black", "Black",
         g(r"navy|blue|indigo", "Blue", g(r"beige|cream|tan|khaki", "Beige",
         g(r"brown", "Brown", g(r"grey|gray|charcoal", "Grey", "White"))))))

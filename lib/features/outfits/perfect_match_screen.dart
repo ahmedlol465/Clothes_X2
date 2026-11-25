@@ -239,31 +239,64 @@ class _PerfectMatchScreenState extends State<PerfectMatchScreen> {
                   message: why,
                 ),
                 const SizedBox(height: Insets.xl),
-                SwButton(
-                  label: 'Save Outfit',
-                  onTap: () async {
-                    final ok = outfit.itemIds?.isNotEmpty == true
-                        ? await widget._outfitsController.api
-                            .createOutfit(
-                              outfit.name,
-                              outfit.itemIds!,
-                              occasion: outfit.occasion,
-                            )
-                            .then((_) => true)
-                            .catchError((_) => false)
-                        : false;
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context)
-                      ..hideCurrentSnackBar()
-                      ..showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            ok
-                                ? 'Outfit saved.'
-                                : 'Could not save this outfit. Check the backend and try again.',
-                          ),
+                ListenableBuilder(
+                  listenable: widget._outfitsController,
+                  builder: (context, _) {
+                    final saved = widget._outfitsController.findSaved(outfit);
+                    final isSaved = saved != null;
+                    final isFav = saved?.favorite ?? false;
+                    Future<void> run(Future<bool?> Function() action,
+                        String on, String off) async {
+                      final r = await action();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context)
+                        ..hideCurrentSnackBar()
+                        ..showSnackBar(SnackBar(
+                          content: Text(r == null
+                              ? 'Could not update this outfit. Check the backend and try again.'
+                              : (r ? on : off)),
+                        ));
+                    }
+
+                    final ids = outfit.itemIds ?? const <String>[];
+                    return Column(
+                      children: [
+                        SwOutlineButton(
+                          label: isSaved ? 'Saved \u2605 (tap to remove)' : 'Save Outfit \u2606',
+                          foreground:
+                              isSaved ? AppColors.primary : AppColors.textPrimary,
+                          onTap: ids.isEmpty
+                              ? null
+                              : () => run(
+                                    () => widget._outfitsController.toggleSaved(
+                                      name: outfit.name,
+                                      itemIds: ids,
+                                      occasion: outfit.occasion,
+                                    ),
+                                    'Outfit saved.',
+                                    'Removed from Saved.',
+                                  ),
                         ),
-                      );
+                        const SizedBox(height: Insets.md),
+                        SwOutlineButton(
+                          label: isFav ? 'Favorite \u2665' : 'Add to Favorites \u2661',
+                          foreground:
+                              isFav ? AppColors.primary : AppColors.textPrimary,
+                          onTap: ids.isEmpty
+                              ? null
+                              : () => run(
+                                    () => widget._outfitsController
+                                        .toggleFavoriteFor(
+                                      name: outfit.name,
+                                      itemIds: ids,
+                                      occasion: outfit.occasion,
+                                    ),
+                                    'Added to Favorites.',
+                                    'Removed from Favorites.',
+                                  ),
+                        ),
+                      ],
+                    );
                   },
                 ),
                 const SizedBox(height: Insets.md),

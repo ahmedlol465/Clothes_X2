@@ -122,31 +122,12 @@ export class StylistService {
     }
 
     const base = local || aiEngine.filenameAnalysis(b);
-    let source = local ? local.source || 'clothing-vision' : 'filename';
-    let tokens: unknown;
+    const source = local ? local.source || 'clothing-vision' : 'filename';
 
-    if (dataUrl && llm.status().configured) {
-      try {
-        const visionOut = await llm.analyzeImage({
-          dataUrl,
-          hint: b.filename || b.name || '',
-        });
-        const attrs = visionOut.attrs || {};
-        const preferLocal = (key: string) =>
-          base[key] && !base.uncertain?.includes(key) ? base[key] : undefined;
-        base.color = preferLocal('color') || attrs.color || base.color;
-        base.category = preferLocal('category') || attrs.category || base.category;
-        base.style = attrs.style || base.style;
-        base.pattern = attrs.pattern || base.pattern;
-        base.material = attrs.material || base.material;
-        base.season = attrs.season || base.season;
-        if (attrs.confidence != null) base.visionConfidence = attrs.confidence;
-        source += `+${llm.status().provider}`;
-        tokens = visionOut.tokens;
-      } catch {
-        /* keep the local result */
-      }
-    }
+    // Photo analysis is local-models only, on purpose: the same photo gives
+    // the same answer on every machine. An LLM key (Gemini etc.) only powers
+    // the stylist chat and never changes these attributes.
+    const tokens: unknown = undefined;
 
     await this.trackAi('analyze-clothing', Date.now() - started, {
       source,
