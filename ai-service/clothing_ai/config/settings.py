@@ -15,6 +15,15 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .pins import (
+    DETECTOR_ID,
+    DETECTOR_REV,
+    FASHION_ID,
+    FASHION_REV,
+    SEGMENTER_ID,
+    SEGMENTER_REV,
+)
+
 #: The levels `log_level` may name, after normalisation.
 LOG_LEVELS = ("debug", "info", "warning", "error", "critical")
 
@@ -55,9 +64,13 @@ class Settings(BaseSettings):
     validation_rules_file: Path = PACKAGE_ROOT / "config" / "validation_rules.yaml"
 
     # -------------------------------------------------------------- models --
-    detector_model: str = "yainage90/fashion-object-detection"
-    segmenter_model: str = "facebook/sam2.1-hiera-tiny"
-    fashion_model: str = "hf-hub:Marqo/marqo-fashionSigLIP"
+    # Exact commits live in clothing_ai/models/pins.py so every install gets the same weights.
+    detector_model: str = DETECTOR_ID
+    detector_revision: str | None = DETECTOR_REV
+    segmenter_model: str = SEGMENTER_ID
+    segmenter_revision: str | None = SEGMENTER_REV
+    fashion_model: str = "hf-hub:" + FASHION_ID
+    fashion_revision: str | None = FASHION_REV
     # Optional secondary category voter, off by default. It self-reports 73%
     # validation accuracy, so it is a weak signal by construction.
     secondary_classifier_model: str | None = None

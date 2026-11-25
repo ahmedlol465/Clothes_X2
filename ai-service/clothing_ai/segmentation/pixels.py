@@ -17,8 +17,7 @@ import threading
 import numpy as np
 from PIL import Image
 
-DETECTOR = "yainage90/fashion-object-detection"
-SEGMENTER = "facebook/sam2.1-hiera-tiny"
+from ..config.pins import DETECTOR_ID as DETECTOR, DETECTOR_REV, SEGMENTER_ID as SEGMENTER, SEGMENTER_REV
 DETECT_THRESHOLD = 0.35
 # Detector input size. 384 px instead of the default 800: detector time 1.8 s -> 0.4 s,
 # colour family on 57 labelled photos 45/57 -> 44/57 (within noise).
@@ -44,10 +43,10 @@ def _load():
     # One thread on a 1-core box; more cores make this much faster. Override with GARMENT_THREADS.
     torch.set_num_threads(int(os.environ.get("GARMENT_THREADS", 0)) or min(4, os.cpu_count() or 1))
     _models["torch"] = torch
-    _models["dp"] = AutoImageProcessor.from_pretrained(DETECTOR)
-    _models["dm"] = AutoModelForObjectDetection.from_pretrained(DETECTOR).eval()
-    _models["sp"] = Sam2Processor.from_pretrained(SEGMENTER)
-    _models["sm"] = Sam2Model.from_pretrained(SEGMENTER).eval()
+    _models["dp"] = AutoImageProcessor.from_pretrained(DETECTOR, revision=DETECTOR_REV)
+    _models["dm"] = AutoModelForObjectDetection.from_pretrained(DETECTOR, revision=DETECTOR_REV).eval()
+    _models["sp"] = Sam2Processor.from_pretrained(SEGMENTER, revision=SEGMENTER_REV)
+    _models["sm"] = Sam2Model.from_pretrained(SEGMENTER, revision=SEGMENTER_REV).eval()
     return _models
 
 
