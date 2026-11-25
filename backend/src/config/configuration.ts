@@ -28,7 +28,12 @@ export const databaseConfig = registerAs('database', () => ({
   // reachable MySQL server (see .env.example) or it refuses to boot.
   type: 'mysql',
   logging: bool(process.env.DB_LOGGING, false),
-  synchronize: bool(process.env.DB_SYNCHRONIZE, true),
+  // Default OFF: TypeORM's synchronize keeps trying to "fix" MariaDB json
+  // columns (they report back as longtext) by dropping and re-adding them,
+  // which silently wipes user data (style profiles were lost this way).
+  // Fresh deployments get their schema from `npm run seed`, whose CLI
+  // bootstrap still synchronizes on an empty database.
+  synchronize: bool(process.env.DB_SYNCHRONIZE, false),
   host: process.env.DB_HOST ?? '127.0.0.1',
   port: int(process.env.DB_PORT, 3306),
   username: process.env.DB_USERNAME ?? 'root',

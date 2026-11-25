@@ -86,8 +86,11 @@ export class ShopService {
       return { error: 'A positive budget is required.' };
     }
     const occasion = `${body?.occasion ?? 'casual'}`;
+    // A budget only makes sense in one currency; mixing EGP with AUD/USD
+    // catalog rows would produce nonsense totals.
+    const currency = `${body?.currency ?? 'EGP'}`;
     const products = await this.productRepo.find({
-      where: { inStock: true },
+      where: { inStock: true, currency },
       order: { compatibilityScore: 'DESC' },
     });
     const bySlot: Record<string, ShoppingItem[]> = {};
@@ -138,7 +141,7 @@ export class ShopService {
     return {
       budget,
       total,
-      currency: picked[0]?.currency ?? 'EGP',
+      currency,
       withinBudget: coreOk,
       match: compat?.match ?? null,
       occasion,
