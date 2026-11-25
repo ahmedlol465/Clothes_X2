@@ -3,8 +3,8 @@
 set -euo pipefail
 
 echo "== checking prerequisites"
-node --version | grep -q '^v22' || { echo "Need Node.js 22 LTS"; exit 1; }
-flutter --version | grep -q 'Flutter 3\.50' || { echo "Need Flutter 3.50.x stable"; exit 1; }
+node --version | grep -q '^v22' || echo "WARNING: built and tested on Node.js 22 LTS; continuing with $(node --version)."
+flutter --version | grep -q 'Flutter 3\.50' || echo "WARNING: built and tested on Flutter 3.50.x; continuing with your installed version."
 command -v mysql >/dev/null || command -v mariadb >/dev/null || { echo "Need MySQL or MariaDB"; exit 1; }
 
 echo "== creating database (may prompt for the MySQL root password)"
