@@ -42,6 +42,7 @@ function userToLegacyUser(user: User, styleProfile: StyleProfile | null): Legacy
     createdAt: user.createdAt?.toISOString() ?? new Date().toISOString(),
     avatarUrl: user.avatarUrl ?? null,
     styleProfile: {
+      gender: dimensions.gender === 'male' || dimensions.gender === 'female' ? dimensions.gender : null,
       favoriteColors: Array.isArray(dimensions.favoriteColors) ? dimensions.favoriteColors : [],
       preferredStyles: Array.isArray(dimensions.preferredStyles) ? dimensions.preferredStyles : [],
       avoidedColors: Array.isArray(dimensions.avoidedColors) ? dimensions.avoidedColors : [],

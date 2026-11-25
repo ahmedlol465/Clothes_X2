@@ -27,6 +27,8 @@ export const STYLE_STYLES = [
 
 export const STYLE_FITS = ['slim', 'regular', 'relaxed', 'oversized'];
 
+export const STYLE_GENDERS = ['male', 'female'];
+
 export const STYLE_SIZES: Record<string, string[]> = {
   top: ['XS', 'S', 'M', 'L', 'XL', 'XXL'],
   bottom: ['28', '30', '32', '34', '36', '38', '40'],
@@ -59,6 +61,7 @@ export function readStyleProfile(user: Partial<LegacyUser> | null | undefined): 
   const stored = normalizeStyleProfile(user?.styleProfile);
   const fallback = defaultStyleProfile();
   return {
+    gender: STYLE_GENDERS.includes(String(stored.gender)) ? String(stored.gender) : null,
     favoriteColors: list(stored.favoriteColors, STYLE_COLORS, 12) || fallback.favoriteColors,
     preferredStyles: list(stored.preferredStyles, STYLE_STYLES, 12) || fallback.preferredStyles,
     avoidedColors: list(stored.avoidedColors, STYLE_COLORS, 12) || fallback.avoidedColors,
@@ -81,6 +84,11 @@ export function writeStyleProfile(
   const next = readStyleProfile(user);
   const b = body || {};
 
+  if (b.gender !== undefined) {
+    next.gender = b.gender === null || b.gender === ''
+      ? null
+      : STYLE_GENDERS.includes(String(b.gender)) ? String(b.gender) : next.gender;
+  }
   if (b.favoriteColors !== undefined) {
     next.favoriteColors = list(b.favoriteColors, STYLE_COLORS, 12) || [];
   }

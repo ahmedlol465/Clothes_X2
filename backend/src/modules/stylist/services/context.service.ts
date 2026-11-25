@@ -65,6 +65,9 @@ export class StylistContextService {
   async user(userId: string): Promise<LegacyUser | null> {
     const u = await this.userRepo.findOne({ where: { id: userId } });
     if (!u) return null;
+    const profileRow = await this.styleProfileRepo.findOne({ where: { userId } });
+    const dimensions = ((profileRow as any)?.dimensions ?? {}) as Record<string, any>;
+    const rawSizes = (dimensions.sizes ?? {}) as Record<string, unknown>;
     return {
       id: u.id,
       name: u.email.split('@')[0],
@@ -73,13 +76,18 @@ export class StylistContextService {
       createdAt: u.createdAt ? u.createdAt.toISOString() : new Date().toISOString(),
       avatarUrl: u.avatarUrl ?? null,
       styleProfile: {
-        favoriteColors: [],
-        preferredStyles: [],
-        avoidedColors: [],
-        heightCm: null,
-        weightKg: null,
-        fitPreference: 'regular',
-        sizes: { top: null, bottom: null, shoe: null },
+        gender: dimensions.gender === 'male' || dimensions.gender === 'female' ? dimensions.gender : null,
+        favoriteColors: Array.isArray(dimensions.favoriteColors) ? dimensions.favoriteColors : [],
+        preferredStyles: Array.isArray(dimensions.preferredStyles) ? dimensions.preferredStyles : [],
+        avoidedColors: Array.isArray(dimensions.avoidedColors) ? dimensions.avoidedColors : [],
+        heightCm: typeof dimensions.heightCm === 'number' ? dimensions.heightCm : null,
+        weightKg: typeof dimensions.weightKg === 'number' ? dimensions.weightKg : null,
+        fitPreference: typeof dimensions.fitPreference === 'string' ? dimensions.fitPreference : 'regular',
+        sizes: {
+          top: typeof rawSizes.top === 'string' ? rawSizes.top : null,
+          bottom: typeof rawSizes.bottom === 'string' ? rawSizes.bottom : null,
+          shoe: typeof rawSizes.shoe === 'string' ? rawSizes.shoe : null,
+        },
       },
       tokenVersion: u.tokenVersion ?? 0,
       role: u.role ?? 'user',
