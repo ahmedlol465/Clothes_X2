@@ -152,10 +152,12 @@ class FigureVisual extends StatelessWidget {
               ),
               // Body-position fitting on the 320x420 figure: head center is
               // (160, 58), torso 96-206, legs 206-360, feet 360-400.
-              fitted('top', 100, 114, 92),
+              // Outerwear layers over the torso (larger, behind the top so
+              // the tee reads as worn underneath) instead of floating aside.
+              fitted('outerwear', 96, 106, 100),
+              fitted('top', 138, 124, 72),
               fitted('bottom', 200, 118, 88),
               fitted('shoes', 344, 118, 84),
-              fitted('outerwear', 108, 212, 76),
               fitted('accessory', 216, 30, 60),
             ],
           ),
