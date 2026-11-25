@@ -169,6 +169,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           label: 'My Wardrobe',
                           onTap: () => widget.onOpenTab(ShellTab.wardrobe),
                         ),
+                        _QuickAction(
+                          icon: SwIcon.bag,
+                          label: 'Avatar Stylist',
+                          onTap: () => _push(context, Routes.outfitStudio),
+                        ),
                       ],
                     ),
                     const SizedBox(height: Insets.md),

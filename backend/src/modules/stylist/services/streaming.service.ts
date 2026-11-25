@@ -65,7 +65,10 @@ export class StylistStreamingService {
     let text = '';
     let source = 'rules';
     let tokens: unknown;
-    const language = detectLanguage(message);
+    const language =
+      body?.language === 'ar' || body?.language === 'en'
+        ? body.language
+        : detectLanguage(message);
 
     if (llm.status().configured) {
       try {

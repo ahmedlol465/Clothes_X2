@@ -232,12 +232,14 @@ class SmartWardrobeApi {
     String message, {
     List<Map<String, dynamic>> history = const [],
     String? conversationId,
+    String? language,
   }) async =>
       Map<String, dynamic>.from(
         await _client.postAi('/ai/chat', {
           'message': message,
           'history': history,
           'conversationId': ?conversationId,
+          'language': ?language,
         }),
       );
 
@@ -248,11 +250,13 @@ class SmartWardrobeApi {
     String message, {
     List<Map<String, dynamic>> history = const [],
     String? conversationId,
+    String? language,
   }) =>
       _client.streamPost('/ai/chat/stream', {
         'message': message,
         'history': history,
         'conversationId': ?conversationId,
+        'language': ?language,
       });
 
   /// Match a photo of an outfit someone else wears against the user's own
@@ -416,9 +420,67 @@ class SmartWardrobeApi {
   Future<Map<String, dynamic>> shopRecommended() async =>
       Map<String, dynamic>.from(await _client.get('/shop/recommended'));
 
+  /// Budget outfit builder (`POST /shop/outfit-builder`): the server picks
+  /// the best-value in-stock set that fits [budget].
+  Future<Map<String, dynamic>> buildOutfitWithinBudget(
+    double budget, {
+    String occasion = 'casual',
+    String? style,
+    String? gender,
+    List<String> excludeIds = const [],
+  }) async =>
+      Map<String, dynamic>.from(
+        await _client.post('/shop/outfit-builder', {
+          'budget': budget,
+          'occasion': occasion,
+          if (style != null) 'style': style,
+          if (gender != null) 'gender': gender,
+          if (excludeIds.isNotEmpty) 'excludeIds': excludeIds,
+        }),
+      );
+
   Future<void> addToWishlist(Map<String, dynamic> entry) async {
     await _client.post('/shop/wishlist', entry);
   }
+
+  /// Browseable catalog (`GET /shop/products`) with optional filters.
+  Future<List<dynamic>> shopProducts({
+    String? category,
+    String? color,
+    double? maxPrice,
+    String? q,
+  }) async {
+    final query = <String, String>{
+      if (category != null && category.isNotEmpty) 'category': category,
+      if (color != null && color.isNotEmpty) 'color': color,
+      if (maxPrice != null) 'maxPrice': '$maxPrice',
+      if (q != null && q.isNotEmpty) 'q': q,
+    };
+    final res = Map<String, dynamic>.from(
+      await _client.get('/shop/products', query),
+    );
+    return List<dynamic>.from(res['products'] as List? ?? const []);
+  }
+
+  Future<List<dynamic>> wishlist() async =>
+      List<dynamic>.from(
+        (Map<String, dynamic>.from(await _client.get('/shop/wishlist')))['wishlist']
+            as List? ??
+            const [],
+      );
+
+  Future<void> removeFromWishlist(String id) async {
+    await _client.delete('/shop/wishlist/$id');
+  }
+
+  /// "Before you buy" check (`POST /shop/before-you-buy`): how well a
+  /// candidate product matches what the user already owns.
+  Future<Map<String, dynamic>> beforeYouBuy(
+    Map<String, dynamic> product,
+  ) async =>
+      Map<String, dynamic>.from(
+        await _client.post('/shop/before-you-buy', product),
+      );
 
   // ------------------------------------------------------------ misc
   /// Live weather. Pass phone GPS [lat]/[lon] to report where the user

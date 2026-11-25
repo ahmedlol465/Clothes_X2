@@ -41,6 +41,53 @@ export class ShoppingItem {
   @Column({ length: 120, nullable: true })
   brand: string | null;
 
+  /** Store this product comes from ('Demo Store' for seed data, a real
+   * store name for scraped rows). */
+  @Column({ length: 80, default: 'Demo Store' })
+  store: string;
+
+  /** Where the row came from: 'seed' for bundled demo data, 'scraper' for
+   * store scrapers. Lets the UI label demo data honestly. */
+  @Column({ length: 20, default: 'seed' })
+  source: string;
+
+  /** The store's own product id/sku, unique per store for scraper upserts. */
+  @Index()
+  @Column({ length: 120, nullable: true })
+  externalId: string | null;
+
+  @Column({ length: 60, nullable: true })
+  color: string | null;
+
+  @Column({ length: 60, nullable: true })
+  style: string | null;
+
+  @Column({ length: 40, nullable: true })
+  season: string | null;
+
+  @Column({ type: 'json', nullable: true })
+  sizes: string[] | null;
+
+  @Column({ default: true })
+  inStock: boolean;
+
+  /** Pre-discount price when the item is on sale; null when full price. */
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: {
+      to: (value: number | null) => value === null ? null : value,
+      from: (value: string | null) => value === null ? null : Number(value),
+    },
+  })
+  originalPrice: number | null;
+
+  /** When a scraper last refreshed this row; null for seed data. */
+  @Column({ type: 'datetime', nullable: true })
+  scrapedAt: Date | null;
+
   @Column({ length: 255, nullable: true })
   productUrl: string | null;
 

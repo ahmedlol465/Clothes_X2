@@ -1,5 +1,31 @@
 # SmartWardrobe
 
+## Quick start
+
+Prerequisites: Node.js 22 LTS, MySQL 8 or MariaDB 10.6+, Flutter 3.50.x
+(stable), Chrome.
+
+```
+git clone https://github.com/ahmedlol465/Clothes_X2.git
+```
+
+```
+cd Clothes_X2 && git checkout feature/creative-round
+```
+
+```
+bash setup.sh
+```
+
+```
+bash start.sh
+```
+
+Backend runs at http://localhost:3002/api, the web app at
+http://localhost:8080. Demo login: karim@fashiontech.com / wardrobe2024.
+Keep `DB_SYNCHRONIZE=false` in `backend/.env`. The full guide with manual
+steps, the scraper trigger and common errors is in [RUNNING.md](RUNNING.md).
+
 Flutter implementation of the **SmartWardrobe – Your AI Personal Stylist** Figma
 design (24 frames, iPhone 393 × 852).
 
