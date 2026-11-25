@@ -62,4 +62,23 @@ export class OutfitBuilderDto {
   @IsString()
   @MaxLength(3)
   currency?: string;
+
+  /** Preferred style; matching products are tried first within each slot. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  style?: string;
+
+  /** Gender from the user's style profile; filters obviously-gendered
+   * products (keyword heuristic, unknown/unisex items stay eligible). */
+  @IsOptional()
+  @IsIn(['male', 'female'])
+  gender?: 'male' | 'female';
+
+  /** Product ids to skip, used by "swap this piece" to rebuild without the
+   * item being replaced. */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  excludeIds?: string[];
 }

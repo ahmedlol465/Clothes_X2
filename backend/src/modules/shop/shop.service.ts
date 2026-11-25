@@ -89,18 +89,60 @@ export class ShopService {
     // A budget only makes sense in one currency; mixing EGP with AUD/USD
     // catalog rows would produce nonsense totals.
     const currency = `${body?.currency ?? 'EGP'}`;
+    const style = body?.style ? `${body.style}`.toLowerCase() : null;
+    const gender = body?.gender === 'male' || body?.gender === 'female' ? body.gender : null;
+    const excludeIds = new Set(
+      Array.isArray(body?.excludeIds) ? body.excludeIds.map((v: unknown) => `${v}`) : [],
+    );
+
+    // Gender is a keyword heuristic on the product name: scraped catalogs
+    // carry no gender field, so we only exclude obviously-opposite-gendered
+    // items and keep everything unknown/unisex eligible.
+    const GENDER_MARKERS: Record<string, RegExp> = {
+      male: /\b(women'?s?|ladies|female|dress|skirt|blouse|bra|leggings?|heels?)\b/i,
+      female: /\b(men'?s?|male|menswear|boxers?)\b/i,
+    };
+    const genderOk = (p: ShoppingItem) =>
+      !gender || !GENDER_MARKERS[gender].test(p.name ?? '');
+
     const products = await this.productRepo.find({
       where: { inStock: true, currency },
       order: { compatibilityScore: 'DESC' },
     });
+    // Real scraped products are the point of the catalog; seed rows only
+    // backfill a slot the scraped catalog cannot fill at all.
+    const scraped = products.filter((p) => p.source === 'scraper');
+    const CORE = ['top', 'bottom', 'shoes'];
+    const slotName = (category: string) =>
+      (
+        { Tops: 'top', Bottoms: 'bottom', Shoes: 'shoes', Outerwear: 'outerwear', Accessories: 'accessory' } as
+          Record<string, string>
+      )[category];
+    const eligible = (list: ShoppingItem[]) =>
+      list.filter((p) => !excludeIds.has(p.id) && genderOk(p) && slotName(p.category));
+    const scrapedSlots = new Set(eligible(scraped).map((p) => slotName(p.category)));
+    const pool = CORE.every((c) => scrapedSlots.has(c)) ? scraped : products;
+
     const bySlot: Record<string, ShoppingItem[]> = {};
-    for (const p of products) {
+    for (const p of pool) {
+      if (excludeIds.has(p.id) || !genderOk(p)) continue;
       const slot = (
         { Tops: 'top', Bottoms: 'bottom', Shoes: 'shoes', Outerwear: 'outerwear', Accessories: 'accessory' } as
           Record<string, string>
       )[p.category];
       if (!slot) continue;
       (bySlot[slot] ??= []).push(p);
+    }
+    // Within a slot, prefer the requested style but keep every product as a
+    // fallback so a niche style never empties the slot.
+    if (style) {
+      for (const list of Object.values(bySlot)) {
+        list.sort(
+          (a, b) =>
+            Number((b.style ?? '').toLowerCase().includes(style)) -
+            Number((a.style ?? '').toLowerCase().includes(style)),
+        );
+      }
     }
 
     const picked: ShoppingItem[] = [];
@@ -138,6 +180,8 @@ export class ShopService {
         })
       : null;
 
+    const slotOf = (category: string) => slotName(category) ?? 'accessory';
+
     return {
       budget,
       total,
@@ -145,7 +189,9 @@ export class ShopService {
       withinBudget: coreOk,
       match: compat?.match ?? null,
       occasion,
-      items: picked,
+      style,
+      gender,
+      items: picked.map((p) => ({ ...p, slot: slotOf(p.category) })),
     };
   }
 
