@@ -188,6 +188,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
               label: 'Take a Photo',
               onTap: () => Navigator.of(sheetContext).pop(ImageSource.camera),
             ),
+            if (widget._accountController.profile?.avatarUrl != null)
+              SheetOption(
+                icon: SwIcon.close,
+                label: 'Remove Photo',
+                onTap: () async {
+                  Navigator.of(sheetContext).pop();
+                  final saved = await widget._accountController.removeAvatar();
+                  if (context.mounted && saved == null) {
+                    _toast(context, 'Could not remove the photo.', error: true);
+                  }
+                },
+              ),
             SheetOption(
               icon: SwIcon.close,
               label: 'Cancel',

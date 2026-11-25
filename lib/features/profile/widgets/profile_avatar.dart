@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../../core/icons/sw_icon.dart';
+import '../../../core/widgets/sw_widgets.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
-import '../../../data/assets.dart';
 import '../../../data/models.dart';
 
 /// Backend avatar when one is set, the bundled photo otherwise, and the
@@ -27,16 +27,7 @@ class ProfileAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     const size = 56.0;
     final remote = profile.avatarUrl;
-    final fallback = Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      color: AppColors.tint,
-      child: Text(
-        profile.initials,
-        style: AppText.cardTitle.copyWith(color: AppColors.primary),
-      ),
-    );
+    final fallback = SwInitialAvatar(name: profile.name, size: size);
 
     return Semantics(
       button: true,
@@ -54,21 +45,9 @@ class ProfileAvatar extends StatelessWidget {
                       width: size,
                       height: size,
                       fit: BoxFit.cover,
-                      errorBuilder: (context, _, _) => Image.asset(
-                        Img.avatarKarim,
-                        width: size,
-                        height: size,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, _, _) => fallback,
-                      ),
-                    )
-                  : Image.asset(
-                      Img.avatarKarim,
-                      width: size,
-                      height: size,
-                      fit: BoxFit.cover,
                       errorBuilder: (context, _, _) => fallback,
-                    ),
+                    )
+                  : fallback,
             ),
             if (busy)
               Container(

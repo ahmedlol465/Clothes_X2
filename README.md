@@ -10,7 +10,7 @@ git clone https://github.com/ahmedlol465/Clothes_X2.git
 ```
 
 ```
-cd Clothes_X2 && git checkout feature/creative-round
+cd Clothes_X2
 ```
 
 ```
@@ -21,10 +21,15 @@ bash setup.sh
 bash start.sh
 ```
 
+(start.sh runs `flutter run -d web-server --web-port=8080 --release` plus
+the backend; open http://localhost:8080 in your browser yourself)
+
 Backend runs at http://localhost:3002/api, the web app at
 http://localhost:8080. Demo login: karim@fashiontech.com / wardrobe2024.
-Keep `DB_SYNCHRONIZE=false` in `backend/.env`. The full guide with manual
-steps, the scraper trigger and common errors is in [RUNNING.md](RUNNING.md).
+Both scripts print one line per step; details land in `setup.log` and
+`logs/`. Keep `DB_SYNCHRONIZE=false` in `backend/.env`. The full guide
+with manual steps, the scraper trigger and common errors is in
+[RUNNING.md](RUNNING.md).
 
 Flutter implementation of the **SmartWardrobe – Your AI Personal Stylist** Figma
 design (24 frames, iPhone 393 × 852).

@@ -458,21 +458,63 @@ class SwAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final fallback = SwInitialAvatar(name: name ?? '?', size: size);
+    if (image.trim().isEmpty) return fallback;
+    final remote = image.startsWith('http://') || image.startsWith('https://');
     return ClipOval(
-      child: Image.asset(
-        image,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stack) => Container(
-          width: size,
-          height: size,
-          alignment: Alignment.center,
-          color: AppColors.tint,
-          child: Text(
-            (name ?? '?').characters.first.toUpperCase(),
-            style: AppText.cardTitle.copyWith(color: AppColors.primary),
-          ),
+      child: remote
+          ? Image.network(
+              image,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stack) => fallback,
+            )
+          : Image.asset(
+              image,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stack) => fallback,
+            ),
+    );
+  }
+}
+
+/// Default avatar: a colored circle with the first letter of the name, the
+/// color derived from the name so it stays stable across sessions.
+class SwInitialAvatar extends StatelessWidget {
+  const SwInitialAvatar({super.key, required this.name, this.size = 44});
+
+  final String name;
+  final double size;
+
+  static const _palette = [
+    Color(0xFF5E4B8B),
+    Color(0xFF3E7CB1),
+    Color(0xFF2E8B72),
+    Color(0xFFB35C44),
+    Color(0xFFB3893E),
+    Color(0xFF8B5E83),
+    Color(0xFF4B7B5E),
+    Color(0xFF7B62B3),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmed = name.trim();
+    final initial = trimmed.isEmpty ? '?' : trimmed.characters.first.toUpperCase();
+    final color = _palette[trimmed.hashCode.abs() % _palette.length];
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+      child: Text(
+        initial,
+        style: AppText.cardTitle.copyWith(
+          color: Colors.white,
+          fontSize: size * 0.42,
         ),
       ),
     );
@@ -523,13 +565,16 @@ class SwProductImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fallback = SizedBox(
+    // Placeholder for missing/failed photos: reads as an intentional empty
+    // state, not a broken image.
+    final fallback = Container(
       height: height,
       width: width,
+      color: AppColors.tint,
       child: const Center(
         child: SwIconView(
           SwIcon.shirt,
-          size: 22,
+          size: 44,
           color: AppColors.textTertiary,
         ),
       ),

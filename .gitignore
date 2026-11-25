@@ -105,3 +105,7 @@ ai-service/*.log
 # schema is documented in ai-service/README.md and the template is tracked.
 ai-service/data/evaluation/reports/
 ai-service/data/raw/
+
+# Local run scripts output
+setup.log
+logs/

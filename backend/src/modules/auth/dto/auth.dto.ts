@@ -82,6 +82,13 @@ export class SocialAuthDto {
   @IsOptional()
   @IsString()
   lastName?: string;
+
+  /** Provider profile photo (Google picture), used when the account has no
+   * custom avatar yet. Never overwrites an uploaded one. */
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  avatarUrl?: string;
 }
 
 export class AuthUserDto {

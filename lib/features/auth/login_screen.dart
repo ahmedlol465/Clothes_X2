@@ -68,24 +68,15 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _googleSignIn() async {
-    try {
-      final status = await widget._accountController.api.googleClientStatus();
-      if (status['configured'] != true) {
-        if (mounted) {
-          _toast(context, 'Google sign-in is not configured on the server yet.');
-        }
-        return;
-      }
-      if (mounted) {
-        _toast(
-          context,
-          'Google sign-in is configured on the server; the app-side Google flow lands in the next update.',
-        );
-      }
-    } catch (_) {
-      if (mounted) {
-        _toast(context, 'Backend offline — check that the backend is running (backend → npm start).');
-      }
+    if (_busy) return;
+    setState(() => _busy = true);
+    final ok = await widget._accountController.loginWithGoogle();
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (ok) {
+      Navigator.of(context).pushNamedAndRemoveUntil(Routes.shell, (_) => false);
+    } else if (widget._accountController.lastError != null) {
+      _toast(context, widget._accountController.lastError!);
     }
   }
 
