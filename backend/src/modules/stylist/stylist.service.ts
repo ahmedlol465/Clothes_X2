@@ -35,6 +35,7 @@ import { Wardrobe, WardrobeItem } from '../../database/entities/wardrobe.entity'
 import { StylistConversationService } from './services/conversation.service';
 import { detectLanguage } from '../../language';
 import { StylistContextService } from './services/context.service';
+import { StylistChatService } from './services/chat.service';
 import { StylistStreamingService } from './services/streaming.service';
 
 /**
@@ -70,6 +71,7 @@ export class StylistService {
     private readonly conversationService: StylistConversationService,
     private readonly contextService: StylistContextService,
     private readonly streamingService: StylistStreamingService,
+    private readonly chatService: StylistChatService,
   ) {}
 
   // ---------------------------------------------------------- 8.4 analysis
@@ -246,100 +248,7 @@ export class StylistService {
   // ---------------------------------------------------------- chat (non-streaming)
 
   async chat(userId: string, body: Record<string, any>) {
-    const started = Date.now();
-    const { message = '', history = [], conversationId } = body || {};
-    if (!String(message).trim()) {
-      throw new BadRequestException('message is required.');
-    }
-
-    const ctx = await this.contextService.assembleContext(userId, message);
-    const language =
-      body?.language === 'ar' || body?.language === 'en'
-        ? body.language
-        : detectLanguage(message);
-    let source = 'rules';
-    let reply = '';
-    let intent = 'chat';
-    let followUp: any = null;
-    let constraints: any = { colors: [], styles: [], avoid: [] };
-    let occasion = ctx.occasion;
-    let tokens: unknown;
-    let memoryNotes: string | null = null;
-
-    const serverHistory = history.length
-      ? history
-      : await this.conversationService.recallTurns(userId, conversationId);
-
-    if (llm.status().configured) {
-      try {
-        const generated = await llm.stylistChat({
-          message,
-          history: serverHistory,
-          wardrobe: ctx.shortlist,
-          weather: ctx.weather,
-          styleProfile: ctx.styleProfile,
-          memoryDigest: memoryStore.digest(ctx.memory),
-          events: ctx.events,
-          imageUrl: body?.dataUrl || body?.imageUrl || null,
-          language,
-        });
-        reply = generated.text;
-        intent = generated.intent;
-        followUp = generated.followUp;
-        constraints = generated.constraints;
-        memoryNotes = generated.memoryNotes;
-        occasion = generated.occasion || occasion;
-        tokens = generated.tokens;
-        source = llm.status().provider;
-        ctx.outfit = this.contextService.buildOutfitFromIds(generated.itemIds, ctx, { occasion }) as any;
-      } catch {
-        /* rule engine rescues below */
-      }
-    }
-
-    if (!reply) {
-      const fallback = aiEngine.chatReply(message, {
-        wardrobe: ctx.wardrobe,
-        weather: ctx.weather,
-        styleProfile: ctx.styleProfile,
-        memory: ctx.memory,
-        language,
-      });
-      reply = fallback.text;
-      intent = fallback.intent || 'chat';
-      occasion = String(fallback.occasion) || occasion;
-      ctx.outfit = (fallback.outfit || null) as any;
-      const fbConstraints = (fallback as { constraints?: { colors: unknown[]; styles: unknown[]; avoid: unknown[] } })?.constraints;
-      if (!constraints.colors.length && fbConstraints) {
-        constraints = fbConstraints;
-      }
-    }
-
-    const outfit = ctx.outfit || null;
-    const memoryDb = await this.contextService.readMemoriesDb(userId);
-    if (this.contextService.learnTurn(memoryDb, userId, message, memoryNotes)) {
-      await this.contextService.writeMemoriesDb(userId, memoryDb);
-    }
-
-    await this.conversationService.saveConversation(userId, conversationId, message, reply, outfit?.itemIds || []);
-    await this.trackAi('chat', Date.now() - started, { source, tokens, userId });
-
-    return {
-      reply,
-      language,
-      outfit,
-      followUp,
-      intent,
-      occasion,
-      constraints,
-      weather: ctx.weather,
-      memory: {
-        confidence: memoryStore.confidence(ctx.memory),
-        digest: memoryStore.digest(ctx.memory),
-      },
-      conversationId: conversationId || null,
-      source,
-    };
+    return this.chatService.chat(userId, body);
   }
 
   // ---------------------------------------------------------- SSE streaming
