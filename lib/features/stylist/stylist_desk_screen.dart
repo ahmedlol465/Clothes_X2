@@ -257,7 +257,7 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
   void _startItemDrag(
     ClothingItem item,
     int index,
-    LongPressStartDetails details,
+    DragStartDetails details,
   ) {
     if (_canvasSize.width <= 0 || _canvasSize.height <= 0) return;
     final key = _itemKey(item, index);
@@ -269,7 +269,7 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
     _canvasRevision.value++;
   }
 
-  void _moveItem(LongPressMoveUpdateDetails details) {
+  void _moveItem(DragUpdateDetails details) {
     final key = _draggingItemKey;
     final startOffset = _dragStartItemOffset;
     final startGlobal = _dragStartGlobal;
@@ -607,11 +607,11 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
                       item: entry.item,
                       palette: palette,
                       onTap: () => _handleItemTap(entry.item, entry.index),
-                      onLongPressStart: (details) =>
+                      onPanStart: (details) =>
                           _startItemDrag(entry.item, entry.index, details),
-                      onLongPressMoveUpdate: _moveItem,
-                      onLongPressEnd: _endItemDrag,
-                      onLongPressCancel: _endItemDrag,
+                      onPanUpdate: _moveItem,
+                      onPanEnd: () => _endItemDrag(),
+                      onPanCancel: () => _endItemDrag(),
                     ),
                   ),
               ],
@@ -1079,19 +1079,19 @@ class _CanvasClothingItem extends StatelessWidget {
     required this.item,
     required this.palette,
     required this.onTap,
-    required this.onLongPressStart,
-    required this.onLongPressMoveUpdate,
-    required this.onLongPressEnd,
-    required this.onLongPressCancel,
+    required this.onPanStart,
+    required this.onPanUpdate,
+    required this.onPanEnd,
+    required this.onPanCancel,
   });
 
   final ClothingItem item;
   final _Palette palette;
   final VoidCallback onTap;
-  final void Function(LongPressStartDetails details) onLongPressStart;
-  final void Function(LongPressMoveUpdateDetails details) onLongPressMoveUpdate;
-  final VoidCallback onLongPressEnd;
-  final VoidCallback onLongPressCancel;
+  final void Function(DragStartDetails details) onPanStart;
+  final void Function(DragUpdateDetails details) onPanUpdate;
+  final VoidCallback onPanEnd;
+  final VoidCallback onPanCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -1101,10 +1101,10 @@ class _CanvasClothingItem extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      onLongPressStart: onLongPressStart,
-      onLongPressMoveUpdate: onLongPressMoveUpdate,
-      onLongPressEnd: (_) => onLongPressEnd(),
-      onLongPressCancel: onLongPressCancel,
+      onPanStart: onPanStart,
+      onPanUpdate: onPanUpdate,
+      onPanEnd: (_) => onPanEnd(),
+      onPanCancel: onPanCancel,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
