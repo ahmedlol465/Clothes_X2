@@ -367,6 +367,13 @@ class ShoppingPick {
     required this.price,
     required this.image,
     required this.reason,
+    this.id,
+    this.store,
+    this.color,
+    this.category,
+    this.sizes = const [],
+    this.originalPrice,
+    this.inStock = true,
     this.wishlisted = false,
   });
 
@@ -374,6 +381,15 @@ class ShoppingPick {
   final String price;
   final String image;
   final String reason;
+  final String? id;
+  final String? store;
+  final String? color;
+  final String? category;
+  final List<String> sizes;
+
+  /// Pre-discount price text when the item is on sale; null otherwise.
+  final String? originalPrice;
+  final bool inStock;
   final bool wishlisted;
 }
 

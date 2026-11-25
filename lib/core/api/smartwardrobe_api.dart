@@ -437,6 +437,15 @@ class SmartWardrobeApi {
     await _client.post('/shop/wishlist', entry);
   }
 
+  /// "Before you buy" check (`POST /shop/before-you-buy`): how well a
+  /// candidate product matches what the user already owns.
+  Future<Map<String, dynamic>> beforeYouBuy(
+    Map<String, dynamic> product,
+  ) async =>
+      Map<String, dynamic>.from(
+        await _client.post('/shop/before-you-buy', product),
+      );
+
   // ------------------------------------------------------------ misc
   /// Live weather. Pass phone GPS [lat]/[lon] to report where the user
   /// actually stands (the backend reverse-geocodes the city name then);

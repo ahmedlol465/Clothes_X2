@@ -57,6 +57,23 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
     }
   }
 
+  /// Product details sheet with sale info, sizes and the Before You Buy
+  /// wardrobe-compatibility check.
+  void _openProduct(ShoppingPick pick) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => _ProductDetailSheet(
+        pick: pick,
+        shopController: widget._shopController,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -108,15 +125,9 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
                       pick: widget._shopController.picks[i],
                       wishlisted: _wishlisted.contains(i),
                       onToggle: () => _toggle(i),
-                      onView: () => ScaffoldMessenger.of(context)
-                        ..hideCurrentSnackBar()
-                        ..showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Opening ${widget._shopController.picks[i].name}',
-                            ),
-                          ),
-                        ),
+                      onView: () => _openProduct(
+                        widget._shopController.picks[i],
+                      ),
                     ),
                     const SizedBox(height: Insets.lg),
                   ],
@@ -368,6 +379,156 @@ class _BudgetBuilderCardState extends State<_BudgetBuilderCard> {
             ],
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// Product detail sheet: gallery image, price (with sale strike-through),
+/// store metadata, sizes, the recommendation reason, and a Before You Buy
+/// check against the user's own wardrobe.
+class _ProductDetailSheet extends StatefulWidget {
+  const _ProductDetailSheet({required this.pick, required this.shopController});
+
+  final ShoppingPick pick;
+  final ShopController shopController;
+
+  @override
+  State<_ProductDetailSheet> createState() => _ProductDetailSheetState();
+}
+
+class _ProductDetailSheetState extends State<_ProductDetailSheet> {
+  bool _checking = false;
+  Map<String, dynamic>? _verdict;
+
+  Future<void> _beforeYouBuy() async {
+    setState(() {
+      _checking = true;
+      _verdict = null;
+    });
+    try {
+      final res = await widget.shopController.api.beforeYouBuy({
+        'productName': widget.pick.name,
+        'color': widget.pick.color ?? 'White',
+        'category': widget.pick.category ?? 'Tops',
+      });
+      final data = res['data'] is Map
+          ? Map<String, dynamic>.from(res['data'] as Map)
+          : res;
+      setState(() => _verdict = data);
+    } catch (_) {
+      setState(() => _verdict = {'verdict': 'Check unavailable right now'});
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pick = widget.pick;
+    final verdict = _verdict;
+    final bestMatch = verdict?['bestMatch'];
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(Insets.gutter),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Center(
+              child: SizedBox(
+                width: 140,
+                height: 140,
+                child: SwProductImage(image: pick.image, radius: Radii.md),
+              ),
+            ),
+            const SizedBox(height: Insets.lg),
+            Text(pick.name, style: AppText.h3),
+            const SizedBox(height: Insets.sm),
+            Row(
+              children: [
+                Text(
+                  pick.price,
+                  style: AppText.bodyStrong.copyWith(
+                    color: AppColors.primary,
+                    fontSize: 16,
+                  ),
+                ),
+                if (pick.originalPrice != null) ...[
+                  const SizedBox(width: Insets.sm),
+                  Text(
+                    pick.originalPrice!,
+                    style: AppText.caption.copyWith(
+                      decoration: TextDecoration.lineThrough,
+                    ),
+                  ),
+                  const SizedBox(width: Insets.sm),
+                  Text(
+                    'SALE',
+                    style: AppText.overline.copyWith(
+                      color: AppColors.danger,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: Insets.sm),
+            Text(
+              [
+                if (pick.store != null) pick.store!,
+                if (pick.color != null) pick.color!,
+                if (pick.category != null) pick.category!,
+                if (!pick.inStock) 'Out of stock',
+              ].join(' • '),
+              style: AppText.caption,
+            ),
+            if (pick.sizes.isNotEmpty) ...[
+              const SizedBox(height: Insets.md),
+              Wrap(
+                spacing: Insets.sm,
+                runSpacing: Insets.sm,
+                children: [
+                  for (final size in pick.sizes)
+                    SwChip(
+                      label: size,
+                      selected: false,
+                      tone: SwChipTone.tinted,
+                      dense: true,
+                    ),
+                ],
+              ),
+            ],
+            if (pick.reason.isNotEmpty) ...[
+              const SizedBox(height: Insets.lg),
+              SwBanner(title: 'WHY RECOMMENDED?', message: pick.reason),
+            ],
+            const SizedBox(height: Insets.lg),
+            if (verdict != null) ...[
+              SwBanner(
+                title: 'BEFORE YOU BUY',
+                message:
+                    '${verdict['verdict'] ?? ''}'
+                    '${bestMatch is Map && bestMatch['with'] != null ? ' — best match: ${bestMatch['with']} (${bestMatch['match']}%)' : ''}',
+              ),
+              const SizedBox(height: Insets.lg),
+            ],
+            FilledButton(
+              onPressed: _checking ? null : _beforeYouBuy,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(46),
+                textStyle: AppText.button,
+                shape: const RoundedRectangleBorder(
+                  borderRadius: Radii.pillRadius,
+                ),
+              ),
+              child: Text(
+                _checking ? 'Checking your wardrobe…' : 'Check with my wardrobe',
+              ),
+            ),
+            const SizedBox(height: Insets.md),
+          ],
+        ),
       ),
     );
   }

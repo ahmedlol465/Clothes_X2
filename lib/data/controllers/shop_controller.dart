@@ -27,10 +27,24 @@ class ShopController extends ChangeNotifier {
       picks = [
         for (final j in rows)
           ShoppingPick(
-            name: '${(j as Map)['name'] ?? ''}',
+            id: '${(j as Map)['id'] ?? ''}',
+            name: '${(j)['name'] ?? ''}',
             price: _formatPrice(j),
             image: '${(j)['imageUrl'] ?? (j)['image'] ?? Img.teeWhite}',
             reason: '${(j)['reason'] ?? ''}',
+            store: (j)['store'] == null ? null : '${(j)['store']}',
+            color: (j)['color'] == null ? null : '${(j)['color']}',
+            category: (j)['category'] == null ? null : '${(j)['category']}',
+            sizes: [
+              for (final v in ((j)['sizes'] as List? ?? const [])) '$v',
+            ],
+            originalPrice: (j)['originalPrice'] == null
+                ? null
+                : _formatPrice({
+                    'price': (j)['originalPrice'],
+                    'currency': (j)['currency'],
+                  }),
+            inStock: (j)['inStock'] != false,
           ),
       ];
       _status.markOnline();
