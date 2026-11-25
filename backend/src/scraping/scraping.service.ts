@@ -1,18 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { ShoppingItem } from '../database/entities/shopping.entity';
 import { ScrapeResult, StoreScraper } from './scraper.types';
-import { ZaraScraper } from './zara.scraper';
-import {
-  CaliceScraper,
-  DocklandScraper,
-  LuxorApparelScraper,
-  OverpoweredScraper,
-  PulpScraper,
-  WaveScraper,
-} from './shopify.scraper';
+
+/** Injection token for the registered store scrapers. */
+export const STORE_SCRAPERS = 'STORE_SCRAPERS';
 
 /**
  * Runs store scrapers on demand and upserts what they return into
@@ -24,19 +18,11 @@ import {
 @Injectable()
 export class ScrapingService {
   private readonly logger = new Logger(ScrapingService.name);
-  private readonly scrapers: StoreScraper[] = [
-    new ZaraScraper(),
-    new WaveScraper(),
-    new DocklandScraper(),
-    new LuxorApparelScraper(),
-    new PulpScraper(),
-    new CaliceScraper(),
-    new OverpoweredScraper(),
-  ];
 
   constructor(
     @InjectRepository(ShoppingItem)
     private readonly productRepo: Repository<ShoppingItem>,
+    @Inject(STORE_SCRAPERS) private readonly scrapers: StoreScraper[],
   ) {}
 
   listStores(): string[] {
