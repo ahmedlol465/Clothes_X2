@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/api/api_config.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
@@ -115,6 +116,13 @@ class FigureVisual extends StatelessWidget {
     Widget fitted(String slot, double top, double left, double size) {
       final item = _slot(slot);
       if (item == null) return const SizedBox.shrink();
+      // Remote product photos go through the cutout endpoint so the plain
+      // studio background is removed and the piece sits on the figure;
+      // bundled assets already have transparent/neutral backgrounds.
+      final raw = '${item['imageUrl'] ?? ''}';
+      final image = raw.startsWith('http')
+          ? '${ApiConfig.baseUrl}/shop/cutout?u=${Uri.encodeComponent(raw)}'
+          : raw;
       return Positioned(
         top: top,
         left: left,
@@ -122,7 +130,7 @@ class FigureVisual extends StatelessWidget {
         height: size,
         child: ClipRRect(
           borderRadius: Radii.smRadius,
-          child: SwProductImage(image: '${item['imageUrl'] ?? ''}'),
+          child: SwProductImage(image: image, background: Colors.transparent),
         ),
       );
     }
