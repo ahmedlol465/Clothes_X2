@@ -16,6 +16,7 @@ import type { Request, Response } from 'express';
 
 import { CurrentUser } from '../../common/decorators/auth.decorators';
 import { multerOptions } from '../../common/storage/storage';
+import { ChatDto } from './dto/chat.dto';
 import { StylistService } from './stylist.service';
 
 @ApiTags('AI Stylist')
@@ -69,7 +70,7 @@ export class StylistController {
   @Post('chat')
   chat(
     @CurrentUser('id') userId: string,
-    @Body() body: Record<string, any>,
+    @Body() body: ChatDto,
   ) {
     return this.stylist.chat(userId, body);
   }
@@ -77,7 +78,7 @@ export class StylistController {
   @Post('chat/stream')
   stream(
     @CurrentUser('id') userId: string,
-    @Body() body: Record<string, any>,
+    @Body() body: ChatDto,
     @Res() res: Response,
   ) {
     return this.stylist.chatStream(userId, body, res);

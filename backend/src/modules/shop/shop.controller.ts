@@ -2,6 +2,11 @@ import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/commo
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../common/decorators/auth.decorators';
+import {
+  BeforeYouBuyDto,
+  OutfitBuilderDto,
+  WishlistEntryDto,
+} from './dto/shop.dto';
 import { ShopService } from './shop.service';
 
 @ApiTags('Shopping')
@@ -33,7 +38,7 @@ export class ShopController {
   @Post('outfit-builder')
   outfitBuilder(
     @CurrentUser('id') userId: string,
-    @Body() body: Record<string, any>,
+    @Body() body: OutfitBuilderDto,
   ) {
     return this.shop.buildOutfitWithinBudget(userId, body);
   }
@@ -41,7 +46,7 @@ export class ShopController {
   @Post('before-you-buy')
   beforeYouBuy(
     @CurrentUser('id') userId: string,
-    @Body() body: Record<string, any>,
+    @Body() body: BeforeYouBuyDto,
   ) {
     return this.shop.beforeYouBuy(userId, body);
   }
@@ -54,7 +59,7 @@ export class ShopController {
   @Post('wishlist')
   addWishlist(
     @CurrentUser('id') userId: string,
-    @Body() body: Record<string, any>,
+    @Body() body: WishlistEntryDto,
   ) {
     return this.shop.addWishlist(userId, body);
   }
