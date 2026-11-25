@@ -425,11 +425,17 @@ class SmartWardrobeApi {
   Future<Map<String, dynamic>> buildOutfitWithinBudget(
     double budget, {
     String occasion = 'casual',
+    String? style,
+    String? gender,
+    List<String> excludeIds = const [],
   }) async =>
       Map<String, dynamic>.from(
         await _client.post('/shop/outfit-builder', {
           'budget': budget,
           'occasion': occasion,
+          if (style != null) 'style': style,
+          if (gender != null) 'gender': gender,
+          if (excludeIds.isNotEmpty) 'excludeIds': excludeIds,
         }),
       );
 

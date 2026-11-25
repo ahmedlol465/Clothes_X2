@@ -6,6 +6,7 @@ import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
+import '../../app.dart' show Routes;
 import '../../data/app_state.dart';
 import '../../data/assets.dart';
 import '../../data/controllers/shop_controller.dart';
@@ -130,6 +131,32 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
                     onTap: _openWishlist,
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: Insets.lg),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+              child: SwCard(
+                onTap: () => Navigator.of(context).pushNamed(Routes.outfitStudio),
+                child: Row(
+                  children: [
+                    const SwIconView(SwIcon.bag, size: 22, color: AppColors.primary),
+                    const SizedBox(width: Insets.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Avatar Stylist', style: AppText.bodyStrong),
+                          Text(
+                            'Build a full outfit on the mannequin from real store pieces',
+                            style: AppText.caption,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SwIconView(SwIcon.chevronRight, size: 18, color: AppColors.textTertiary),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: Insets.lg),

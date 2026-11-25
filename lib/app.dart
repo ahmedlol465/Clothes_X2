@@ -22,6 +22,7 @@ import 'features/stylist/stylist_desk_screen.dart' as desk;
 import 'features/stylist/create_outfit_screen.dart';
 import 'features/stylist/style_avatar_screen.dart';
 import 'features/discover/discover_screen.dart';
+import 'features/outfit_studio/outfit_studio_screen.dart';
 
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
@@ -53,6 +54,7 @@ abstract final class Routes {
   static const String stylist = '/stylist';
   static const String stylistClassic = '/stylist-classic';
   static const String styleAvatar = '/style-avatar';
+  static const String outfitStudio = '/outfit-studio';
 }
 
 
@@ -77,6 +79,7 @@ final Map<String, WidgetBuilder> appRouteTable = {
   Routes.stylist: (_) => const desk.StylistDeskScreen(),
   Routes.stylistClassic: (_) => StylistScreen(),
   Routes.styleAvatar: (_) => const StyleAvatarScreen(),
+  Routes.outfitStudio: (_) => OutfitStudioScreen(),
 };
 
 /// Resolves a named route to its page, including routes that carry arguments.
