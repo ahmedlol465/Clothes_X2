@@ -1,8 +1,9 @@
 /**
  * Model loading and embedding for the local fashion classifier (§9 AI PIPELINE).
  *
- * One model does everything: `Marqo/marqo-fashionCLIP`, a fashion-domain CLIP
- * with Apache-2.0 weights published as two separate ONNX towers. There is no
+ * One model does everything: `Marqo/marqo-fashionSigLIP` (default; marqo-fashionCLIP
+ * with VISION_MODEL=clip), a fashion-domain model with Apache-2.0 weights
+ * published as two separate ONNX towers. There is no
  * second network, no segmentation network and no colour network — the CLIP
  * towers cover "what is this", and pure-JS pixel maths covers "what colour is
  * it" (see color.js).

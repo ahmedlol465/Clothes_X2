@@ -30,7 +30,7 @@ analyzer and the rule-based stylist. It never needs an API key:
 
 | Model | Purpose | Loader |
 | --- | --- | --- |
-| `Marqo/marqo-fashionCLIP` | clothing/non-clothing gate + all attributes (512-dim) | `src/clothing-vision/encoder.ts` |
+| `Marqo/marqo-fashionSigLIP` (default; `VISION_MODEL=clip` uses marqo-fashionCLIP) | clothing/non-clothing gate + all attributes (768-dim) | `src/clothing-vision/encoder.ts` |
 | `Xenova/all-MiniLM-L6-v2` | semantic retrieval (384-dim) | `src/retrieval.ts` |
 
 Both load lazily from `backend/.model-cache` (set explicitly by both loaders).
@@ -42,8 +42,8 @@ only missing files, and never overwrites an existing cache).
 > default `main` revision. The flat transformers.js cache does not record the
 > original commit SHA, so none is hard-coded (no guessing). To lock a revision
 > later, add `revision` to the `from_pretrained`/`pipeline` options in the two
-> loaders. Current `main` SHAs seen during setup: `Marqo/marqo-fashionCLIP` →
-> `44f4c655124ed71e90cbf528d82f508d69d8a81b`, `Xenova/all-MiniLM-L6-v2` →
+> loaders. Current `main` SHAs seen during setup: `Marqo/marqo-fashionSigLIP`
+> is not pinned on the Node side, `Xenova/all-MiniLM-L6-v2` →
 > `751bff37182d3f1213fa05d7196b954e230abad9`.
 
 ## API map (spec §8)

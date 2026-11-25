@@ -178,7 +178,7 @@ cd <repo>
 # B. Local AI models (one-time; ~255 MB, NOT committed to git)
 cd backend
 npm install
-npm run setup:models        # downloads Marqo/marqo-fashionCLIP + all-MiniLM-L6-v2
+npm run setup:models        # downloads Marqo/marqo-fashionSigLIP + all-MiniLM-L6-v2
                             # into backend/.model-cache (exists → skipped, never overwritten)
 
 # C. Node backend (the app talks to this on :3002)
@@ -204,7 +204,7 @@ API key is needed for the core pipeline:
 
 | Model | Purpose | Loaded by |
 | --- | --- | --- |
-| `Marqo/marqo-fashionCLIP` (dtype `q8`) | clothing / non-clothing + all attributes | `backend/src/clothing-vision/encoder.js` |
+| `Marqo/marqo-fashionSigLIP` (dtype `q8`, default; `VISION_MODEL=clip` switches to marqo-fashionCLIP) | clothing / non-clothing + all attributes | `backend/src/clothing-vision/encoder.js` |
 | `Xenova/all-MiniLM-L6-v2` (dtype `q8`) | semantic wardrobe retrieval | `backend/src/retrieval.js` |
 
 Files are cached in `backend/.model-cache/` — the same directory the server
@@ -219,7 +219,7 @@ existing files are never re-downloaded or overwritten.
 > revision ever advances, pin it explicitly later in
 > `backend/src/clothing-vision/prompts.js` (`MODEL.revision`) and
 > `backend/src/retrieval.js` (`EMBED_MODEL` options). Current `main` SHAs at the
-> time of writing: `Marqo/marqo-fashionCLIP` → `44f4c655124ed71e90cbf528d82f508d69d8a81b`,
+> time of writing: `Marqo/marqo-fashionSigLIP` → not pinned on the Node side (the Python side pins `c56244cc`, see `ai-service/clothing_ai/config/pins.py`),
 > `Xenova/all-MiniLM-L6-v2` → `751bff37182d3f1213fa05d7196b954e230abad9`.
 
 ### AI Stylist (all optional, keyless core)
@@ -248,8 +248,7 @@ unaffected.
 3. Run: `flutter run --dart-define=API_BASE_URL=http://192.168.1.5:3002`
 4. Open **Add** → Take Photo / Gallery / Upload Multiple → Save.
    Photos upload to `backend/storage/` (gitignored) and are analyzed on
-   their real pixels: Gemini vision when `GEMINI_API_KEY` is set in
-   `backend/.env`, filename heuristics otherwise.
+   their real pixels by the local models (no Gemini, no API key needed).
 
 The app opens on the splash screen, then onboarding → sign in. **Explore the
 demo** on the login screen skips straight into the tabbed app.
