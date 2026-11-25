@@ -24,6 +24,7 @@ class ClothingItem {
     this.analysisRaw,
     this.analysisRejected = false,
     this.analyzedAt,
+    this.gender,
   });
 
   final String id;
@@ -59,6 +60,9 @@ class ClothingItem {
 
   /// When the analysis was performed, or null.
   final DateTime? analyzedAt;
+
+  /// Male | Female | Unisex from the photo analysis; null when unknown.
+  final String? gender;
 
   /// Compact "Tops • White" style summary used under the product name.
   String get meta => '$category • $color';
@@ -138,6 +142,7 @@ class ClothingItem {
         analysisRaw: analysisRaw,
         analysisRejected: analysisRejected,
         analyzedAt: analyzedAt,
+        gender: gender,
       );
 }
 

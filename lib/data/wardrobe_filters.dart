@@ -8,5 +8,6 @@ const List<String> wardrobeFilterOptions = [
   'Bottoms',
   'Shoes',
   'Outerwear',
+  'Dresses',
   'Accessories',
 ];

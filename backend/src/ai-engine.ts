@@ -64,7 +64,7 @@ const MAX_COMBOS = 400;
  * a wrong-climate belt is a minor issue. Ranking every slot with the same
  * climate weight let a linen summer blazer top a snow outfit.
  */
-const CLIMATE_WEIGHT = { outerwear: 0.55, shoes: 0.3, top: 0.28, bottom: 0.25, accessory: 0.15 };
+const CLIMATE_WEIGHT = { outerwear: 0.55, dress: 0.4, shoes: 0.3, top: 0.28, bottom: 0.25, accessory: 0.15 };
 const CLIMATE_FLOOR = 40; // below this the piece is actively wrong for the weather
 
 function rankSlot(pool: any, slot: any, ctx: any = {}) {
@@ -117,7 +117,28 @@ function beamSearch(pool: any, ctx: any = {}) {
   let beams = [{ pieces: [], score: 0 }];
   const anchorSlot = anchor ? tax.slotOf(anchor) : null;
 
+  const hasDress = (b) => b.pieces.some((p) => tax.slotOf(p) === 'dress');
   for (const { slot, required } of tax.OUTFIT_SLOTS) {
+    // A dress is a whole look: beams that hold one skip top and bottom, and
+    // beams without one never get a dress added later.
+    if (slot === 'dress') {
+      const dresses = anchor && anchorSlot === 'dress' ? [anchor] : rankSlot(pool, 'dress', ctx);
+      // An anchored top/bottom means the user wants a two-piece look.
+      const twoPieceAnchor = anchorSlot === 'top' || anchorSlot === 'bottom';
+      if (dresses.length && !twoPieceAnchor) {
+        const withDress = [];
+        for (const beam of beams) {
+          for (const d of dresses) {
+            const pieces = [...beam.pieces, d];
+            withDress.push({ pieces, score: scoring.scoreOutfit(pieces, scoreCtx).match });
+          }
+        }
+        // Keep the plain beams too, so wardrobes with tops and bottoms still get two-piece looks.
+        beams = anchorSlot === 'dress' ? withDress : [...beams, ...withDress].sort((a, b) => b.score - a.score).slice(0, BEAM_WIDTH * 2);
+      }
+      continue;
+    }
+    if ((slot === 'top' || slot === 'bottom') && beams.every(hasDress)) continue;
     // Outerwear is only relevant when it is cold or the occasion is dressy -
     // unless the user explicitly asked for an outer layer, in which case
     // dropping it would answer a different question than the one asked.
@@ -140,6 +161,10 @@ function beamSearch(pool: any, ctx: any = {}) {
 
     const next = [];
     for (const beam of beams) {
+      if ((slot === 'top' || slot === 'bottom') && hasDress(beam)) {
+        next.push(beam); // dress already covers this slot
+        continue;
+      }
       for (const candidate of candidates) {
         // Never pick the same garment twice.
         if (beam.pieces.some((p) => p.id === candidate.id)) continue;
@@ -175,6 +200,14 @@ function generateOutfits(wardrobe: any[] = [], opts: any = {}) {
   let pool = (Array.isArray(wardrobe) ? wardrobe : []).filter(
     (i) => i && !i.archived && !excludeIds.has(i.id),
   );
+  // The user's gender (set on onboarding) decides which pieces are shown.
+  // Unisex and unlabelled pieces always stay.
+  const wantGender = String(styleProfile.gender || '').toLowerCase();
+  if (wantGender === 'male' || wantGender === 'female') {
+    const opposite = wantGender === 'male' ? 'female' : 'male';
+    const filtered = pool.filter((i) => String(i.gender || '').toLowerCase() !== opposite);
+    if (filtered.length) pool = filtered;
+  }
   if (!pool.length) return [];
 
   // Anchor: build every outfit around one specific piece when asked. A piece
@@ -947,7 +980,7 @@ function cap(s) {
  */
 async function analyzeClothing(input: any = {}) {
   const overrides = {};
-  for (const key of ['category', 'color', 'style', 'pattern', 'material', 'season', 'formality']) {
+  for (const key of ['category', 'color', 'style', 'pattern', 'material', 'season', 'formality', 'gender']) {
     if (input[key]) overrides[key] = input[key];
   }
 
@@ -1206,7 +1239,9 @@ function packingList(wardrobe: any[] = [], trip: any = {}) {
     items: chosen,
     outfitsEstimate,
     slotsFilled: [...slots],
-    complete: tax.requiredSlots().every((s) => chosen.some((i) => tax.slotOf(i) === s)),
+    complete: tax.requiredSlots()
+      .filter((s) => !(chosen.some((i) => tax.slotOf(i) === 'dress') && (s === 'top' || s === 'bottom')))
+      .every((s) => chosen.some((i) => tax.slotOf(i) === s)),
     message: `${chosen.length} pieces cover ${outfitsEstimate} outfits across ${days} days without repeating a look.`,
   };
 }

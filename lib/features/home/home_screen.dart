@@ -94,6 +94,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _Greeting(
                 name: profile?.name ?? 'there',
                 avatarUrl: profile?.avatarUrl,
+                onAvatarTap: () => widget.onOpenTab(ShellTab.profile),
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
@@ -217,10 +218,11 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _Greeting extends StatelessWidget {
-  const _Greeting({required this.name, this.avatarUrl});
+  const _Greeting({required this.name, this.avatarUrl, this.onAvatarTap});
 
   final String name;
   final String? avatarUrl;
+  final VoidCallback? onAvatarTap;
 
   static String _greetingFor(DateTime now) {
     final hour = now.hour;
@@ -268,11 +270,16 @@ class _Greeting extends StatelessWidget {
               ],
             ),
           ),
-          SwAvatar(
-            image: avatarUrl ?? '',
-            size: 44,
-            // Full name so the fallback initial color matches the profile page.
-            name: name,
+          // Tapping the profile picture opens the Profile tab.
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onAvatarTap,
+            child: SwAvatar(
+              image: avatarUrl ?? '',
+              size: 44,
+              // Full name so the fallback initial color matches the profile page.
+              name: name,
+            ),
           ),
         ],
       ),

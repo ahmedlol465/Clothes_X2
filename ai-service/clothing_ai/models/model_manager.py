@@ -96,7 +96,14 @@ class ModelManager:
             return self._locks.setdefault(name, threading.Lock())
 
     def _revision_for(self, model_id: str) -> str:
-        """Best-effort commit sha, so results name an exact weight set."""
+        """The pinned commit when we have one, else the newest sha (best effort)."""
+        pinned = {
+            self._settings.detector_model: self._settings.detector_revision,
+            self._settings.segmenter_model: self._settings.segmenter_revision,
+            _hf_repo_from(self._settings.fashion_model): self._settings.fashion_revision,
+        }.get(model_id)
+        if pinned:
+            return pinned[:12]
         try:
             from huggingface_hub import HfApi
 
@@ -166,8 +173,12 @@ class ModelManager:
         from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
         model_id = self._settings.detector_model
-        processor = AutoImageProcessor.from_pretrained(model_id)
-        model = AutoModelForObjectDetection.from_pretrained(model_id)
+        processor = AutoImageProcessor.from_pretrained(
+            model_id, revision=self._settings.detector_revision
+        )
+        model = AutoModelForObjectDetection.from_pretrained(
+            model_id, revision=self._settings.detector_revision
+        )
         model.eval()
         model.to(self._device)
         return DetectorHandle(
@@ -184,8 +195,12 @@ class ModelManager:
         from transformers import Sam2Model, Sam2Processor
 
         model_id = self._settings.segmenter_model
-        processor = Sam2Processor.from_pretrained(model_id)
-        model = Sam2Model.from_pretrained(model_id)
+        processor = Sam2Processor.from_pretrained(
+            model_id, revision=self._settings.segmenter_revision
+        )
+        model = Sam2Model.from_pretrained(
+            model_id, revision=self._settings.segmenter_revision
+        )
         model.eval()
         model.to(self._device)
         image_size = int(getattr(processor, "image_size", None) or 1024)
@@ -203,12 +218,42 @@ class ModelManager:
         import open_clip
 
         model_id = self._settings.fashion_model
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            model_id, cache_dir=str(self._settings.model_cache_dir / "open_clip")
-        )
+        load_id = model_id
+        rev = self._settings.fashion_revision
+        if rev and model_id.startswith("hf-hub:"):
+            # open_clip cannot pick a commit from an hf-hub id, so fetch the exact
+            # commit ourselves (cached in the normal HF cache) and load that folder.
+            from huggingface_hub import snapshot_download
+
+            load_id = "local-dir:" + snapshot_download(
+                _hf_repo_from(model_id),
+                revision=rev,
+                allow_patterns=[
+                    "open_clip_config.json",
+                    "open_clip_model.safetensors",
+                    "tokenizer*",
+                    "spiece.model",
+                    "special_tokens_map.json",
+                    "preprocessor_config.json",
+                    "config.json",
+                ],
+            )
+        try:
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                load_id, cache_dir=str(self._settings.model_cache_dir / "open_clip")
+            )
+            tokenizer = open_clip.get_tokenizer(load_id)
+        except Exception:
+            if load_id == model_id:
+                raise
+            # Old open_clip without local-dir support: use the newest hf-hub copy.
+            load_id = model_id
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                load_id, cache_dir=str(self._settings.model_cache_dir / "open_clip")
+            )
+            tokenizer = open_clip.get_tokenizer(load_id)
         model.eval()
         model.to(self._device)
-        tokenizer = open_clip.get_tokenizer(model_id)
 
         embed_dim = int(getattr(model, "embed_dim", 0) or _infer_embed_dim(model))
         return FashionHandle(

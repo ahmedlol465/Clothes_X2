@@ -10,26 +10,28 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "UNLICENSED" }
 
-# Versions below were resolved against the live PyPI index on 2026-09-29.
+# Pins relaxed to minimums so the install works on Windows and other Python versions.
+# Tested working: torch 2.14.1, transformers 5.20.2, numpy 2.2.6, Python 3.10.
 # See MODEL_LICENSES.md for the licence audit of every model dependency.
 dependencies = [
     # torchvision pins an exact torch, so the pair must move together.
-    "torch==2.14.0",
-    "torchvision==0.29.0",
-    "open_clip_torch==3.3.0",
-    "transformers==5.17.0",
-    "accelerate==1.15.0",
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "open_clip_torch>=3.0",
+    "transformers>=5.0",
+    "accelerate>=1.0",
     "huggingface-hub>=0.34",
     "timm>=1.0.17",
-    "numpy==2.5.3",
-    "opencv-python==4.14.0.94",
-    "scikit-learn==1.9.1",
-    "pillow==12.3.0",
-    "fastapi==0.141.1",
-    "uvicorn[standard]==0.54.0",
-    "python-multipart==0.0.32",
-    "pydantic==2.13.5",
-    "pydantic-settings==2.15.0",
+    "numpy>=1.26",
+    "opencv-python>=4.9",
+    "scikit-learn>=1.4",
+    "pillow>=10.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "scipy>=1.11",
     "pyyaml>=6.0",
     "structlog>=24.1",
 ]

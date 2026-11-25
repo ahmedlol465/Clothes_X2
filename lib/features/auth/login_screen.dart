@@ -74,7 +74,12 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (ok) {
-      Navigator.of(context).pushNamedAndRemoveUntil(Routes.shell, (_) => false);
+      Navigator.of(context).pushNamedAndRemoveUntil((widget._accountController.profile?.gender == null ||
+              widget._accountController.profile!.favoriteColors.isEmpty ||
+              widget._accountController.profile!.heightCm == null ||
+              widget._accountController.profile!.weightKg == null)
+          ? Routes.bodyProfile
+          : Routes.shell, (_) => false);
     } else if (widget._accountController.lastError != null) {
       _toast(context, widget._accountController.lastError!);
     }
@@ -244,7 +249,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (ok) {
-      Navigator.of(context).pushNamedAndRemoveUntil(Routes.shell, (_) => false);
+      // New accounts pick gender/height/weight (required) before Home.
+      Navigator.of(context).pushNamedAndRemoveUntil(Routes.bodyProfile, (_) => false);
     } else {
       _toast(
         context,

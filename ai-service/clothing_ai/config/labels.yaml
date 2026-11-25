@@ -50,6 +50,7 @@ attributes:
       - { value: blazer,   group: outer,   prompt: "a blazer suit jacket" }
       - { value: vest,     group: outer,   prompt: "a sleeveless vest" }
       - { value: dress,    group: dress,   prompt: "a dress" }
+      - { value: jumpsuit, group: dress,   prompt: "a one piece jumpsuit" }
       - { value: skirt,    group: bottom,  prompt: "a skirt" }
       - { value: jeans,    group: bottom,  prompt: "a pair of jeans" }
       - { value: pants,    group: bottom,  prompt: "a pair of trousers" }

@@ -1,8 +1,9 @@
 /**
  * Model loading and embedding for the local fashion classifier (§9 AI PIPELINE).
  *
- * One model does everything: `Marqo/marqo-fashionCLIP`, a fashion-domain CLIP
- * with Apache-2.0 weights published as two separate ONNX towers. There is no
+ * One model does everything: `Marqo/marqo-fashionSigLIP` (default; marqo-fashionCLIP
+ * with VISION_MODEL=clip), a fashion-domain model with Apache-2.0 weights
+ * published as two separate ONNX towers. There is no
  * second network, no segmentation network and no colour network — the CLIP
  * towers cover "what is this", and pure-JS pixel maths covers "what colour is
  * it" (see color.js).
@@ -78,8 +79,8 @@ async function init() {
 
   try {
     const [vision, text, processor, tokenizer] = await Promise.all([
-      tf.CLIPVisionModelWithProjection.from_pretrained(P.MODEL.id, { dtype: P.MODEL.dtype }),
-      tf.CLIPTextModelWithProjection.from_pretrained(P.MODEL.id, { dtype: P.MODEL.dtype }),
+      (P.MODEL.family === 'siglip' ? tf.SiglipVisionModel : tf.CLIPVisionModelWithProjection).from_pretrained(P.MODEL.id, { dtype: P.MODEL.dtype }),
+      (P.MODEL.family === 'siglip' ? tf.SiglipTextModel : tf.CLIPTextModelWithProjection).from_pretrained(P.MODEL.id, { dtype: P.MODEL.dtype }),
       tf.AutoProcessor.from_pretrained(P.MODEL.id),
       tf.AutoTokenizer.from_pretrained(P.MODEL.id),
     ]);
@@ -126,7 +127,7 @@ async function embedSentences(sentences) {
     const batch = sentences.slice(i, i + MAX_PROMPTS_PER_BATCH);
     const ids = state.tokenizer(batch, {
       padding: 'max_length',
-      max_length: CONTEXT_LENGTH,
+      max_length: P.MODEL.contextLength,
       truncation: true,
     });
     const out = await state.text(ids);
@@ -168,16 +169,53 @@ async function buildBank() {
     vec: await embedSentences(sentences(entry.phrases, templates)),
   })));
 
-  const [garments, nonClothing, styles, seasons, patterns, materials] = await Promise.all([
+  const [garments, nonClothing, styles, genders, seasons, patterns, materials] = await Promise.all([
     build(P.GARMENTS, P.GARMENT_TEMPLATES),
     build(P.NON_CLOTHING, P.NEGATIVE_TEMPLATES),
     build(P.STYLES, P.GARMENT_TEMPLATES),
+    build(P.GENDERS, P.GARMENT_TEMPLATES),
     build(P.SEASONS, P.GARMENT_TEMPLATES),
     build(P.PATTERNS, P.GARMENT_TEMPLATES),
     build(P.MATERIALS, P.GARMENT_TEMPLATES),
   ]);
 
-  return { garments, nonClothing, styles, seasons, patterns, materials };
+  return { garments, nonClothing, styles, genders, seasons, patterns, materials };
+}
+
+/**
+ * Disk cache for the label bank. Building it embeds ~1000 prompts and takes
+ * tens of seconds on a CPU, so without a cache the first upload after every
+ * restart waits for it. The key covers the model and every prompt, so editing
+ * prompts.ts or switching model rebuilds it. Lives in .model-cache (git-ignored).
+ */
+function bankCachePath() {
+  const crypto = require('node:crypto');
+  const key = crypto.createHash('sha1')
+    .update(JSON.stringify([P.MODEL.id, P.MODEL.dtype, P.GARMENT_TEMPLATES, P.NEGATIVE_TEMPLATES,
+      P.GARMENTS, P.NON_CLOTHING, P.STYLES, P.GENDERS, P.SEASONS, P.PATTERNS, P.MATERIALS]))
+    .digest('hex').slice(0, 16);
+  return path.join(__dirname, '..', '..', '.model-cache', `label-bank-${key}.json`);
+}
+
+async function readBankCache() {
+  try {
+    const b = JSON.parse(fs.readFileSync(bankCachePath(), 'utf8'));
+    return b && Array.isArray(b.garments) && b.garments.length ? b : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBankCache(b) {
+  try {
+    const file = bankCachePath();
+    if (fs.existsSync(file)) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(b));
+    fs.renameSync(`${file}.tmp`, file);
+  } catch {
+    /* a cache that cannot be written only costs time */
+  }
 }
 
 /** The label bank, built on first use. Concurrent callers share one build. */
@@ -185,7 +223,8 @@ async function bank() {
   if (state.bank) return state.bank;
   if (state.bankPromise) return state.bankPromise;
   state.bankPromise = (async () => {
-    state.bank = await buildBank();
+    state.bank = (await readBankCache()) || (await buildBank());
+    writeBankCache(state.bank);
     state.warm = true;
     return state.bank;
   })();
@@ -235,7 +274,7 @@ async function status() {
     licence: P.MODEL.licence,
     dtype: P.MODEL.dtype,
     dim: state.dim,
-    promptBankSize: P.GARMENTS.length + P.NON_CLOTHING.length + P.STYLES.length
+    promptBankSize: P.GARMENTS.length + P.NON_CLOTHING.length + P.GENDERS.length + P.STYLES.length
       + P.SEASONS.length + P.PATTERNS.length + P.MATERIALS.length,
     cacheDir: path.join(__dirname, '..', '..', '.model-cache'),
     cached: fs.existsSync(path.join(__dirname, '..', '..', '.model-cache')),

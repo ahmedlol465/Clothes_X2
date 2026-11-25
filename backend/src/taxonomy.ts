@@ -349,6 +349,8 @@ function seasonInLabel(label) {
 /** Slots an outfit should fill, in the order they should be filled. */
 const OUTFIT_SLOTS = [
   { slot: 'outerwear', categories: ['Outerwear'], required: false },
+  // One-piece: a dress replaces the top + bottom pair (see beamSearch).
+  { slot: 'dress', categories: ['Dresses'], required: false },
   { slot: 'top', categories: ['Tops'], required: true },
   { slot: 'bottom', categories: ['Bottoms'], required: true },
   { slot: 'shoes', categories: ['Shoes'], required: true },

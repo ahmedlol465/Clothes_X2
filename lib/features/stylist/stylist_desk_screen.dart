@@ -486,22 +486,19 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
       itemIds: ids,
     );
     setState(() => _savingOutfit = true);
-    final result = await AppState.instance.createOutfit(
+    final result = await AppState.instance.toggleSavedOutfit(
       name: candidate.name,
       itemIds: ids,
       occasion: candidate.occasion,
     );
     if (!mounted) return;
     setState(() => _savingOutfit = false);
-    switch (result) {
-      case SaveOutfitResult.saved:
-        _notify('Outfit saved.');
-      case SaveOutfitResult.duplicate:
-        _notify('Outfit already saved.');
-      case SaveOutfitResult.failed:
-        _notify(
-          AppState.instance.lastError ?? 'Backend offline — try again shortly.',
-        );
+    if (result == null) {
+      _notify(
+        AppState.instance.lastError ?? 'Backend offline — try again shortly.',
+      );
+    } else {
+      _notify(result ? 'Outfit saved.' : 'Removed from Saved.');
     }
   }
 

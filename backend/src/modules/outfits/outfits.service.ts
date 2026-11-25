@@ -167,6 +167,27 @@ export class OutfitsService {
       throw new BadRequestException('None of those items are in your wardrobe.');
     }
 
+    // Saving the same set twice returns the existing outfit instead of a copy.
+    const key = items.map((i) => i.id).sort().join('|');
+    const mine = await this.outfitRepo.find({
+      where: { userId },
+      relations: { outfitItems: true },
+    });
+    const dup = mine.find(
+      (o) =>
+        (o.outfitItems ?? []).map((l) => l.itemId).sort().join('|') === key,
+    );
+    if (dup) {
+      return {
+        outfit: {
+          ...dup,
+          itemIds: items.map((item) => item.id),
+          pieces: items.map((item) => item.name),
+        },
+        duplicate: true,
+      };
+    }
+
     const compat = aiEngine.calculateCompatibility(
       items.length >= 2 ? items : [],
       {

@@ -21,6 +21,7 @@ export interface ClothingAnalyzerInput {
   material?: string;
   season?: string;
   formality?: string;
+  gender?: string;
 }
 
 /**
@@ -40,6 +41,10 @@ export interface ClothingAnalyzerResult {
   material?: string;
   season?: string;
   formality?: string;
+  gender?: string;
+  retake?: string[];
+  isOnePiece?: boolean;
+  isWinterWear?: boolean;
   suggestedName?: string;
   confidence?: number;
   confidenceKind?: string;

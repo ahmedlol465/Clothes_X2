@@ -117,6 +117,21 @@ async function classify(vec) {
 
   const style = decide(ranked(vec, b.styles));
   const season = decide(ranked(vec, b.seasons));
+  const genderDecision = decide(ranked(vec, b.genders));
+  // Male/Female only when decisive; anything unclear is reported as Unisex.
+  const gender = (() => {
+    const d = genderDecision;
+    const v = d.winner.value;
+    const sure = v !== 'Unisex' && d.winnerShare >= GATE.genderShare;
+    return {
+      value: sure ? v : 'Unisex',
+      share: Number(d.winnerShare.toFixed(4)),
+      rawTop: v,
+      runnerUp: d.runnerUp ? d.runnerUp.value : null,
+      runnerUpShare: Number((d.runnerUpShare || 0).toFixed(4)),
+      confident: sure || (v === 'Unisex' && d.clear),
+    };
+  })();
   const pattern = decide(ranked(vec, b.patterns));
   const material = decide(ranked(vec, b.materials));
 
@@ -164,6 +179,7 @@ async function classify(vec) {
     },
     style: attr(style),
     season: attr(season),
+    gender,
     pattern: attr(pattern),
     material: attr(material),
   };

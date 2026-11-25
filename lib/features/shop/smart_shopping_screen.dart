@@ -720,7 +720,7 @@ class _CatalogSection extends StatefulWidget {
 
 class _CatalogSectionState extends State<_CatalogSection> {
   static const _categories = [
-    'All', 'Tops', 'Bottoms', 'Shoes', 'Outerwear', 'Accessories',
+    'All', 'Tops', 'Bottoms', 'Dresses', 'Shoes', 'Outerwear', 'Accessories',
   ];
 
   String _category = 'All';

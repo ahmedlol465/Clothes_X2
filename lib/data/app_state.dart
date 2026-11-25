@@ -207,6 +207,21 @@ class AppState extends ChangeNotifier {
   }) =>
       _outfits.createOutfit(name: name, itemIds: itemIds, occasion: occasion);
 
+  Outfit? findSavedOutfit(Outfit candidate) => _outfits.findSaved(candidate);
+  Future<bool?> toggleSavedOutfit({
+    required String name,
+    required List<String> itemIds,
+    String occasion = 'Casual',
+  }) =>
+      _outfits.toggleSaved(name: name, itemIds: itemIds, occasion: occasion);
+  Future<bool?> toggleFavoriteOutfit({
+    required String name,
+    required List<String> itemIds,
+    String occasion = 'Casual',
+  }) =>
+      _outfits.toggleFavoriteFor(
+          name: name, itemIds: itemIds, occasion: occasion);
+
   Future<bool> toggleFavorite(Outfit outfit) => _outfits.toggleFavorite(outfit);
   Future<bool> outfitFeedback(Outfit outfit, {int rating = 5}) =>
       _outfits.feedback(outfit, rating: rating);

@@ -30,11 +30,28 @@ class WardrobeController extends ChangeNotifier {
     loading = true;
     notifyListeners();
     try {
-      final res = await _api.wardrobeItems(search: search, category: category);
-      items = [
+      // The API returns one page at a time (50 max). Read every page so no
+      // item is missing from the wardrobe or the outfit picker.
+      var res = await _api.wardrobeItems(search: search, category: category);
+      final all = <Map<String, dynamic>>[
         for (final j in (res['items'] as List))
-          clothingItemFromJson(Map<String, dynamic>.from(j as Map)),
+          Map<String, dynamic>.from(j as Map),
       ];
+      final total = (res['total'] as num?)?.toInt() ?? all.length;
+      var page = 1;
+      while (all.length < total && page < 20) {
+        page++;
+        final next = await _api.wardrobeItems(
+          search: search,
+          category: category,
+          page: page,
+        );
+        final more = (next['items'] as List? ?? const []);
+        if (more.isEmpty) break;
+        all.addAll([for (final j in more) Map<String, dynamic>.from(j as Map)]);
+        res = next;
+      }
+      items = [for (final j in all) clothingItemFromJson(j)];
       final cats = (res['categories'] as List?)?.map((c) => '$c').toList();
       if (cats != null && cats.isNotEmpty) filters = cats;
       _status.markOnline();
@@ -78,11 +95,17 @@ class WardrobeController extends ChangeNotifier {
         }
         rethrow;
       }
-      return (url: url, analysis: <String, dynamic>{}, source: 'heuristic');
-    } catch (_) {
-      return (url: url, analysis: <String, dynamic>{}, source: 'heuristic');
+      // No status: the request timed out or never reached the server. Do not
+      // fill in default tags (Tops / White / Cotton); ask for a retry instead.
+      throw ApiException(analysisFailedMessage);
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException(analysisFailedMessage);
     }
   }
+
+  static const analysisFailedMessage =
+      'The analysis took too long or could not reach the server. Tap the photo to retry.';
 
   Future<ClothingItem> addItem(Map<String, dynamic> item) async {
     final res = await _api.createWardrobeItem(item);

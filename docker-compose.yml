@@ -1,0 +1,14 @@
+# Runs the garment-cutout service the backend uses for clothing colour.
+#   docker compose up ai-service
+# Then start the backend with AI_SERVICE_URL=http://localhost:8000 (the default).
+# Needs about 1 GB RAM; the first photo is slow while the models load.
+services:
+  ai-service:
+    build: ./ai-service
+    ports:
+      - "8000:8000"
+    volumes:
+      - model-cache:/models
+    restart: unless-stopped
+volumes:
+  model-cache:

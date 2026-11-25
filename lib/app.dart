@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'features/auth/login_screen.dart';
 import 'features/onboarding/onboarding_screen.dart';
+import 'features/onboarding/body_profile_screen.dart';
 import 'features/shell/main_shell.dart';
 import 'features/splash/splash_screen.dart';
 import 'features/wardrobe/add_clothing_screen.dart';
@@ -34,6 +35,7 @@ import 'core/icons/sw_icon.dart';
 abstract final class Routes {
   static const String splash = '/';
   static const String onboarding = '/onboarding';
+  static const String bodyProfile = '/body-profile';
   static const String login = '/login';
   static const String signUp = '/signup';
   static const String shell = '/shell';
@@ -63,6 +65,7 @@ abstract final class Routes {
 final Map<String, WidgetBuilder> appRouteTable = {
   Routes.splash: (_) => SplashScreen(),
   Routes.onboarding: (_) => const OnboardingScreen(),
+  Routes.bodyProfile: (_) => BodyProfileScreen(),
   Routes.login: (_) => LoginScreen(),
   Routes.signUp: (_) => SignUpScreen(),
   Routes.shell: (_) => MainShell(),

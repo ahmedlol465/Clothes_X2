@@ -13,6 +13,9 @@ export function buildDataSourceOptions(config: {
     type: 'mysql',
     entities: ALL_ENTITIES,
     migrations: [__dirname + '/migrations/*{.ts,.js}'],
+    // Pending migrations (for example the wardrobe gender column) apply on boot.
+    // They are idempotent, so a database that already has the change is untouched.
+    migrationsRun: true,
     synchronize: config.get<boolean>('database.synchronize') ?? true,
     logging: config.get<boolean>('database.logging') ?? false,
     host: config.get<string>('database.host') ?? '127.0.0.1',

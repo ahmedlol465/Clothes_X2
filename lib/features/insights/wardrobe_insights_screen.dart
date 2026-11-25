@@ -126,6 +126,7 @@ class _StatStrip extends StatelessWidget {
       ('Items', '${items.length}'),
       ('Tops', '${count('Tops')}'),
       ('Bottoms', '${count('Bottoms')}'),
+      ('Dresses', '${count('Dresses')}'),
       ('Shoes', '${count('Shoes')}'),
       ('Acc.', '${count('Accessories')}'),
     ];

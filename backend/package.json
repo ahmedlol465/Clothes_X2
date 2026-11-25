@@ -26,6 +26,7 @@
     "embeddings:install": "npm install @huggingface/transformers",
     "setup:models": "node scripts/setup-models.js",
     "vision:selftest": "node scripts/vision-selftest.js",
+    "vision:eval": "node scripts/vision-eval.js",
     "scrape": "ts-node -r tsconfig-paths/register src/scraping/scrape.cli.ts"
   },
   "optionalDependencies": {
