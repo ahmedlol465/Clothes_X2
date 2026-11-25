@@ -214,14 +214,19 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
   String _itemKey(ClothingItem item, int index) =>
       item.id.isNotEmpty ? item.id : '${item.category}#$index';
 
-  Offset _defaultItemOffset(String category, Size canvas) {
+  Offset _defaultItemOffset(String category, Size canvas, int occurrence) {
     final alignment = _getAlignmentForCategory(category);
     final availableWidth = canvas.width - _canvasItemWidth;
     final availableHeight = canvas.height - _canvasItemHeight;
     if (availableWidth <= 0 || availableHeight <= 0) return Offset.zero;
+    // Items in the same category share one anchor; stagger each repeat so
+    // duplicates never stack exactly on top of each other.
+    final stagger = occurrence * 26.0;
     return Offset(
-      (alignment.x + 1) / 2 * availableWidth,
-      (alignment.y + 1) / 2 * availableHeight,
+      ((alignment.x + 1) / 2 * availableWidth + stagger)
+          .clamp(0.0, availableWidth),
+      ((alignment.y + 1) / 2 * availableHeight + stagger)
+          .clamp(0.0, availableHeight),
     );
   }
 
@@ -237,10 +242,15 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
     );
   }
 
-  Offset _itemOffset(ClothingItem item, int index, Size canvas) {
+  Offset _itemOffset(
+    ClothingItem item,
+    int index,
+    Size canvas,
+    int occurrence,
+  ) {
     final stored = _itemPositions[_itemKey(item, index)];
     return _clampItemOffset(
-      stored ?? _defaultItemOffset(item.category, canvas),
+      stored ?? _defaultItemOffset(item.category, canvas, occurrence),
       canvas,
     );
   }
@@ -257,11 +267,12 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
   void _startItemDrag(
     ClothingItem item,
     int index,
+    int occurrence,
     DragStartDetails details,
   ) {
     if (_canvasSize.width <= 0 || _canvasSize.height <= 0) return;
     final key = _itemKey(item, index);
-    _itemPositions[key] = _itemOffset(item, index, _canvasSize);
+    _itemPositions[key] = _itemOffset(item, index, _canvasSize, occurrence);
     _activeItemKey = key;
     _draggingItemKey = key;
     _dragStartItemOffset = _itemPositions[key];
@@ -349,22 +360,25 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
   /// Positions a garment on the canvas based on its category, so a look reads
   /// top-to-bottom like a real flat lay.
   Alignment _getAlignmentForCategory(String category) {
+    // Zones on the canvas (item is 110x162 incl. label): each category gets
+    // its own corner/side so a full outfit never overlaps, and the top-right
+    // stays clear of the Match badge.
     switch (category.toLowerCase()) {
       case 'tops':
       case 'top':
-        return const Alignment(-0.6, -0.7);
-      case 'bottoms':
-      case 'bottom':
-        return const Alignment(0.6, 0.1);
-      case 'shoes':
-        return const Alignment(0.0, 0.8);
-      case 'dress':
-        return const Alignment(0.0, 0.0);
-      case 'outerwear':
-        return const Alignment(-0.8, 0.0);
+        return const Alignment(-0.85, -0.8); // top-left
       case 'accessories':
       case 'accessory':
-        return const Alignment(0.8, -0.6);
+        return const Alignment(0.0, -0.8); // top-center
+      case 'outerwear':
+        return const Alignment(0.93, -0.45); // top-right, below the badge
+      case 'bottoms':
+      case 'bottom':
+        return const Alignment(0.93, 1.0); // bottom-right
+      case 'shoes':
+        return const Alignment(-0.85, 1.0); // bottom-left
+      case 'dress':
+        return const Alignment(-0.05, -0.25); // center
       default:
         return const Alignment(0.0, 0.0);
     }
@@ -574,10 +588,28 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
             final canvasSize = constraints.biggest;
             _canvasSize = canvasSize;
             final items = outfit.items;
-            final entries = <({ClothingItem item, int index, String key})>[
-              for (var i = 0; i < items.length; i++)
-                (item: items[i], index: i, key: _itemKey(items[i], i)),
-            ];
+            final seenCategories = <String, int>{};
+            final entries =
+                <
+                  ({
+                    ClothingItem item,
+                    int index,
+                    String key,
+                    int occurrence,
+                  })
+                >[
+                  for (var i = 0; i < items.length; i++)
+                    (
+                      item: items[i],
+                      index: i,
+                      key: _itemKey(items[i], i),
+                      occurrence: seenCategories.update(
+                        items[i].category.toLowerCase(),
+                        (n) => n + 1,
+                        ifAbsent: () => 0,
+                      ),
+                    ),
+                ];
             final activeIndex = entries.indexWhere(
               (entry) => entry.key == _activeItemKey,
             );
@@ -600,15 +632,29 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
                 ),
                 for (final entry in entries)
                   Positioned(
-                    left: _itemOffset(entry.item, entry.index, canvasSize).dx,
-                    top: _itemOffset(entry.item, entry.index, canvasSize).dy,
+                    left: _itemOffset(
+                      entry.item,
+                      entry.index,
+                      canvasSize,
+                      entry.occurrence,
+                    ).dx,
+                    top: _itemOffset(
+                      entry.item,
+                      entry.index,
+                      canvasSize,
+                      entry.occurrence,
+                    ).dy,
                     child: _CanvasClothingItem(
                       key: ValueKey(entry.key),
                       item: entry.item,
                       palette: palette,
                       onTap: () => _handleItemTap(entry.item, entry.index),
-                      onPanStart: (details) =>
-                          _startItemDrag(entry.item, entry.index, details),
+                      onPanStart: (details) => _startItemDrag(
+                        entry.item,
+                        entry.index,
+                        entry.occurrence,
+                        details,
+                      ),
                       onPanUpdate: _moveItem,
                       onPanEnd: () => _endItemDrag(),
                       onPanCancel: () => _endItemDrag(),
@@ -1171,21 +1217,25 @@ class _CanvasClothingItem extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: palette.surface,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: palette.border),
-            ),
-            child: Text(
-              item.name,
-              style: AppText.labelStrong.copyWith(
-                color: palette.textPrimary,
-                fontSize: 12,
+          SizedBox(
+            width: 110,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: palette.surface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: palette.border),
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              child: Text(
+                item.name,
+                style: AppText.labelStrong.copyWith(
+                  color: palette.textPrimary,
+                  fontSize: 12,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
         ],
