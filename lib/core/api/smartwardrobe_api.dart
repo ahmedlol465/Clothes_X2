@@ -437,6 +437,25 @@ class SmartWardrobeApi {
     await _client.post('/shop/wishlist', entry);
   }
 
+  /// Browseable catalog (`GET /shop/products`) with optional filters.
+  Future<List<dynamic>> shopProducts({
+    String? category,
+    String? color,
+    double? maxPrice,
+    String? q,
+  }) async {
+    final query = <String, String>{
+      if (category != null && category.isNotEmpty) 'category': category,
+      if (color != null && color.isNotEmpty) 'color': color,
+      if (maxPrice != null) 'maxPrice': '$maxPrice',
+      if (q != null && q.isNotEmpty) 'q': q,
+    };
+    final res = Map<String, dynamic>.from(
+      await _client.get('/shop/products', query),
+    );
+    return List<dynamic>.from(res['products'] as List? ?? const []);
+  }
+
   Future<List<dynamic>> wishlist() async =>
       List<dynamic>.from(
         (Map<String, dynamic>.from(await _client.get('/shop/wishlist')))['wishlist']

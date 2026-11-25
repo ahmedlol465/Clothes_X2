@@ -156,6 +156,11 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: Insets.xl),
+            _CatalogSection(
+              shopController: widget._shopController,
+              onOpenProduct: _openProduct,
+            ),
           ],
         ),
       ),
@@ -665,6 +670,163 @@ class _WishlistSheetState extends State<_WishlistSheet> {
                 ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The full store catalog below the personalized picks: category filter
+/// chips and a 2-column grid of every in-stock product. Tapping a tile
+/// opens the same detail sheet as a pick.
+class _CatalogSection extends StatefulWidget {
+  const _CatalogSection({
+    required this.shopController,
+    required this.onOpenProduct,
+  });
+
+  final ShopController shopController;
+  final void Function(ShoppingPick) onOpenProduct;
+
+  @override
+  State<_CatalogSection> createState() => _CatalogSectionState();
+}
+
+class _CatalogSectionState extends State<_CatalogSection> {
+  static const _categories = [
+    'All', 'Tops', 'Bottoms', 'Shoes', 'Outerwear', 'Accessories',
+  ];
+
+  String _category = 'All';
+  List<ShoppingPick>? _products;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  ShoppingPick _map(Map j) => ShoppingPick(
+        id: '${j['id'] ?? ''}',
+        name: '${j['name'] ?? ''}',
+        price: _formatPrice(j['price'], j['currency']),
+        image: '${j['imageUrl'] ?? Img.teeWhite}',
+        reason: '${j['reason'] ?? ''}',
+        store: j['store'] == null ? null : '${j['store']}',
+        color: j['color'] == null ? null : '${j['color']}',
+        category: j['category'] == null ? null : '${j['category']}',
+        sizes: [for (final v in (j['sizes'] as List? ?? const [])) '$v'],
+        originalPrice: j['originalPrice'] == null
+            ? null
+            : _formatPrice(j['originalPrice'], j['currency']),
+        inStock: j['inStock'] != false,
+      );
+
+  static String _formatPrice(Object? raw, Object? currency) {
+    final cur = '${currency ?? ''}'.trim();
+    if (raw is num) {
+      final grouped = raw
+          .toStringAsFixed(0)
+          .replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+\b)'), (m) => '${m[1]},');
+      return cur.isEmpty ? grouped : '$grouped $cur';
+    }
+    return '${raw ?? ''}';
+  }
+
+  Future<void> _load() async {
+    try {
+      final rows = await widget.shopController.api.shopProducts(
+        category: _category == 'All' ? null : _category,
+      );
+      if (mounted) {
+        setState(() => _products = [for (final r in rows) _map(r as Map)]);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _products = const []);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final products = _products;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('CATALOG', style: AppText.overline),
+          const SizedBox(height: Insets.md),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final c in _categories) ...[
+                  SwChip(
+                    label: c,
+                    selected: _category == c,
+                    tone: SwChipTone.tinted,
+                    dense: true,
+                    onTap: () {
+                      setState(() {
+                        _category = c;
+                        _products = null;
+                      });
+                      _load();
+                    },
+                  ),
+                  const SizedBox(width: Insets.sm),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: Insets.lg),
+          if (products == null)
+            const Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation(AppColors.primary),
+              ),
+            )
+          else if (products.isEmpty)
+            Text('No products here yet.', style: AppText.caption)
+          else
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: Insets.lg,
+              crossAxisSpacing: Insets.md,
+              childAspectRatio: 0.78,
+              children: [
+                for (final p in products)
+                  GestureDetector(
+                    onTap: () => widget.onOpenProduct(p),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: SwProductImage(
+                            image: p.image,
+                            radius: Radii.md,
+                          ),
+                        ),
+                        const SizedBox(height: Insets.sm),
+                        Text(
+                          p.name,
+                          style: AppText.bodyStrong,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          p.price,
+                          style: AppText.caption.copyWith(
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+        ],
       ),
     );
   }
