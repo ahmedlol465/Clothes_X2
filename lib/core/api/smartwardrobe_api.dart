@@ -420,6 +420,19 @@ class SmartWardrobeApi {
   Future<Map<String, dynamic>> shopRecommended() async =>
       Map<String, dynamic>.from(await _client.get('/shop/recommended'));
 
+  /// Budget outfit builder (`POST /shop/outfit-builder`): the server picks
+  /// the best-value in-stock set that fits [budget].
+  Future<Map<String, dynamic>> buildOutfitWithinBudget(
+    double budget, {
+    String occasion = 'casual',
+  }) async =>
+      Map<String, dynamic>.from(
+        await _client.post('/shop/outfit-builder', {
+          'budget': budget,
+          'occasion': occasion,
+        }),
+      );
+
   Future<void> addToWishlist(Map<String, dynamic> entry) async {
     await _client.post('/shop/wishlist', entry);
   }

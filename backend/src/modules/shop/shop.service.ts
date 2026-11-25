@@ -73,6 +73,79 @@ export class ShopService {
     return { product: row };
   }
 
+  /**
+   * Budget outfit builder: greedily pick the best-value in-stock product for
+   * each outfit slot (top, bottom, shoes, then outerwear and an accessory if
+   * the budget stretches), then score the set with the same compatibility
+   * engine the stylist uses. Returns withinBudget=false when even the core
+   * slots do not fit the budget.
+   */
+  async buildOutfitWithinBudget(userId: string, body: Record<string, any>) {
+    const budget = Number(body?.budget);
+    if (!Number.isFinite(budget) || budget <= 0) {
+      return { error: 'A positive budget is required.' };
+    }
+    const occasion = `${body?.occasion ?? 'casual'}`;
+    const products = await this.productRepo.find({
+      where: { inStock: true },
+      order: { compatibilityScore: 'DESC' },
+    });
+    const bySlot: Record<string, ShoppingItem[]> = {};
+    for (const p of products) {
+      const slot = (
+        { Tops: 'top', Bottoms: 'bottom', Shoes: 'shoes', Outerwear: 'outerwear', Accessories: 'accessory' } as
+          Record<string, string>
+      )[p.category];
+      if (!slot) continue;
+      (bySlot[slot] ??= []).push(p);
+    }
+
+    const picked: ShoppingItem[] = [];
+    let total = 0;
+    const take = (slot: string): boolean => {
+      const candidates = (bySlot[slot] ?? []).filter(
+        (p) => !picked.includes(p) && total + p.price <= budget,
+      );
+      if (!candidates.length) return false;
+      const best = candidates[0];
+      picked.push(best);
+      total += best.price;
+      return true;
+    };
+
+    const coreOk = take('top') && take('bottom') && take('shoes');
+    if (coreOk) {
+      take('outerwear');
+      take('accessory');
+    }
+
+    const probeItems = picked.map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color || 'Neutral',
+      category: p.category,
+      style: p.style || 'Casual',
+      season: p.season || 'All Season',
+      formality: p.style || 'Casual',
+    }));
+    const compat = probeItems.length
+      ? aiEngine.calculateCompatibility(probeItems, {
+          occasion,
+          weather: { tempC: 24 },
+        })
+      : null;
+
+    return {
+      budget,
+      total,
+      currency: picked[0]?.currency ?? 'EGP',
+      withinBudget: coreOk,
+      match: compat?.match ?? null,
+      occasion,
+      items: picked,
+    };
+  }
+
   /** Distinct filter values for the catalog UI. */
   async facets() {
     const rows = await this.productRepo.find();

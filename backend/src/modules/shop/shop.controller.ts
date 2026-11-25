@@ -30,6 +30,14 @@ export class ShopController {
     return this.shop.product(id);
   }
 
+  @Post('outfit-builder')
+  outfitBuilder(
+    @CurrentUser('id') userId: string,
+    @Body() body: Record<string, any>,
+  ) {
+    return this.shop.buildOutfitWithinBudget(userId, body);
+  }
+
   @Post('before-you-buy')
   beforeYouBuy(
     @CurrentUser('id') userId: string,
