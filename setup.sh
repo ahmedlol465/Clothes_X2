@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 LOG=setup.log
 : > "$LOG"
 
-STEPS=7
+STEPS=8
 i=0
 step() { i=$((i + 1)); printf '[%d/%d] %-18s ' "$i" "$STEPS" "$1"; }
 ok()   { echo "ok${1:+ ($1)}"; }
@@ -158,6 +158,17 @@ if run flutter pub get; then
   ok
 else
   die "flutter pub get failed." "Check the end of setup.log - most often the Flutter version (need 3.50.x stable)."
+fi
+
+# ---------------------------------------------- 8. schema + demo data (seed)
+step "database seed"
+# npm run seed creates the schema on a fresh database (the app always runs
+# with DB_SYNCHRONIZE=false) and inserts the demo data. Idempotent: existing
+# rows are skipped, an existing schema is never touched.
+if run npm --prefix backend run seed; then
+  ok
+else
+  die "seeding the database failed." "Check the end of setup.log - usually MySQL is not running or DB_USERNAME/DB_PASSWORD in backend/.env are wrong."
 fi
 
 echo ""

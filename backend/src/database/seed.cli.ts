@@ -34,10 +34,26 @@ const config: any = {
 };
 
 async function main(): Promise<void> {
-  const ds = new DataSource(buildDataSourceOptions(config));
+  const baseOptions = buildDataSourceOptions(config);
+  let ds = new DataSource(baseOptions);
 
   try {
     await ds.initialize();
+
+    // Fresh database: nothing else creates the schema (the app always runs
+    // with DB_SYNCHRONIZE=false because repeated synchronize on MySQL/
+    // MariaDB silently rewrites json columns). Only when the users table is
+    // missing do we rebuild the connection with synchronize on, exactly
+    // once. An existing schema is never touched.
+    const usersTable = (await ds.query(
+      "SHOW TABLES LIKE 'users'",
+    )) as unknown[];
+    if (usersTable.length === 0) {
+      await ds.destroy();
+      console.log('Fresh database - creating the schema (one-time)...');
+      ds = new DataSource({ ...baseOptions, synchronize: true });
+      await ds.initialize();
+    }
     console.log('Connected to MySQL. Seeding demo data...');
 
     // Explicit seed operation: it only inserts rows whose deterministic demo
