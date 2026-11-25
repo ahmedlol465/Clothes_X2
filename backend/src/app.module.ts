@@ -15,6 +15,7 @@ import { WeatherModule } from './modules/weather/weather.module';
 import { UsersModule } from './modules/users/users.module';
 import { OutfitsModule } from './modules/outfits/outfits.module';
 import { ShopModule } from './modules/shop/shop.module';
+import { ScrapingModule } from './scraping/scraping.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { StylistModule } from './modules/stylist/stylist.module';
 import { PlannerModule } from './modules/planner/planner.module';
@@ -38,6 +39,7 @@ import { InsightsModule } from './modules/insights/insights.module';
     UsersModule,
     OutfitsModule,
     ShopModule,
+    ScrapingModule,
     AdminModule,
     StylistModule,
     PlannerModule,

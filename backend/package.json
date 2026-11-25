@@ -25,7 +25,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
     "embeddings:install": "npm install @huggingface/transformers",
     "setup:models": "node scripts/setup-models.js",
-    "vision:selftest": "node scripts/vision-selftest.js"
+    "vision:selftest": "node scripts/vision-selftest.js",
+    "scrape": "ts-node -r tsconfig-paths/register src/scraping/scrape.cli.ts"
   },
   "optionalDependencies": {
     "@huggingface/transformers": "^4.3.0"
