@@ -11,6 +11,7 @@ import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
 import '../../data/assets.dart';
 import '../../data/controllers/shop_controller.dart';
+import 'outfit_visual.dart';
 
 /// Avatar Stylist: enter a budget and a few preferences and the app builds a
 /// full outfit from real scraped brand products, layered on a mannequin.
@@ -42,6 +43,7 @@ class _OutfitStudioScreenState extends State<OutfitStudioScreen> {
   String _style = 'any';
   String? _gender; // from the saved style profile
   bool _loading = false;
+  bool _boardVisual = false; // user picked the figure visual (B); A kept for this review round
   String? _error;
   Map<String, dynamic>? _result;
 
@@ -147,7 +149,26 @@ class _OutfitStudioScreenState extends State<OutfitStudioScreen> {
                     child: Text(_error!, style: AppText.caption),
                   ),
                 if (_result != null) ...[
-                  _avatarPanel(),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Board'),
+                        selected: _boardVisual,
+                        onSelected: (_) => setState(() => _boardVisual = true),
+                      ),
+                      const SizedBox(width: Insets.sm),
+                      ChoiceChip(
+                        label: const Text('Figure'),
+                        selected: !_boardVisual,
+                        onSelected: (_) => setState(() => _boardVisual = false),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: Insets.md),
+                  _boardVisual
+                      ? FlatLayBoard(items: _items)
+                      : FigureVisual(items: _items),
                   const SizedBox(height: Insets.lg),
                   _summary(),
                   const SizedBox(height: Insets.lg),
