@@ -269,11 +269,10 @@ class _Greeting extends StatelessWidget {
             ),
           ),
           SwAvatar(
-            image: avatarUrl == null || avatarUrl!.trim().isEmpty
-                ? Img.avatarKarim
-                : avatarUrl!,
+            image: avatarUrl ?? '',
             size: 44,
-            name: firstName,
+            // Full name so the fallback initial color matches the profile page.
+            name: name,
           ),
         ],
       ),

@@ -169,6 +169,7 @@ export class AuthService {
       email: profile.email,
       firstName: profile.givenName,
       lastName: profile.familyName,
+      avatarUrl: profile.picture,
     } as SocialAuthDto);
   }
 
@@ -176,6 +177,11 @@ export class AuthService {
   async socialLogin(dto: SocialAuthDto): Promise<AuthResponseDto> {
     const email = this.socialEmail(dto);
     let user = await this.userRepo.findOne({ where: { email } });
+
+    if (user && !user.avatarUrl && dto.avatarUrl) {
+      user.avatarUrl = dto.avatarUrl;
+      await this.userRepo.save(user);
+    }
 
     if (!user) {
       const rounds = this.config.get<number>('jwt.bcryptRounds') ?? 10;
@@ -186,7 +192,7 @@ export class AuthService {
           email,
           passwordHash: await bcrypt.hash(`${dto.provider}:${dto.credential}`, rounds),
           createdAt: new Date(),
-          avatarUrl: null,
+          avatarUrl: dto.avatarUrl ?? null,
           tokenVersion: 0,
           role: UserRole.USER,
         });

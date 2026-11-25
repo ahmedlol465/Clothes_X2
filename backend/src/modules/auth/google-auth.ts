@@ -5,6 +5,7 @@ export interface GoogleProfile {
   email: string;
   givenName?: string;
   familyName?: string;
+  picture?: string;
 }
 
 type FetchLike = (
@@ -45,5 +46,6 @@ export async function verifyGoogleIdToken(
     email,
     givenName: payload.given_name ? String(payload.given_name) : undefined,
     familyName: payload.family_name ? String(payload.family_name) : undefined,
+    picture: payload.picture ? String(payload.picture) : undefined,
   };
 }

@@ -229,6 +229,18 @@ class AccountController extends ChangeNotifier {
     }
   }
 
+  /// Revert to the default initial avatar (clears the uploaded/Google photo).
+  Future<UserProfile?> removeAvatar() async {
+    try {
+      final user = await api.updateMe({'avatarUrl': null});
+      _profile = userProfileFromJson(user);
+      notifyListeners();
+      return _profile;
+    } on ApiException {
+      return null;
+    }
+  }
+
   Future<UserProfile?> uploadAvatar({
     required String filename,
     required List<int> bytes,
