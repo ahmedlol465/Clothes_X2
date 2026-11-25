@@ -10,7 +10,7 @@ git clone https://github.com/ahmedlol465/Clothes_X2.git
 ```
 
 ```
-cd Clothes_X2 && git checkout feature/creative-round
+cd Clothes_X2
 ```
 
 ```

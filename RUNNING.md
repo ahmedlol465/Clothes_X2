@@ -1,4 +1,4 @@
-# Running SmartWardrobe (feature/creative-round)
+# Running SmartWardrobe
 
 Everything below was run and verified on a clean machine. One command per
 block, in order. Two terminals are needed at the end (backend + app).
@@ -18,10 +18,6 @@ git clone https://github.com/ahmedlol465/Clothes_X2.git
 
 ```
 cd Clothes_X2
-```
-
-```
-git checkout feature/creative-round
 ```
 
 ## 3. One-step setup
