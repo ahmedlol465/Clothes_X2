@@ -12,7 +12,8 @@ const int = (value: string | undefined, fallback: number): number => {
 
 export const appConfig = registerAs('app', () => ({
   env: process.env.NODE_ENV ?? 'development',
-  port: int(process.env.PORT, 3000),
+  // Flutter and .env.example default to 3002; keep the fallback in sync.
+  port: int(process.env.PORT, 3002),
   globalPrefix: process.env.API_PREFIX ?? 'api',
   corsOrigins: (process.env.CORS_ORIGINS ?? '*')
     .split(',')
@@ -22,46 +23,19 @@ export const appConfig = registerAs('app', () => ({
   seedOnBoot: bool(process.env.SEED_ON_BOOT, true),
 }));
 
-export const databaseConfig = registerAs('database', () => {
-  const type = process.env.DB_TYPE ?? 'sqlite';
-  const common = {
-    type,
-    logging: bool(process.env.DB_LOGGING, false),
-    synchronize: bool(process.env.DB_SYNCHRONIZE, true),
-  };
-
-  if (type === 'postgres') {
-    return {
-      ...common,
-      type: 'postgres' as const,
-      host: process.env.DB_HOST ?? 'localhost',
-      port: int(process.env.DB_PORT, 5432),
-      username: process.env.DB_USERNAME ?? 'postgres',
-      password: process.env.DB_PASSWORD ?? 'postgres',
-      database: process.env.DB_NAME ?? 'smartwardrobe',
-      ssl: bool(process.env.DB_SSL, false) ? { rejectUnauthorized: false } : undefined,
-    };
-  }
-
-  if (type === 'mysql' || type === 'mariadb') {
-    return {
-      ...common,
-      type: 'mysql' as const,
-      host: process.env.DB_HOST ?? '127.0.0.1',
-      port: int(process.env.DB_PORT, 3306),
-      username: process.env.DB_USERNAME ?? 'root',
-      password: process.env.DB_PASSWORD ?? '',
-      database: process.env.DB_NAME ?? 'smartwardrobe',
-      charset: 'utf8mb4',
-    };
-  }
-
-  return {
-    ...common,
-    type: 'better-sqlite3' as const,
-    database: process.env.DB_SQLITE_PATH ?? 'data/smartwardrobe.sqlite',
-  };
-});
+export const databaseConfig = registerAs('database', () => ({
+  // MySQL is the only datastore. There is no SQLite fallback: the API needs a
+  // reachable MySQL server (see .env.example) or it refuses to boot.
+  type: 'mysql',
+  logging: bool(process.env.DB_LOGGING, false),
+  synchronize: bool(process.env.DB_SYNCHRONIZE, true),
+  host: process.env.DB_HOST ?? '127.0.0.1',
+  port: int(process.env.DB_PORT, 3306),
+  username: process.env.DB_USERNAME ?? 'root',
+  password: process.env.DB_PASSWORD ?? '',
+  database: process.env.DB_NAME ?? 'smartwardrobe',
+  charset: 'utf8mb4',
+}));
 
 export const redisConfig = registerAs('redis', () => ({
   host: process.env.REDIS_HOST ?? 'localhost',
@@ -74,6 +48,12 @@ export const redisConfig = registerAs('redis', () => ({
    */
   mode: process.env.REDIS_MODE ?? 'auto',
   keyPrefix: process.env.REDIS_KEY_PREFIX ?? 'sw:',
+}));
+
+export const googleConfig = registerAs('google', () => ({
+  // Web OAuth 2.0 Client ID from Google Cloud Console. Empty means the
+  // Google sign-in endpoint answers "not configured" instead of guessing.
+  clientId: process.env.GOOGLE_CLIENT_ID ?? '',
 }));
 
 export const jwtConfig = registerAs('jwt', () => {
@@ -161,6 +141,7 @@ export const configFactories = [
   databaseConfig,
   redisConfig,
   jwtConfig,
+  googleConfig,
   storageConfig,
   weatherConfig,
   aiConfig,

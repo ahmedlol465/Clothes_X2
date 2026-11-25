@@ -7,6 +7,7 @@
  */
 
 export interface LegacyStyleProfile {
+  gender: string | null;
   favoriteColors: string[];
   preferredStyles: string[];
   avoidedColors: string[];
@@ -159,6 +160,7 @@ export function emptyLegacyDb(): LegacyDb {
 
 export function defaultStyleProfile(): LegacyStyleProfile {
   return {
+    gender: null,
     favoriteColors: [],
     preferredStyles: [],
     avoidedColors: [],
@@ -179,7 +181,9 @@ export function normalizeStyleProfile(raw: unknown): LegacyStyleProfile {
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
   };
+  const gender = ['male', 'female'].includes(String(value.gender)) ? String(value.gender) : null;
   return {
+    gender,
     favoriteColors: list(value.favoriteColors),
     preferredStyles: list(value.preferredStyles),
     avoidedColors: list(value.avoidedColors),

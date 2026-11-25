@@ -195,9 +195,9 @@ shows honest offline/empty states instead of demo records.
 ## Backend
 
 The canonical API is the NestJS app in `backend/src/` (port 3002), backed by
-TypeORM. All application data lives in the database: PostgreSQL/MySQL when
-configured, otherwise the embedded SQLite file (`backend/data/smartwardrobe.sqlite`).
-Only uploaded binary images live in file storage (`backend/storage/`).
+TypeORM. All application data lives in **MySQL** (the only datastore; the
+API refuses to boot without a reachable server). Only uploaded binary images
+live in file storage (`backend/storage/`).
 
 ```
 backend/
@@ -216,7 +216,7 @@ backend/
       stylist/           chat, streaming, photo match, remix, Style DNA
       weather/           live Open-Meteo conditions
     common/              guards, filters, interceptors, cache, storage, DTOs
-    database/            TypeORM entities, migrations, seed, SQLite fallback
+    database/            TypeORM entities, migrations, seed (MySQL)
     config/              typed configuration factories
   test/                  unit specs + HTTP e2e smoke test
 ai-service/

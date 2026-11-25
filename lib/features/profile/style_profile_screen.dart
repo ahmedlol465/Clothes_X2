@@ -49,6 +49,11 @@ class _StyleProfileScreenState extends State<StyleProfileScreen> {
     'Formal', 'Elegant', 'Streetwear', 'Sporty', 'Bohemian', 'Preppy',
   ];
 
+  static const _genderOptions = [
+    ('female', 'Female'),
+    ('male', 'Male'),
+  ];
+
   static const _fitOptions = [
     ('slim', 'Slim'),
     ('regular', 'Regular'),
@@ -70,6 +75,7 @@ class _StyleProfileScreenState extends State<StyleProfileScreen> {
   final Set<String> _styles = {};
 
   String _fit = 'regular';
+  String? _gender;
   String? _top;
   String? _bottom;
   String? _shoe;
@@ -127,6 +133,7 @@ class _StyleProfileScreenState extends State<StyleProfileScreen> {
       ..clear()
       ..addAll(p.preferredStyles);
     _fit = p.fitPreference;
+    _gender = p.gender;
     _top = p.topSize;
     _bottom = p.bottomSize;
     _shoe = p.shoeSize;
@@ -169,6 +176,7 @@ class _StyleProfileScreenState extends State<StyleProfileScreen> {
       heightCm: _intOrNull(_height.text),
       weightKg: _intOrNull(_weight.text),
       fitPreference: _fit,
+      gender: _gender,
       topSize: _top,
       bottomSize: _bottom,
       shoeSize: _shoe,
@@ -272,6 +280,25 @@ class _StyleProfileScreenState extends State<StyleProfileScreen> {
                 const SizedBox(height: Insets.lg),
                 // Read-only: email changes require a verification flow.
                 Text('Email Address', style: AppText.label),
+                const SizedBox(height: Insets.lg),
+                Text('Gender', style: AppText.label),
+                const SizedBox(height: Insets.sm),
+                Wrap(
+                  spacing: Insets.sm,
+                  runSpacing: Insets.sm,
+                  children: [
+                    for (final (value, label) in _genderOptions)
+                      SwChip(
+                        label: label,
+                        selected: _gender == value,
+                        tone: SwChipTone.tinted,
+                        dense: true,
+                        onTap: () => setState(
+                          () => _gender = _gender == value ? null : value,
+                        ),
+                      ),
+                  ],
+                ),
                 const SizedBox(height: Insets.sm),
                 _ReadOnlyEmail(email: profile?.email ?? '—'),
               ],

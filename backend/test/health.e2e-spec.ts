@@ -10,8 +10,8 @@ import { DataSourceFactory } from '../src/database/data-source';
  * HTTP smoke test for the health endpoint.
  *
  * Deliberately does not boot AppModule: this test is about the HTTP surface
- * and response shape, not the database. A live AppModule would need a writable
- * SQLite file, which makes CI slower and flakier for no extra signal.
+ * and response shape, not the database. A live AppModule would need a
+ * reachable MySQL server, which makes CI slower and flakier for no extra signal.
  */
 describe('Health (e2e)', () => {
   let app: INestApplication;
@@ -26,7 +26,7 @@ describe('Health (e2e)', () => {
         },
         {
           provide: DataSourceFactory,
-          useValue: { type: 'better-sqlite3' },
+          useValue: { type: 'mysql' },
         },
       ],
     }).compile();
@@ -44,7 +44,7 @@ describe('Health (e2e)', () => {
 
     expect(response.body).toMatchObject({
       status: 'ok',
-      database: { type: 'better-sqlite3', connected: true },
+      database: { type: 'mysql', connected: true },
     });
     expect(response.body.uptimeSeconds).toEqual(expect.any(Number));
     expect(response.body.timestamp).toEqual(expect.any(String));

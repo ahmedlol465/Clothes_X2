@@ -9,7 +9,7 @@ import '../../core/widgets/sw_screen.dart';
 import '../../core/widgets/sw_widgets.dart';
 import '../../data/app_state.dart';
 import '../../data/models.dart' as app_models;
-import 'fashion_critic_screen.dart';
+import '../../data/dto/mappers.dart';
 
 // ==========================================
 // 1. DATA MODELS
@@ -257,7 +257,7 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
   void _startItemDrag(
     ClothingItem item,
     int index,
-    LongPressStartDetails details,
+    DragStartDetails details,
   ) {
     if (_canvasSize.width <= 0 || _canvasSize.height <= 0) return;
     final key = _itemKey(item, index);
@@ -269,7 +269,7 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
     _canvasRevision.value++;
   }
 
-  void _moveItem(LongPressMoveUpdateDetails details) {
+  void _moveItem(DragUpdateDetails details) {
     final key = _draggingItemKey;
     final startOffset = _dragStartItemOffset;
     final startGlobal = _dragStartGlobal;
@@ -476,9 +476,6 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
       name: candidate.name,
       itemIds: ids,
       occasion: candidate.occasion,
-      compatibilityScore: current.matchScore,
-      explanation: current.stylistNote,
-      sourceOutfitId: current.outfitId.isEmpty ? null : current.outfitId,
     );
     if (!mounted) return;
     setState(() => _savingOutfit = false);
@@ -536,9 +533,6 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
               onSaveOutfit: saveCandidate == null || _savingOutfit
                   ? null
                   : _saveCurrentOutfit,
-              onOpenCritic: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const FashionCriticScreen()),
-              ),
             ),
             Expanded(flex: 5, child: _buildCanvas(palette)),
             Expanded(flex: 5, child: _buildChat(palette)),
@@ -613,11 +607,11 @@ class _StylistDeskScreenState extends State<StylistDeskScreen>
                       item: entry.item,
                       palette: palette,
                       onTap: () => _handleItemTap(entry.item, entry.index),
-                      onLongPressStart: (details) =>
+                      onPanStart: (details) =>
                           _startItemDrag(entry.item, entry.index, details),
-                      onLongPressMoveUpdate: _moveItem,
-                      onLongPressEnd: _endItemDrag,
-                      onLongPressCancel: _endItemDrag,
+                      onPanUpdate: _moveItem,
+                      onPanEnd: () => _endItemDrag(),
+                      onPanCancel: () => _endItemDrag(),
                     ),
                   ),
               ],
@@ -807,14 +801,12 @@ class _DeskHeader extends StatelessWidget {
     this.onRefresh,
     this.saveCandidate,
     this.onSaveOutfit,
-    this.onOpenCritic,
   });
 
   final _Palette palette;
   final VoidCallback? onRefresh;
   final app_models.Outfit? saveCandidate;
   final VoidCallback? onSaveOutfit;
-  final VoidCallback? onOpenCritic;
 
   @override
   Widget build(BuildContext context) {
@@ -872,8 +864,6 @@ class _DeskHeader extends StatelessWidget {
               candidate: saveCandidate!,
               onTap: onSaveOutfit!,
             ),
-          if (onOpenCritic != null)
-            _CriticToggleButton(palette: palette, onTap: onOpenCritic!),
           _RefreshButton(palette: palette, onTap: onRefresh),
         ],
       ),
@@ -950,31 +940,6 @@ class _SaveOutfitButton extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-class _CriticToggleButton extends StatelessWidget {
-  const _CriticToggleButton({required this.palette, required this.onTap});
-
-  final _Palette palette;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: Sizes.iconButton,
-        height: Sizes.iconButton,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: AppColors.tint,
-          shape: BoxShape.circle,
-        ),
-        child: SwIconView(SwIcon.star, size: 18, color: AppColors.primary),
-      ),
     );
   }
 }
@@ -1114,19 +1079,19 @@ class _CanvasClothingItem extends StatelessWidget {
     required this.item,
     required this.palette,
     required this.onTap,
-    required this.onLongPressStart,
-    required this.onLongPressMoveUpdate,
-    required this.onLongPressEnd,
-    required this.onLongPressCancel,
+    required this.onPanStart,
+    required this.onPanUpdate,
+    required this.onPanEnd,
+    required this.onPanCancel,
   });
 
   final ClothingItem item;
   final _Palette palette;
   final VoidCallback onTap;
-  final void Function(LongPressStartDetails details) onLongPressStart;
-  final void Function(LongPressMoveUpdateDetails details) onLongPressMoveUpdate;
-  final VoidCallback onLongPressEnd;
-  final VoidCallback onLongPressCancel;
+  final void Function(DragStartDetails details) onPanStart;
+  final void Function(DragUpdateDetails details) onPanUpdate;
+  final VoidCallback onPanEnd;
+  final VoidCallback onPanCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -1136,10 +1101,10 @@ class _CanvasClothingItem extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      onLongPressStart: onLongPressStart,
-      onLongPressMoveUpdate: onLongPressMoveUpdate,
-      onLongPressEnd: (_) => onLongPressEnd(),
-      onLongPressCancel: onLongPressCancel,
+      onPanStart: onPanStart,
+      onPanUpdate: onPanUpdate,
+      onPanEnd: (_) => onPanEnd(),
+      onPanCancel: onPanCancel,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1259,7 +1224,7 @@ class _ReplacementSheetState extends State<_ReplacementSheet> {
       final res = await AppState.instance.api.wardrobeItems(category: category);
       final items = [
         for (final raw in (res['items'] as List? ?? const []))
-          app_models.ClothingItem.fromJson(
+          clothingItemFromJson(
             Map<String, dynamic>.from(raw as Map),
           ),
       ];

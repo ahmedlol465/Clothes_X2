@@ -23,8 +23,8 @@ export class UsersController {
   constructor(private readonly users: UsersService) {}
 
   @Get('me')
-  me(@CurrentUser('id') userId: string) {
-    return { user: this.users.profile(userId) };
+  async me(@CurrentUser('id') userId: string) {
+    return { user: await this.users.profile(userId) };
   }
 
   @Patch('me')
@@ -47,8 +47,8 @@ export class UsersController {
   }
 
   @Get('me/style-profile')
-  styleProfile(@CurrentUser('id') userId: string) {
-    return { styleProfile: this.users.styleProfile(userId) };
+  async styleProfile(@CurrentUser('id') userId: string) {
+    return { styleProfile: await this.users.styleProfile(userId) };
   }
 
   @Patch('me/style-profile')

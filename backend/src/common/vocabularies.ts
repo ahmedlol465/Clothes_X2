@@ -1,8 +1,8 @@
 /**
  * Controlled vocabularies shared by entities, DTOs and the AI rule engine.
  *
- * Values are stored as plain strings (never DB enums) so the schema is
- * byte-identical on PostgreSQL and SQLite.
+ * Values are stored as plain strings (never DB enums) so the schema stays
+ * portable across MySQL versions.
  */
 
 export const ClothingCategory = {

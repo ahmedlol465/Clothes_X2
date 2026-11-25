@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -24,6 +25,7 @@ import {
 import { JwtPayload } from './jwt.strategy';
 import { User } from '../../database/entities/identity.entity';
 import { StyleProfile } from '../../database/entities/identity.entity';
+import { verifyGoogleIdToken } from './google-auth';
 
 function uid(prefix = 'u'): string {
   return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
@@ -40,6 +42,7 @@ function userToLegacyUser(user: User, styleProfile: StyleProfile | null): Legacy
     createdAt: user.createdAt?.toISOString() ?? new Date().toISOString(),
     avatarUrl: user.avatarUrl ?? null,
     styleProfile: {
+      gender: dimensions.gender === 'male' || dimensions.gender === 'female' ? dimensions.gender : null,
       favoriteColors: Array.isArray(dimensions.favoriteColors) ? dimensions.favoriteColors : [],
       preferredStyles: Array.isArray(dimensions.preferredStyles) ? dimensions.preferredStyles : [],
       avoidedColors: Array.isArray(dimensions.avoidedColors) ? dimensions.avoidedColors : [],
@@ -137,6 +140,36 @@ export class AuthService {
     const styleProfile = await this.styleProfileRepo.findOne({ where: { userId: user.id } });
     await this.cache.invalidateUser(user.id);
     return this.issueSession(userToLegacyUser(user, styleProfile));
+  }
+
+  /** Exposes (to anyone) only whether a Google Client ID is configured. */
+  googleClientStatus(): { configured: boolean; clientId: string | null } {
+    const clientId = this.config.get<string>('google.clientId') ?? '';
+    // The web sign-in flow needs the Client ID in the page, so it is not a
+    // secret; still, only expose it when present.
+    return { configured: clientId.length > 0, clientId: clientId || null };
+  }
+
+  /**
+   * Google sign-in. The client sends the ID token it got from Google
+   * Identity Services; we verify it with Google, pin it to our configured
+   * Client ID, and only then trust the email inside.
+   */
+  async googleLogin(idToken: string): Promise<AuthResponseDto> {
+    const clientId = this.config.get<string>('google.clientId') ?? '';
+    if (!clientId) {
+      throw new BadRequestException(
+        'Google sign-in is not configured on the server (GOOGLE_CLIENT_ID missing).',
+      );
+    }
+    const profile = await verifyGoogleIdToken(idToken, clientId);
+    return this.socialLogin({
+      provider: 'google',
+      credential: profile.sub,
+      email: profile.email,
+      firstName: profile.givenName,
+      lastName: profile.familyName,
+    } as SocialAuthDto);
   }
 
   /** Email/Google/Apple/Phone entry point described in section 4.1. */

@@ -61,9 +61,31 @@ class _LoginScreenState extends State<LoginScreen> {
     } else {
       _toast(
         context,
-        'Login failed: ${widget._accountController.lastError ?? 'unknown error'}\n'
-        'Is the backend running? (backend → npm start)',
+        widget._accountController.lastError ??
+            'Backend offline — check that the backend is running (backend → npm start).',
       );
+    }
+  }
+
+  Future<void> _googleSignIn() async {
+    try {
+      final status = await widget._accountController.api.googleClientStatus();
+      if (status['configured'] != true) {
+        if (mounted) {
+          _toast(context, 'Google sign-in is not configured on the server yet.');
+        }
+        return;
+      }
+      if (mounted) {
+        _toast(
+          context,
+          'Google sign-in is configured on the server; the app-side Google flow lands in the next update.',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        _toast(context, 'Backend offline — check that the backend is running (backend → npm start).');
+      }
     }
   }
 
@@ -135,7 +157,7 @@ class _LoginScreenState extends State<LoginScreen> {
             const SizedBox(height: Insets.xl),
             const _OrDivider(),
             const SizedBox(height: Insets.xl),
-            SwOutlineButton(label: 'Sign in with Google', onTap: _submit),
+            SwOutlineButton(label: 'Sign in with Google', onTap: _googleSignIn),
             const SizedBox(height: Insets.xxl),
             _InlineLink(
               before: "Don't have an account?",
@@ -235,7 +257,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
     } else {
       _toast(
         context,
-        'Backend offline — check that `npm start` is running in backend/.',
+        widget._accountController.lastError ??
+            'Backend offline — check that the backend is running (backend → npm start).',
       );
     }
   }

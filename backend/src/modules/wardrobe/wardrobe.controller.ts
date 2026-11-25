@@ -70,8 +70,8 @@ export class WardrobeController {
   }
 
   @Get('items/:id')
-  get(@CurrentUser('id') userId: string, @Param('id') id: string) {
-    return { item: this.wardrobe.find(userId, id) };
+  async get(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return { item: await this.wardrobe.find(userId, id) };
   }
 
   @Patch('items/:id')

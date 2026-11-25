@@ -19,6 +19,11 @@ import 'package:smartwardrobe/data/app_state.dart';
 /// Skips gracefully when the backend is not running (same convention as
 /// `backend_contract_test.dart`).
 void main() {
+  // AppState notifies listeners during login; a binding must exist first.
+  TestWidgetsFlutterBinding.ensureInitialized();
+  // The test binding installs a mock HttpOverrides that fails every request
+  // with 400; these tests drive the live backend, so restore real I/O.
+  HttpOverrides.global = _RealHttpOverrides();
   // Widget tests default to TargetPlatform.android, which makes ApiConfig
   // resolve the Android-emulator host (10.0.2.2) instead of this machine.
   // These tests talk to a local backend, so pin the desktop platform.
@@ -38,6 +43,7 @@ void main() {
 
   final base =
       Platform.environment['API_BASE_URL'] ?? 'http://localhost:3002/api';
+
 
   Future<bool> backendUp() async {
     final client = HttpClient();
@@ -143,3 +149,6 @@ void main() {
     fail('no clothing asset staged successfully');
   }, timeout: const Timeout(Duration(minutes: 5)));
 }
+/// Pass-through so the test binding's mock HTTP layer is fully replaced.
+class _RealHttpOverrides extends HttpOverrides {}
+

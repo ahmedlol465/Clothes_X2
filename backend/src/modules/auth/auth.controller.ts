@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -31,6 +31,24 @@ export class AuthController {
   @ApiOkResponse({ type: AuthResponseDto })
   register(@Body() dto: RegisterDto) {
     return this.auth.register(dto);
+  }
+
+  @Public()
+  @Get('google/config')
+  @ApiOperation({ summary: 'Whether Google sign-in is configured (no auth)' })
+  googleConfig() {
+    return this.auth.googleClientStatus();
+  }
+
+  @Public()
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Sign in with a Google ID token' })
+  google(@Body() body: { idToken?: string }) {
+    if (!body?.idToken || typeof body.idToken !== 'string') {
+      throw new BadRequestException('idToken is required.');
+    }
+    return this.auth.googleLogin(body.idToken);
   }
 
   @Public()

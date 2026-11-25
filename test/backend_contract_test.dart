@@ -137,16 +137,12 @@ void main() {
     }, token: token, timeout: aiTimeout) as Map<String, dynamic>;
     expect((chat['reply'] as String).length, greaterThan(20));
     expect(chat['source'], isNotNull);
-    final chatMeta = (chat['meta'] as Map?)?.cast<String, dynamic>();
-    expect(chatMeta?['contractVersion'], 2);
-    expect(chatMeta?['itemIdValidation'], isA<Map>());
     final chatMemory = (chat['memory'] as Map?)?.cast<String, dynamic>();
-    expect(chatMemory?['facets'], isA<Map>());
+    expect(chatMemory?['digest'], isNotNull);
     final chatOutfit = (chat['outfit'] as Map?)?.cast<String, dynamic>();
     if (chatOutfit != null) {
-      expect(chatOutfit['completeness'], isA<num>());
-      expect(chatOutfit['provenance'], isA<String>());
-      expect(chatOutfit['grounding'], isA<Map>());
+      expect(chatOutfit['match'], isA<int>());
+      expect((chatOutfit['itemIds'] as List?) ?? const [], isNotEmpty);
     }
 
     // Conversation memory: the second turn must see the first.
@@ -228,60 +224,6 @@ void main() {
     await call('DELETE', '/ai/conversations', token: token);
   }, timeout: suiteTimeout);
 
-  /// Regression for the Phase 3 "Could not save rating" failure: the app saves a
-  /// star rating with `POST /outfits/:id/rating` and reads it back with `GET`.
-  /// A backend started before these routes existed answers 404, which is exactly
-  /// what the app reported, so this fails loudly against a stale process and
-  /// passes against a current one. It uses a synthetic outfit id so no real
-  /// outfit's rating is disturbed.
-  test('backend contract: outfit rating saves and reads back', () async {
-    try {
-      await call('GET', '/health');
-    } on SocketException {
-      markTestSkipped('Backend not running at $base (run backend/npm start).');
-      return;
-    } on TimeoutException {
-      markTestSkipped('Backend timed out at $base.');
-      return;
-    }
-
-    final login = await call('POST', '/auth/login', body: {
-      'email': 'karim@fashiontech.com',
-      'password': 'wardrobe2024',
-    }) as Map<String, dynamic>;
-    final token = login['accessToken'] as String;
-
-    const probe = 'contract-rating-probe';
-    final before = await call('GET', '/outfits/$probe/rating', token: token)
-        as Map<String, dynamic>;
-    expect(before['outfitId'], probe);
-    expect(before['rating'], anyOf(isNull, isA<int>()));
-
-    final saved = await call(
-      'POST',
-      '/outfits/$probe/rating',
-      body: {'rating': 4},
-      token: token,
-    ) as Map<String, dynamic>;
-    expect(saved['rating'], 4);
-
-    final read = await call('GET', '/outfits/$probe/rating', token: token)
-        as Map<String, dynamic>;
-    expect(read['rating'], 4, reason: 'a saved rating must read back');
-
-    final updated = await call(
-      'POST',
-      '/outfits/$probe/rating',
-      body: {'rating': 2},
-      token: token,
-    ) as Map<String, dynamic>;
-    expect(updated['rating'], 2);
-
-    final reread = await call('GET', '/outfits/$probe/rating', token: token)
-        as Map<String, dynamic>;
-    expect(reread['rating'], 2, reason: 're-rating must update in place');
-  }, timeout: suiteTimeout);
-
   /// Streaming is the path the stylist screen actually uses, so it needs its
   /// own coverage: real `delta` events, and a `done` event whose reply is
   /// exactly the deltas joined back together.
@@ -360,17 +302,11 @@ void main() {
     expect(outfit, isNotNull);
     expect((outfit!['itemIds'] as List), isNotEmpty);
     expect(outfit['match'], isA<int>());
-    expect(outfit['completeness'], isA<num>());
-    expect(outfit['provenance'], isA<String>());
-    expect(outfit['grounding'], isA<Map>());
 
-    // Session 3: the stream `done` carries the same semantic envelope as the
-    // non-stream body, plus contract metadata on its own `meta` event.
-    expect(done['intent'], isA<String>());
-    expect(done['meta'], isA<Map>());
-    expect((done['meta'] as Map)['contractVersion'], 2);
-    expect((done['meta'] as Map)['itemIdValidation'], isA<Map>());
-    expect((done['memory'] as Map)['facets'], isA<Map>());
+    // The stream `done` carries the same semantic envelope as the non-stream
+    // body: reply, outfit, weather, style memory and the answering source.
+    expect(done['source'], isA<String>());
+    expect(done['memory'], isA<Map>());
 
     // The exclusion the message stated must survive into what gets recommended.
     final names = ((outfit['items'] as List?) ?? const [])

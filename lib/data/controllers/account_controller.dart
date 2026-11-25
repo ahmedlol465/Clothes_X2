@@ -46,7 +46,14 @@ class AccountController extends ChangeNotifier {
   bool avatarUploading = false;
 
   String? _lastError;
+
+  /// The backend's own error message when it answered (401/409/400/...),
+  /// or null when the backend was unreachable, so screens only show
+  /// "backend offline" for a real network failure.
   String? get lastError => _lastError;
+
+  static String? _friendlyError(Object e) =>
+      e is ApiException && e.status != null ? e.message : null;
 
   Future<bool> restoreSession() async {
     _prefs ??= await SharedPreferences.getInstance();
@@ -98,7 +105,7 @@ class AccountController extends ChangeNotifier {
       return true;
     } catch (e) {
       _status.markOffline(e);
-      _lastError = e.toString();
+      _lastError = _friendlyError(e);
       return false;
     }
   }
@@ -117,7 +124,7 @@ class AccountController extends ChangeNotifier {
       return true;
     } catch (e) {
       _status.markOffline(e);
-      _lastError = e.toString();
+      _lastError = _friendlyError(e);
       return false;
     }
   }

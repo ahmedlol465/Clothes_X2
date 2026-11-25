@@ -27,12 +27,13 @@ function toLegacyUser(user: User, styleProfile: StyleProfile | null): LegacyUser
   const rawSizes = (dimensions.sizes as Record<string, unknown> | undefined) ?? {};
   return {
     id: user.id,
-    name: user.email.split('@')[0],
+    name: user.name ?? user.email.split('@')[0],
     email: user.email,
     passwordHash: user.passwordHash ?? null,
     createdAt: user.createdAt ? user.createdAt.toISOString() : new Date().toISOString(),
     avatarUrl: user.avatarUrl ?? null,
     styleProfile: {
+      gender: dimensions.gender === 'male' || dimensions.gender === 'female' ? dimensions.gender : null,
       favoriteColors: Array.isArray(dimensions.favoriteColors) ? dimensions.favoriteColors : [],
       preferredStyles: Array.isArray(dimensions.preferredStyles) ? dimensions.preferredStyles : [],
       avoidedColors: Array.isArray(dimensions.avoidedColors) ? dimensions.avoidedColors : [],
@@ -61,7 +62,7 @@ export class UsersService {
   private async requireUserWithProfile(userId: string): Promise<[User, StyleProfile | null]> {
     const user = await this.userRepo.findOne({
       where: { id: userId },
-      relations: ['styleProfile'],
+      relations: { styleProfile: true },
     });
     if (!user) throw new NotFoundException('User not found.');
     return [user, user.styleProfile ?? null];
@@ -126,14 +127,18 @@ export class UsersService {
     if (!sp) {
       sp = this.styleProfileRepo.create({ userId });
     }
+    // Store the profile itself, not a summary: toLegacyUser reads these keys
+    // back out, so storing counts here silently wiped every saved profile.
     sp.dimensions = {
-      favoriteColors: next.favoriteColors?.length ?? 0,
-      preferredStyles: next.preferredStyles?.length ?? 0,
-      avoidedColors: next.avoidedColors?.length ?? 0,
-      heightCm: next.heightCm ?? 0,
-      weightKg: next.weightKg ?? 0,
-      fitPreference: Number(next.fitPreference === 'regular' ? 1 : 0),
-      sizes: Object.entries(next.sizes).length,
+      ...((sp.dimensions as Record<string, unknown>) ?? {}),
+      gender: next.gender,
+      favoriteColors: next.favoriteColors,
+      preferredStyles: next.preferredStyles,
+      avoidedColors: next.avoidedColors,
+      heightCm: next.heightCm,
+      weightKg: next.weightKg,
+      fitPreference: next.fitPreference,
+      sizes: next.sizes,
     } as unknown as Record<string, number>;
     await this.styleProfileRepo.save(sp);
 

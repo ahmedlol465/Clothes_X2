@@ -10,7 +10,7 @@ import '../../data/controllers/account_controller.dart';
 import '../home/home_screen.dart';
 import '../outfits/outfits_screen.dart';
 import '../profile/profile_screen.dart';
-import '../stylist/stylist_screen.dart';
+import '../stylist/stylist_desk_screen.dart' as desk;
 import '../wardrobe/wardrobe_screen.dart';
 
 /// The five destinations of the bottom navigation bar.
@@ -135,7 +135,7 @@ class _TabNavigator extends StatelessWidget {
   Widget _root() => switch (tab) {
     ShellTab.home => HomeScreen(onOpenTab: onOpenTab),
     ShellTab.wardrobe => WardrobeScreen(),
-    ShellTab.stylist => StylistScreen(),
+    ShellTab.stylist => const desk.StylistDeskScreen(),
     ShellTab.outfits => OutfitsScreen(),
     ShellTab.profile => ProfileScreen(),
   } as Widget;
@@ -144,8 +144,17 @@ class _TabNavigator extends StatelessWidget {
   Widget build(BuildContext context) {
     return Navigator(
       key: navigatorKey,
-      onGenerateRoute: (settings) =>
-          MaterialPageRoute(settings: settings, builder: (_) => _root()),
+      onGenerateRoute: (settings) {
+        if (settings.name == null ||
+            settings.name == Navigator.defaultRouteName) {
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => _root(),
+          );
+        }
+        return resolveAppRoute(settings) ??
+            MaterialPageRoute(settings: settings, builder: (_) => _root());
+      },
     );
   }
 }

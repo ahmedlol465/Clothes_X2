@@ -1,96 +1,117 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:smartwardrobe/data/models.dart';
+import 'package:smartwardrobe/data/dto/mappers.dart';
 
-Map<String, dynamic> outfitJson({
-  Object? completeness,
-  Object? completenessDetail,
-  Object? provenance,
-  Object? grounding,
-}) =>
-    {
+Map<String, dynamic> outfitJson() => {
       'id': 'gen-1',
       'name': 'Clean Tailoring',
       'image': 'assets/images/outfit.jpg',
       'occasion': 'casual',
       'match': 93,
-      'compatibilityScore': 91,
-      'rankingScore': 88,
       'breakdown': [
         {'label': 'Color Harmony', 'value': 90},
       ],
       'itemIds': ['w1', 'w11', 'w4'],
       'pieces': ['Oxford Cotton Shirt', 'Beige Chinos', 'Minimalist Sneakers'],
       'explanation': 'A calm palette.',
-      'completeness': completeness,
-      'completenessDetail': completenessDetail,
-      'provenance': provenance,
-      'grounding': grounding,
+      'completeness': 1.0,
     };
 
 void main() {
-  group('Outfit.fromJson contract fields', () {
-    test('parses the canonical completion payload', () {
-      final outfit = Outfit.fromJson(outfitJson(
-        completeness: 1.0,
-        completenessDetail: {'ratio': 1, 'filled': 3, 'required': 3},
-        provenance: 'llm_ids',
-        grounding: {
-          'recoveredItemIds': ['w1', 'w11', 'w4'],
-          'usedFallback': false,
-          'allOwned': true,
-        },
-      ));
+  group('outfitFromJson response contract', () {
+    test('parses the canonical outfit payload', () {
+      final outfit = outfitFromJson(outfitJson());
 
+      expect(outfit.id, 'gen-1');
+      expect(outfit.name, 'Clean Tailoring');
       expect(outfit.match, 93);
-      expect(outfit.compatibilityScore, 91);
-      expect(outfit.rankingScore, 88);
       expect(outfit.completeness, 1.0);
-      expect(outfit.completenessDetail, {'ratio': 1, 'filled': 3, 'required': 3});
-      expect(outfit.provenance, 'llm_ids');
-      expect(outfit.grounding?['usedFallback'], false);
       expect(outfit.itemIds, ['w1', 'w11', 'w4']);
-    });
-
-    test('parses the legacy completeness object without losing the number', () {
-      final outfit = Outfit.fromJson(outfitJson(
-        completeness: {'ratio': 0.67, 'filled': 2, 'required': 3},
-        provenance: 'remix',
-      ));
-
-      expect(outfit.completeness, closeTo(0.67, 0.0001));
-      expect(outfit.completenessDetail, {'ratio': 0.67, 'filled': 2, 'required': 3});
-      expect(outfit.provenance, 'remix');
-      expect(outfit.grounding, isNull);
-    });
-
-    test('legacy payloads without the new fields still parse', () {
-      final json = outfitJson()..remove('completeness');
-      json
-        ..remove('completenessDetail')
-        ..remove('provenance')
-        ..remove('grounding');
-      final outfit = Outfit.fromJson(json);
-
-      expect(outfit.completeness, isNull);
-      expect(outfit.completenessDetail, isNull);
-      expect(outfit.provenance, isNull);
-      expect(outfit.grounding, isNull);
-      expect(outfit.match, 93);
+      expect(outfit.pieces,
+          ['Oxford Cotton Shirt', 'Beige Chinos', 'Minimalist Sneakers']);
+      expect(outfit.explanation, 'A calm palette.');
       expect(outfit.factors!.single.label, 'Color Harmony');
+      expect(outfit.factors!.single.value, 90);
+      expect(outfit.favorite, false);
     });
 
-    test('malformed optional fields degrade to null instead of throwing', () {
-      final outfit = Outfit.fromJson(outfitJson(
-        completeness: 'not-a-number',
-        completenessDetail: 'not-a-map',
-        provenance: 42,
-        grounding: ['not', 'a', 'map'],
-      ));
+    test('accepts the matchScore alias and the imageUrl alias', () {
+      final json = outfitJson()
+        ..remove('match')
+        ..remove('image')
+        ..addAll({
+          'matchScore': 88,
+          'imageUrl': 'http://localhost:3002/storage/outfit.jpg',
+        });
+      final outfit = outfitFromJson(json);
 
+      expect(outfit.match, 88);
+      expect(outfit.image, 'http://localhost:3002/storage/outfit.jpg');
+    });
+
+    test('minimal payloads fall back to the documented defaults', () {
+      final outfit = outfitFromJson({'id': 'gen-2'});
+
+      expect(outfit.id, 'gen-2');
+      expect(outfit.name, 'Untitled look');
+      expect(outfit.occasion, 'Casual');
+      expect(outfit.match, 85);
+      expect(outfit.image, isNotEmpty);
+      expect(outfit.pieces, isEmpty);
+      expect(outfit.itemIds, isEmpty);
       expect(outfit.completeness, isNull);
-      expect(outfit.completenessDetail, isNull);
-      expect(outfit.provenance, isNull);
-      expect(outfit.grounding, isNull);
+      expect(outfit.explanation, isNull);
+      expect(outfit.createdAt, isNull);
+    });
+
+    test('breakdown rows keep their factor metadata', () {
+      final outfit = outfitFromJson({
+        'id': 'gen-3',
+        'breakdown': [
+          {
+            'key': 'color_harmony',
+            'label': 'Color Harmony',
+            'value': 90,
+            'weight': 0.2,
+            'applied': true,
+            'contribution': 18.0,
+          },
+          {
+            'key': 'style_profile',
+            'label': 'Style Profile',
+            'value': 0,
+            'weight': 0,
+            'applied': false,
+            'contribution': 0,
+          },
+        ],
+      });
+
+      expect(outfit.factors, hasLength(2));
+      expect(outfit.factors![0].key, 'color_harmony');
+      expect(outfit.factors![0].contribution, 18.0);
+      expect(outfit.factors![1].applied, false);
+      expect(outfit.breakdown![0].label, 'Color Harmony');
+      expect(outfit.breakdown![0].value, 90);
+    });
+
+    test('parses saved-outfit metadata', () {
+      final outfit = outfitFromJson(outfitJson()
+        ..addAll({
+          'favorite': true,
+          'variant': 'remix',
+          'note': 'Swap the sneakers for loafers.',
+          'keptFromOriginal': 2,
+          'regenerated': true,
+          'createdAt': '2026-11-20T10:00:00.000Z',
+        }));
+
+      expect(outfit.favorite, true);
+      expect(outfit.variant, 'remix');
+      expect(outfit.note, 'Swap the sneakers for loafers.');
+      expect(outfit.keptFromOriginal, 2);
+      expect(outfit.regenerated, true);
+      expect(outfit.createdAt, isNotNull);
+      expect(outfit.createdAt!.year, 2026);
     });
   });
 }

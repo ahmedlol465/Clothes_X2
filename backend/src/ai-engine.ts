@@ -23,6 +23,14 @@ import * as tax from './taxonomy';
 import * as scoring from './scoring';
 import * as memoryStore from './style-memory';
 import * as retrieval from './retrieval';
+import {
+  arabicSlot,
+  categoryLabel,
+  detectLanguage,
+  localizedReply,
+  normalizeArabic,
+  type LanguageCode,
+} from './language';
 
 // ------------------------------------------------------------- compatibility
 
@@ -480,6 +488,30 @@ function detectOccasion(q = '') {
   return null;
 }
 
+/**
+ * Arabic occasion words, checked against the diacritic-folded text
+ * (normalizeArabic maps ة→ه, أ→ا, ى→ي, ئ→ي — patterns are written folded).
+ */
+const ARABIC_OCCASIONS: Array<[RegExp, string]> = [
+  [/فرح|زفاف|خطوبه|عرس/, 'formal dinner'],
+  [/مقابله|انترويو|شغل|دوام|اجتماع/, 'meeting'],
+  [/معاد|موعد|رومانسي/, 'date night'],
+  [/خروجه|سهره|عشا|مطعم/, 'date night'],
+  [/حفله|عيد ميلاد/, 'party'],
+  [/بحر|شاطي|مصيف|حمام سباحه/, 'beach'],
+  [/جيم|رياضه|تمرين|جري|نادي/, 'gym'],
+  [/جامعه|محاضره|محاضرة|كليه|مدرسه|سكشن/, 'university casual'],
+  [/سفر|رحله|طياره|مطار/, 'travel'],
+  [/مشوار|قعده|كاجوال|عادي/, 'casual'],
+];
+
+function detectArabicOccasion(ar = '') {
+  for (const [re, occasion] of ARABIC_OCCASIONS) {
+    if (re.test(ar)) return occasion;
+  }
+  return null;
+}
+
 /** Natural-language reading of an occasion key, for offline replies. */
 const OCCASION_PHRASE = {
   casual: 'an easy everyday look',
@@ -554,6 +586,10 @@ function findNamedItem(q, wardrobe = []) {
  */
 function chatReply(message: any, ctx: any = {}) {
   const q = tax.normalize(message);
+  const ar = normalizeArabic(message);
+  const lang: LanguageCode = ctx.language || detectLanguage(message);
+  const lr = (en: string, arText: string, arEg?: string) =>
+    localizedReply(lang, en, arText, arEg);
   const wardrobe = (ctx.wardrobe || []).filter((i) => !i.archived);
   const weather = ctx.weather || { tempC: 24, condition: 'partly cloudy', summary: '24°C' };
   const styleProfile = ctx.styleProfile || {};
@@ -569,80 +605,194 @@ function chatReply(message: any, ctx: any = {}) {
       ...extra,
     })[0] || null;
 
-  const intro = weatherLine(weather);
+  const intro = lr(
+    weatherLine(weather),
+    `الجو ${weather.summary || `${weather.tempC}°C`}`,
+  );
+
+  // "Who are you / what can you do" — the user is still learning the tool.
+  if (/(who are you|what can you do|how do you work|help me start|^help$)/.test(q)
+      || /(مين انت|انت مين|بتعمل ايه|بتعرف تعمل ايه|عرفني بنفسك|ساعدني|مساعده|ازاي تشتغل)/.test(ar)) {
+    return {
+      text: lr(
+        'I am your stylist. Tell me the occasion — university, work, a date, a trip — and I build a look from your own wardrobe, ranked by color, weather and how recently you wore each piece. Ask me to swap a piece, make it more formal, or pack for a trip.',
+        'أنا ستيليستك الشخصي. قول لي المناسبة — جامعة، شغل، موعد، سفر — وأنا أبني لك إطلالة من ملابسك، مرتبة حسب الألوان والجو وآخر مرة لبست فيها كل قطعة. اطلب مني أبدّل قطعة، أو أخلي اللوك أرسمي، أو أجهز شنطة سفر.',
+        'أنا الستيليست بتاعك. قولي المناسبة — جامعة، شغل، معاد، سفر — وهعملك لوك من اللي في دولابك، مرتب حسب الألوان والجو وامتى آخر مرة لبست كل حاجة. ممكن تقولي بدّل حاجة، أو رسمي أكتر، أو جهزلي شنطة سفر.',
+      ),
+      outfit: null,
+      intent: 'chat',
+    };
+  }
 
   // "I haven't worn X" / "surprise me" → rotation.
-  if (/(haven'?t worn|not worn|unworn|new (thing|piece)|something different|surprise me|rotate)/.test(q)) {
+  if (/(haven'?t worn|not worn|unworn|new (thing|piece)|something different|surprise me|rotate)/.test(q)
+      || /(لم البس|ما لبستش|لم يرتدي|حاجه جديده|شيء جديد|فاجئني|غيره)/.test(ar)) {
     const ranked = generateOutfits(wardrobe, { occasion: detectOccasion(q) || 'casual', weather, styleProfile, memory, count: 3 });
     const unworn = ranked.find((o) => o.items.some((i) => !i.timesWorn));
     const chosen = unworn || ranked[0];
     const fresh = chosen?.items.find((i) => !i.timesWorn);
     return {
       text: chosen && fresh
-        ? `${intro} Your least-worn piece is the ${fresh.name} (never worn) — I built a look around it.`
-        : 'You have worn everything at least once, so I mixed the pieces you reach for least.',
+        ? lr(
+          `${intro} Your least-worn piece is the ${fresh.name} (never worn) — I built a look around it.`,
+          `${intro}، وأقل قطعة ارتديتها هي ${fresh.name} (لم تُرتدَ!). بنيت لك إطلالة حولها:`,
+          `${intro}، وأقل حاجة لبستها ${fresh.name} (ما لبستش!). عملت لك لوك حوالينها:`,
+        )
+        : lr(
+          'You have worn everything at least once, so I mixed the pieces you reach for least.',
+          'لقد ارتديت كل قطعة من قبل، لذا مزجت القطع التي تستخدمها أقل.',
+          'لبست كل حاجة قبل كده، فدمجت القطع اللي بتستخدمها أقل.',
+        ),
       outfit: chosen || null,
       intent: 'build_outfit',
     };
   }
 
   // "not these shoes" / "something else" → exclusion.
-  if (/(hate|don'?t like|dont like|not these?|something else|change the (shoes?|top|bottom))/.test(q)) {
-    const target = q.match(/\b(shoes?|sneakers?|boots?|loafers?|top|shirt|tee|jacket|blazer|pants?|jeans?)\b/);
-    const excluded = target
-      ? wardrobe.filter((i) => tax.normalize(`${i.category} ${i.name}`).includes(target[0].replace(/s$/, ''))).map((i) => i.id)
-      : wardrobe.filter((i) => tax.slotOf(i) === 'shoes').slice(0, 1).map((i) => i.id);
+  if (/(hate|dislike|don'?t like|dont like|do not like|never (?:wear|wearing)|avoid|not these?|something else|change the (shoes?|top|bottom))/.test(q)
+      || /(كرهت|مش بحب|ما بحبش|اتجنب|تجنب|ابعد|ما عايزش|مش عايز)/.test(ar)) {
+    const englishTarget = q.match(/\b(shoes?|sneakers?|boots?|loafers|top|shirt|tee|jacket|blazer|pants?|jeans?)\b/);
+    const arTarget = arabicSlot(message);
+    const targetLabel = englishTarget
+      ? englishTarget[0]
+      : arTarget ? categoryLabel(lang, arTarget) : null;
+    const excluded = englishTarget
+      ? wardrobe.filter((i) => tax.normalize(`${i.category} ${i.name}`).includes(englishTarget[0].replace(/s$/, ''))).map((i) => i.id)
+      : arTarget
+        ? wardrobe.filter((i) => tax.slotOf(i) === arTarget).map((i) => i.id)
+        : wardrobe.filter((i) => tax.slotOf(i) === 'shoes').slice(0, 1).map((i) => i.id);
     const outfit = build(detectOccasion(q) || 'casual', { excludeIds: excluded });
     return {
       text: outfit
-        ? `${intro} Swapped the ${target ? target[0] : 'shoes'} out — this works instead.`
-        : `Add a ${target ? target[0] : 'second'} option and I will show you the swap.`,
+        ? lr(
+          `${intro} Swapped the ${targetLabel || 'shoes'} out — this works instead.`,
+          `${intro} — استبدلت ${targetLabel || 'الحذاء'}. جرّب هذا بدلًا منه:`,
+          `${intro} — بدّلت ${targetLabel || 'الشوز'}. ده هيشتغل بدل منه:`,
+        )
+        : lr(
+          `Add a ${targetLabel || 'second'} option and I will show you the swap.`,
+          `أضف خيارًا آخر${targetLabel ? ` بدل ${targetLabel}` : ''} وسأريك البديل.`,
+          `ضيف حاجة تانية${targetLabel ? ` بدل ${targetLabel}` : ''} وهوريك البديل.`,
+        ),
       outfit,
       intent: 'remix',
     };
   }
 
   // Formality shifts.
-  if (/(less formal|more casual|casual version|relaxed|laid ?back|toned down)/.test(q)) {
+  if (/(less formal|more casual|casual version|relaxed|laid ?back|toned down)/.test(q)
+      || /(كاجوال|مريح|استرخاء|اقل رسميه|أقل رسمية|غير رسمي)/.test(ar)) {
     return {
-      text: `${intro} Here is the relaxed version, same palette.`,
+      text: lr(
+        `${intro} Here is the relaxed version, same palette.`,
+        `${intro} — هذه النسخة الأكثر عفوية، بنفس الألوان:`,
+        `${intro} — دي النسخة الكاجوال، بنفس الألوان:`,
+      ),
       outfit: build('casual'),
       intent: 'remix',
     };
   }
-  if (/(more formal|dress (it )?up|sharper|smarter|business)/.test(q)) {
+  if (/(more formal|dress (it )?up|sharper|smarter|business)/.test(q)
+      || /(رسمي|شيك|مقابلة|مقابله|عمل|اجتماع|بدله|بدلة)/.test(ar)) {
     return {
-      text: `${intro} Dressed up — a blazer and smarter shoes dial the formality in.`,
+      text: lr(
+        `${intro} Dressed up — a blazer and smarter shoes dial the formality in.`,
+        `${intro} — إطلالة أكثر رسمية. الجاكيتات والأحذية الأنيقة ترفع مستوى الرسمية:`,
+        `${intro} — لوك رسمي أكتر. الجاكيت والشوز الشيك بيرفعوا الرسمية:`,
+      ),
       outfit: build('formal dinner'),
       intent: 'remix',
     };
   }
 
   // Weather-led.
-  if (/(weather|hot|cold|rain|snow|temperature|what do i wear today)/.test(q)) {
+  if (/(weather|hot|cold|rain|snow|temperature|what do i wear today)/.test(q)
+      || /(جو|طقس|حر|برد|مطر|ثلج|درجه الحراره|درجة الحرارة)/.test(ar)) {
     const outfit = build(detectOccasion(q) || 'casual');
-    const advice = Number(weather.tempC) >= 26
-      ? 'so keep it light and breathable'
-      : Number(weather.tempC) <= 14 ? 'so layer up' : 'so a mid-layer is enough';
+    const hot = Number(weather.tempC) >= 26;
+    const cold = Number(weather.tempC) <= 14;
+    const advice = lr(
+      hot ? 'keep it light and breathable' : cold ? 'layer up' : 'a mid-layer is enough',
+      hot ? 'اختر قطعًا خفيفة ومسامية' : cold ? 'ارتدِ طبقات' : 'طبقة متوسطة تكفي',
+      hot ? 'خفف اللبس واختار حاجة تتنفس' : cold ? 'البس طبقات' : 'طبقة واحدة متوسطة كافية',
+    );
     return {
-      text: outfit
-        ? `${intro} ${advice.charAt(0).toUpperCase()}${advice.slice(1)} — ${outfit.explanation}`
-        : `${intro} ${advice.charAt(0).toUpperCase()}${advice.slice(1)}.`,
+      text: lr(
+        outfit
+          ? `${intro} ${advice.charAt(0).toUpperCase()}${advice.slice(1)} — ${outfit.explanation}`
+          : `${intro} ${advice.charAt(0).toUpperCase()}${advice.slice(1)}.`,
+        `${weather.summary} في ${weather.city || 'منطقتك'} — ${advice}. ${outfit ? 'جرّب:' : ''}`,
+      ),
       outfit,
       intent: 'build_outfit',
     };
   }
 
   // Travel / packing.
-  if (/(travel|trip|pack|flight|dubai|capsule)/.test(q)) {
+  if (/(travel|trip|pack|flight|dubai|capsule)/.test(q)
+      || /(سفر|رحله|رحلة|طيران|حقيبه|كبسوله)/.test(ar)) {
     const days = Number((q.match(/(\d+)\s*(day|night)/) || [])[1]) || 5;
     const outfit = build('travel');
     const list = packingList(wardrobe, { days });
     return {
-      text: `${intro} Pack ${list.items.length} pieces for ${days} days — that gives you about ${list.outfitsEstimate} combinations without repeating anything.`,
+      text: lr(
+        `${intro} Pack ${list.items.length} pieces for ${days} days — that gives you about ${list.outfitsEstimate} combinations without repeating anything.`,
+        `${intro}. احزم ${list.items.length} قطعة لـ ${days} أيام — هذا يمنحك نحو ${list.outfitsEstimate} تركيبة دون تكرار.`,
+        `${intro}. احزم ${list.items.length} حاجة لـ ${days} أيام — ده هياديك حوالي ${list.outfitsEstimate} تركيبة من غير تكرار.`,
+      ),
       outfit,
       intent: 'build_outfit',
       packing: list,
+    };
+  }
+
+  // Colour advice — answered from his own palette, not a generic blog post.
+  if (/(colou?rs? (work|go|match|suit)|colou?r combin|what colou?rs?|which colou?rs?)/.test(q)
+      || /(الوان|اللون|يليق|يلائم|تناسق|انساق)/.test(ar)) {
+    const favorites = (styleProfile.favoriteColors || []).filter(Boolean);
+    const paletteTip = favorites.length
+      ? lr(
+        `Your saved favourites are ${favorites.join(', ')} — pieces in those colours already anchor most of your wardrobe.`,
+        `ألوانك المفضلة المحفوظة هي ${favorites.join('، ')} — القطع بهذه الألوان تشكل أساس معظم خزانتك.`,
+        `ألوانك المفضلة عندك ${favorites.join('، ')} — أغلب دولابك متبني عليهم أصلاً.`,
+      )
+      : lr(
+        'Neutrals (white, beige, navy, grey) pair with almost everything; one strong colour per outfit keeps it clean.',
+        'الألوان المحايدة (أبيض، بيج، كحلي، رمادي) تتناسق مع كل شيء تقريباً؛ ولون قوي واحد في الإطلالة يحافظ على بساطتها.',
+        'الألوان المحايدة (أبيض، بيج، كحلي، رمادي) بتمشي مع أي حاجة تقريباً؛ ولون جامد واحد في اللوك يخليه نضيف.',
+      );
+    return {
+      text: `${intro} ${paletteTip}`,
+      outfit: null,
+      intent: 'chat',
+    };
+  }
+
+  // Shopping / budget — route him to the gap-based shopping list.
+  if (/(what should i buy|worth buying|shopping|budget|cheap|expensive)/.test(q)
+      || /(اشتري|اشترى|فلوس|رخيص|غالي|سعر|ميزانيه|تسوق|شوبينج)/.test(ar)) {
+    return {
+      text: lr(
+        'Check Smart Shopping on your profile — it lists the gaps in your wardrobe, so you buy what unlocks the most outfits instead of duplicates.',
+        'راجع Smart Shopping في ملفك — يعرض الفجوات في خزانتك، فتشتري ما يفتح أكثر إطلالات بدل القطع المكررة.',
+        'بص على Smart Shopping في البروفايل — بيجيبلك الفاضي في دولابك، عشان تشتري اللي يفتحلك لوكيات جديدة مش حاجة عندك زيها.',
+      ),
+      outfit: null,
+      intent: 'chat',
+    };
+  }
+
+  // Positive feedback on the last suggestion.
+  if (/(love it|like it|nice|great look|looks good|perfect|amazing|awesome)/.test(q)
+      || /(حلو|جميل|جامد|عظيم|تمام|عجبني|برفكت|تحفه)/.test(ar)) {
+    return {
+      text: lr(
+        'Glad it landed. Want a variation — more casual, or a different pair of shoes?',
+        'سعيد أنها عجبتك. هل تريد نسخة أخرى — أكثر عفوية، أو حذاء مختلف؟',
+        'جامد إنها عجبتك. تحب نسخة تانية — كاجوال أكتر، أو شوز مختلف؟',
+      ),
+      outfit: null,
+      intent: 'chat',
     };
   }
 
@@ -650,9 +800,19 @@ function chatReply(message: any, ctx: any = {}) {
   // actually contain it. The verb gate used to require an explicit
   // "wear/put/show", which meant "what about my navy shirt?" fell through to the
   // generic branch and answered with an outfit containing no navy at all.
-  const colorWord = q.match(/\b(blue|white|beige|black|navy|brown|grey|gray|green|red|olive|cream|denim|khaki|tan|charcoal|indigo)\b/);
+  const colorWord = q.match(/\b(blue|white|beige|black|navy|brown|grey|gray|green|red|olive|cream|denim|khaki|tan|charcoal|indigo)\b/)
+    || (() => {
+      const arColors: Array<[RegExp, string]> = [
+        [/ازرق|نيفي/, 'blue'], [/ابيض/, 'white'], [/بيج/, 'beige'],
+        [/اسود/, 'black'], [/بني|بنى/, 'brown'], [/رمادي/, 'grey'],
+        [/اخضر/, 'green'], [/احمر/, 'red'], [/كحلي/, 'navy'],
+      ];
+      for (const [re, color] of arColors) if (re.test(ar)) return [color];
+      return null;
+    })();
   const colorWanted = colorWord
-    && /(wear|put|with|around|find|show|has|about|got|own|any)/.test(q);
+    && (/(wear|put|with|around|find|show|has|about|got|own|any)/.test(q)
+      || /( البس|ابلش|لون|لوني|ألوان|الوان|مع|حول)/.test(ar));
   const byColor = colorWanted
     ? wardrobe.find((i) => tax.normalize(i.color).includes(colorWord[0]))
     : null;
@@ -673,29 +833,49 @@ function chatReply(message: any, ctx: any = {}) {
     const outfit = build(detectOccasion(q) || 'casual', { anchorItemId: anchor.id });
     return {
       text: outfit
-        ? `${intro} Built around your ${anchor.name} — ${outfit.explanation}`
-        : `I can start from the ${anchor.name}, but I need a bottom and shoes to complete the look.`,
+        ? lr(
+          `${intro} Built around your ${anchor.name} — ${outfit.explanation}`,
+          `بنيت الإطلالة حول ${anchor.name} — بنسبة ${outfit.match}%:`,
+          `عملت اللوك حوالين ${anchor.name} — بنسبة ${outfit.match}%:`,
+        )
+        : lr(
+          `I can start from the ${anchor.name}, but I need a bottom and shoes to complete the look.`,
+          `${anchor.name} هي الأساس. أضف جزءًا سفليًا وحذاءً لإكمال الإطلالة.`,
+          `${anchor.name} هي الأساس. ضيف بنطلون وشوز عشان تكمل اللوك.`,
+        ),
       outfit,
       intent: 'build_outfit',
     };
   }
   if (colorWanted) {
     return {
-      text: `${intro} You do not own anything in ${colorWord[0]}. I could suggest what to add — want that?`,
+      text: lr(
+        `${intro} You do not own anything in ${colorWord[0]}. I could suggest what to add — want that?`,
+        `لا تملك أي قطعة بلون ${colorWord[0]}. هل تريد أن أقترح ما تضيفه؟`,
+        `معندكش حاجة بلون ${colorWord[0]}. تحب أقترح تضيف إيه؟`,
+      ),
       outfit: null,
       intent: 'learn',
     };
   }
 
   // Occasion-led (covers "date", "interview", "university", ...).
-  const occasion = detectOccasion(q);
-  if (occasion || /(what.*wear|dress me|build me|suggest|outfit|recommend|help me)/.test(q)) {
+  const occasion = detectOccasion(q) || detectArabicOccasion(ar);
+  if (occasion || /(what.*wear|dress me|build me|suggest|outfit|recommend|help me)/.test(q)
+      || /(اعمل|ابني|جهز|اقترح|لوك|اطلاله|إطلالة|ملابس|لبس)/.test(ar)) {
     const use = occasion || 'casual';
     const outfit = build(use);
     return {
       text: outfit
-        ? `${intro} For ${occasionPhrase(use)}, ${outfit.explanation}`
-        : 'Add a few pieces and I will build looks from what you own.',
+        ? lr(
+          `${intro} For ${occasionPhrase(use)}, ${outfit.explanation}`,
+          `${intro}. لـ ${use}: ${outfit.pieces.join(' + ')} — بنسبة ${outfit.match}%.`,
+        )
+        : lr(
+          'Add a few pieces and I will build looks from what you own.',
+          'أضف بعض القطع وسأبني لك إطلالات مما تملكه.',
+          'ضيف حاجات وهعمل لك لوكيات من اللي عندك.',
+        ),
       outfit,
       intent: 'build_outfit',
       occasion: use,
@@ -704,9 +884,13 @@ function chatReply(message: any, ctx: any = {}) {
 
   // Greetings and acknowledgements. Answering "hello" with a random outfit is
   // worse than saying hello back — the user has not asked for anything yet.
-  if (/^(hi|hey|hello|yo|sup|thanks|thank you|ok|okay|cool|nice|great|awesome|perfect|bye|goodbye|cheers|good (morning|afternoon|evening|night))\b/.test(q)) {
+  if (/^(hi|hey|hello|yo|sup|thanks|thank you|ok|okay|cool|nice|great|awesome|perfect|bye|goodbye|cheers|good (morning|afternoon|evening|night))\b/.test(q)
+      || /^(اهلا|ازيك|هاي|مرحبا|سلام|صباح|مساء|تمام|شكرا|ماشي|اوك|اوكي)\b/.test(ar)) {
     return {
-      text: `${intro} Tell me where you are headed — university, work, a date, a trip — and I will build it from what you own.`,
+      text: lr(
+        `${intro} Tell me where you are headed — university, work, a date, a trip — and I will build it from what you own.`,
+        `${intro} — قول لي رايح فين — جامعة، شغل، موعد، سفر — وأنا أعملها من اللي عندك.`,
+      ),
       outfit: null,
       intent: 'chat',
     };
@@ -719,8 +903,16 @@ function chatReply(message: any, ctx: any = {}) {
     // `explanation` already opens with the pieces, so listing them again here
     // just made the sentence repeat itself.
     text: outfit
-      ? `${note ? `${cap(note)} — and yes, ` : ''}${outfit.explanation}`
-      : 'Tell me the occasion — university, date, work, travel — and I will build it from your wardrobe.',
+      ? lr(
+        `${note ? `${cap(note)} — and yes, ` : ''}${outfit.explanation}`,
+        `${note ? `${cap(note)} — ونعم، ` : ''}${outfit.pieces.join(' + ')} هي أقوى إطلالة لديك بنسبة ${outfit.match}%.`,
+        `${note ? `${cap(note)} — وأيوه، ` : ''}${outfit.pieces.join(' + ')} هو أقوى لوك عندك بنسبة ${outfit.match}%.`,
+      )
+      : lr(
+        'Tell me the occasion — university, date, work, travel — and I will build it from your wardrobe.',
+        'أخبرني بالمناسبة — جامعة، موعد، عمل، سفر — وسأبنيها من خزانة ملابسك.',
+        'قولي المناسبة — جامعة، موعد، شغل، سفر — وهعملها من اللي عندك.',
+      ),
     outfit,
     intent: 'chat',
   };
@@ -762,11 +954,17 @@ async function analyzeClothing(input: any = {}) {
   const bytes = imageBytesOf(input);
   if (bytes) {
     const { analyzeClothingImage } = require('./clothing-vision');
-    const result = await analyzeClothingImage(bytes, overrides);
-    if (result.success) return result;
-    // Preserve the rejection contract. A caller must not receive a clothing
-    // guess for an image we just proved is not clothing.
-    return { ...result, hint: result.hint || undefined };
+    try {
+      const result = await analyzeClothingImage(bytes, overrides);
+      if (result.success) return result;
+      // Preserve the rejection contract. A caller must not receive a clothing
+      // guess for an image we just proved is not clothing.
+      return { ...result, hint: result.hint || undefined };
+    } catch (e: any) {
+      // Vision disabled or the model missing must not block adding a piece
+      // manually: fall through to the filename guess (marked unverified).
+      if (e?.code !== 'CLOTHING_VISION_UNAVAILABLE') throw e;
+    }
   }
 
   return {

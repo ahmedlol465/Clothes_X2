@@ -6,6 +6,19 @@ import '../backend_status.dart';
 import '../models.dart';
 import '../dto/mappers.dart';
 
+/// Outcome of [OutfitsController.createOutfit].
+enum SaveOutfitResult {
+  /// The outfit was persisted and the saved grid refreshed.
+  saved,
+
+  /// An identical outfit (same name, occasion and ordered items) is already
+  /// saved, so no second record was created.
+  duplicate,
+
+  /// The save failed; the backend status carries the reason.
+  failed,
+}
+
 /// Outfits, today's pick, live weather and compatibility scoring.
 class OutfitsController extends ChangeNotifier {
   OutfitsController({
@@ -94,6 +107,71 @@ class OutfitsController extends ChangeNotifier {
     } catch (e) {
       _status.markOffline(e);
       return null;
+    }
+  }
+
+  /// Identity used to collapse repeated saves: two outfits are "the same save"
+  /// when they share a trimmed [Outfit.name], a case-insensitive trimmed
+  /// [Outfit.occasion] and the exact same ordered [Outfit.itemIds].
+  ///
+  /// The rule is deliberately strict (all three fields, order-sensitive) so it
+  /// can only ever under-merge: two genuinely different outfits are never
+  /// collapsed into one.
+  static bool sameOutfit(Outfit a, Outfit b) {
+    if (a.name.trim() != b.name.trim()) return false;
+    if (a.occasion.trim().toLowerCase() != b.occasion.trim().toLowerCase()) {
+      return false;
+    }
+    final x = a.itemIds ?? const <String>[];
+    final y = b.itemIds ?? const <String>[];
+    if (x.length != y.length) return false;
+    for (var i = 0; i < x.length; i++) {
+      if (x[i] != y[i]) return false;
+    }
+    return true;
+  }
+
+  /// Saves a user-created outfit (§8.5 `POST /outfits`) and refreshes [saved]
+  /// so the new outfit shows up in the Saved grid without leaving the screen.
+  ///
+  /// The backend scores the selected pieces itself, so only the name, the
+  /// item ids and the occasion cross the wire. Repeated saves of the exact
+  /// same outfit are collapsed: the current list is refreshed first, and when
+  /// [sameOutfit] matches an existing entry the POST is skipped and
+  /// [SaveOutfitResult.duplicate] is returned, so a double tap cannot mint a
+  /// second identical record. Any failure returns [SaveOutfitResult.failed].
+  Future<SaveOutfitResult> createOutfit({
+    required String name,
+    required List<String> itemIds,
+    String occasion = 'Casual',
+  }) async {
+    if (name.trim().isEmpty || itemIds.isEmpty) {
+      return SaveOutfitResult.failed;
+    }
+    final candidate = Outfit(
+      id: '',
+      name: name,
+      image: '',
+      occasion: occasion,
+      match: 0,
+      pieces: const <String>[],
+      itemIds: itemIds,
+    );
+    // Refresh against the server before deciding, so the duplicate check does
+    // not trust a stale cache. When the refresh fails the POST below fails
+    // too, so the duplicate check is simply skipped offline.
+    await loadSaved();
+    if (saved.any((o) => sameOutfit(o, candidate))) {
+      return SaveOutfitResult.duplicate;
+    }
+    try {
+      await _api.createOutfit(name, itemIds, occasion: occasion);
+      _status.markOnline();
+      await loadSaved();
+      return SaveOutfitResult.saved;
+    } catch (e) {
+      _status.markOffline(e);
+      return SaveOutfitResult.failed;
     }
   }
 

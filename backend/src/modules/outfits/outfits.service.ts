@@ -18,6 +18,7 @@ import {
 import { StyleProfile } from '../../database/entities/identity.entity';
 import { CreateOutfitDto } from './dto/create-outfit.dto';
 import { Wardrobe, WardrobeItem } from '../../database/entities/wardrobe.entity';
+import { applyFreshnessRotation } from '../../freshness';
 
 @Injectable()
 export class OutfitsService {
@@ -41,7 +42,7 @@ export class OutfitsService {
     if (!wardrobe) return [];
     const items = await this.itemRepo.find({
       where: { wardrobeId: wardrobe.id, status: 'active' },
-      select: ['id'],
+      select: { id: true },
     });
     return items.map((item) => item.id);
   }
@@ -51,7 +52,7 @@ export class OutfitsService {
     const allowed = new Set(ids);
     const validIds = itemIds.filter((id) => allowed.has(id));
     if (validIds.length === 0) return [];
-    return this.itemRepo.findByIds(validIds);
+    return this.itemRepo.find({ where: { id: In(validIds) } });
   }
 
   private async readMemories(userId: string): Promise<any[]> {
@@ -90,21 +91,28 @@ export class OutfitsService {
     return this.userWardrobeIds(userId).then((itemIds) => {
       if (itemIds.length === 0) return Promise.resolve([]);
       return this.itemRepo.find({ where: { id: In(itemIds) } });
-    }).then((items) =>
-          aiEngine.generateOutfits(items, {
+    }).then((items) => {
+          const outfits = aiEngine.generateOutfits(items, {
             occasion,
             weather,
             styleProfile: readStyleProfile(null),
             count,
-          }),
-        )
-        .then((outfits) => ({ outfits, weather, occasion }));
+          });
+          return {
+            outfits: applyFreshnessRotation(
+              outfits,
+              new Map(items.map((item) => [item.id, item])),
+            ),
+            weather,
+            occasion,
+          };
+        });
   }
 
   async list(userId: string, query: Record<string, unknown>) {
     const outfits = await this.outfitRepo.find({
       where: { userId },
-      relations: ['outfitItems', 'outfitItems.item'],
+      relations: { outfitItems: { item: true } },
       order: { createdAt: 'DESC' },
     });
     let filtered = outfits;
@@ -117,7 +125,7 @@ export class OutfitsService {
   async get(userId: string, id: string) {
     const outfit = await this.outfitRepo.findOne({
       where: { id, userId },
-      relations: ['outfitItems', 'outfitItems.item'],
+      relations: { outfitItems: { item: true } },
     });
     if (!outfit) throw new NotFoundException('Outfit not found.');
     return { outfit: this.toDto(outfit) };
@@ -236,7 +244,7 @@ export class OutfitsService {
     const comment = body?.comment ?? '';
     const outfit = await this.outfitRepo.findOne({
       where: { id, userId },
-      relations: ['outfitItems', 'outfitItems.item'],
+      relations: { outfitItems: { item: true } },
     });
     if (!outfit) throw new NotFoundException('Outfit not found.');
 

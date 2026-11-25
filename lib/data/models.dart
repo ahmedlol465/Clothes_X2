@@ -13,8 +13,17 @@ class ClothingItem {
     required this.material,
     required this.season,
     required this.formality,
+    this.pattern = 'Plain',
     this.timesWorn = 0,
     this.lastWornLabel,
+    // AI analysis provenance (§8.4). Populated by the backend when a garment
+    // was created through a real photo analysis; null for items with no
+    // analysis record. The server owns these values — the client only reads.
+    this.analysisSource,
+    this.analysisConfidence,
+    this.analysisRaw,
+    this.analysisRejected = false,
+    this.analyzedAt,
   });
 
   final String id;
@@ -26,11 +35,78 @@ class ClothingItem {
   final String material;
   final String season;
   final String formality;
+  /// Shopper-style pattern detected from the image (e.g. "Plain", "Striped").
+  final String pattern;
+
   final int timesWorn;
   final String? lastWornLabel;
 
+  /// Who produced the analysis: `clothing-vision`, `clothing-vision+gemini`,
+  /// `filename` (unverified guess from the name), `heuristic` (offline
+  /// fallback), or null when no analysis exists.
+  final String? analysisSource;
+
+  /// Honest 0..1 confidence from the vision pipeline. Null when the garment
+  /// was not analyzed.
+  final double? analysisConfidence;
+
+  /// The raw analysis payload from the backend, kept so the detail screen can
+  /// show color detail, evidence and the model identity.
+  final Map<String, dynamic>? analysisRaw;
+
+  /// True when the backend's gate rejected the image as non-clothing.
+  final bool analysisRejected;
+
+  /// When the analysis was performed, or null.
+  final DateTime? analyzedAt;
+
   /// Compact "Tops • White" style summary used under the product name.
   String get meta => '$category • $color';
+
+  /// How the analysis turned out. `null` when there is no analysis record.
+  String? get analysisStatus {
+    if (analysisRejected) return 'rejected';
+    if (analysisSource == null) return null;
+    if (analysisSource == 'heuristic') return 'heuristic';
+    if (analysisSource == 'filename') return 'filename';
+    if (analysisConfidence != null && analysisConfidence! < 0.5) {
+      return 'uncertain';
+    }
+    return 'analyzed';
+  }
+
+  /// Human read-out of [analysisStatus], or null when there is nothing to say.
+  String? get analysisStatusLabel {
+    switch (analysisStatus) {
+      case 'rejected':
+        return 'Rejected by the AI gate — not detected as clothing.';
+      case 'heuristic':
+        return 'Analyzed offline — tags are best-guess defaults.';
+      case 'filename':
+        return 'Unverified — tags guessed from the file name.';
+      case 'uncertain':
+        return 'Analyzed with low confidence — verify the tags below.';
+      case 'analyzed':
+        return 'Analyzed by AI vision.';
+      default:
+        return null;
+    }
+  }
+
+  /// The named colour plus its measured confidence when available.
+  String? get colorWithConfidence {
+    if (color.isEmpty) return null;
+    final conf = analysisConfidence;
+    if (conf == null) return color;
+    return '$color (${(conf * 100).round()}%)';
+  }
+
+  /// Attributes the model was not confident about, e.g. ['material', 'season'].
+  List<String> get uncertainAttributesList {
+    final raw = analysisRaw?['uncertainAttributes'];
+    if (raw is List) return raw.whereType<String>().toList();
+    return const <String>[];
+  }
 
   ClothingItem copyWith({
     String? name,
@@ -54,8 +130,14 @@ class ClothingItem {
         material: material ?? this.material,
         season: season ?? this.season,
         formality: formality ?? this.formality,
+        pattern: pattern,
         timesWorn: timesWorn ?? this.timesWorn,
         lastWornLabel: lastWornLabel ?? this.lastWornLabel,
+        analysisSource: analysisSource,
+        analysisConfidence: analysisConfidence,
+        analysisRaw: analysisRaw,
+        analysisRejected: analysisRejected,
+        analyzedAt: analyzedAt,
       );
 }
 
@@ -460,6 +542,7 @@ class UserProfile {
     required this.email,
     required this.createdAt,
     this.avatarUrl,
+    this.gender,
     this.favoriteColors = const [],
     this.preferredStyles = const [],
     this.heightCm,
@@ -479,6 +562,10 @@ class UserProfile {
 
   /// Optional remote avatar. Null falls back to the bundled placeholder.
   final String? avatarUrl;
+
+  /// 'male' or 'female', or null when the user has not said. The stylist uses
+  /// this to keep recommendations and outfit building in the right lane.
+  final String? gender;
 
   final List<String> favoriteColors;
   final List<String> preferredStyles;
@@ -551,6 +638,7 @@ class UserProfile {
 
   UserProfile copyWith({
     String? name,
+    String? gender,
     String? email,
     String? avatarUrl,
     List<String>? favoriteColors,
@@ -568,6 +656,7 @@ class UserProfile {
         email: email ?? this.email,
         createdAt: createdAt,
         avatarUrl: avatarUrl ?? this.avatarUrl,
+        gender: gender ?? this.gender,
         favoriteColors: favoriteColors ?? this.favoriteColors,
         preferredStyles: preferredStyles ?? this.preferredStyles,
         heightCm: heightCm ?? this.heightCm,

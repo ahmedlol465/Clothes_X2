@@ -60,10 +60,11 @@ export class AdminService {
 
   async users() {
     const rows = await this.userRepo.find({
-      select: [
-        'id', 'email', 'role', 'avatarUrl', 'onboardingCompleted',
-        'emailVerified', 'createdAt', 'updatedAt',
-      ],
+      select: {
+        id: true, email: true, role: true, avatarUrl: true,
+        onboardingCompleted: true, emailVerified: true, createdAt: true,
+        updatedAt: true,
+      },
       order: { createdAt: 'DESC' },
     });
     return { users: rows.map(publicUser) };
