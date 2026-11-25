@@ -488,6 +488,30 @@ function detectOccasion(q = '') {
   return null;
 }
 
+/**
+ * Arabic occasion words, checked against the diacritic-folded text
+ * (normalizeArabic maps ة→ه, أ→ا, ى→ي, ئ→ي — patterns are written folded).
+ */
+const ARABIC_OCCASIONS: Array<[RegExp, string]> = [
+  [/فرح|زفاف|خطوبه|عرس/, 'formal dinner'],
+  [/مقابله|انترويو|شغل|دوام|اجتماع/, 'meeting'],
+  [/معاد|موعد|رومانسي/, 'date night'],
+  [/خروجه|سهره|عشا|مطعم/, 'date night'],
+  [/حفله|عيد ميلاد/, 'party'],
+  [/بحر|شاطي|مصيف|حمام سباحه/, 'beach'],
+  [/جيم|رياضه|تمرين|جري|نادي/, 'gym'],
+  [/جامعه|محاضره|محاضرة|كليه|مدرسه|سكشن/, 'university casual'],
+  [/سفر|رحله|طياره|مطار/, 'travel'],
+  [/مشوار|قعده|كاجوال|عادي/, 'casual'],
+];
+
+function detectArabicOccasion(ar = '') {
+  for (const [re, occasion] of ARABIC_OCCASIONS) {
+    if (re.test(ar)) return occasion;
+  }
+  return null;
+}
+
 /** Natural-language reading of an occasion key, for offline replies. */
 const OCCASION_PHRASE = {
   casual: 'an easy everyday look',
@@ -585,6 +609,20 @@ function chatReply(message: any, ctx: any = {}) {
     weatherLine(weather),
     `الجو ${weather.summary || `${weather.tempC}°C`}`,
   );
+
+  // "Who are you / what can you do" — the user is still learning the tool.
+  if (/(who are you|what can you do|how do you work|help me start|^help$)/.test(q)
+      || /(مين انت|انت مين|بتعمل ايه|بتعرف تعمل ايه|عرفني بنفسك|ساعدني|مساعده|ازاي تشتغل)/.test(ar)) {
+    return {
+      text: lr(
+        'I am your stylist. Tell me the occasion — university, work, a date, a trip — and I build a look from your own wardrobe, ranked by color, weather and how recently you wore each piece. Ask me to swap a piece, make it more formal, or pack for a trip.',
+        'أنا ستيليستك الشخصي. قول لي المناسبة — جامعة، شغل، موعد، سفر — وأنا أبني لك إطلالة من ملابسك، مرتبة حسب الألوان والجو وآخر مرة لبست فيها كل قطعة. اطلب مني أبدّل قطعة، أو أخلي اللوك أرسمي، أو أجهز شنطة سفر.',
+        'أنا الستيليست بتاعك. قولي المناسبة — جامعة، شغل، معاد، سفر — وهعملك لوك من اللي في دولابك، مرتب حسب الألوان والجو وامتى آخر مرة لبست كل حاجة. ممكن تقولي بدّل حاجة، أو رسمي أكتر، أو جهزلي شنطة سفر.',
+      ),
+      outfit: null,
+      intent: 'chat',
+    };
+  }
 
   // "I haven't worn X" / "surprise me" → rotation.
   if (/(haven'?t worn|not worn|unworn|new (thing|piece)|something different|surprise me|rotate)/.test(q)
@@ -708,6 +746,56 @@ function chatReply(message: any, ctx: any = {}) {
     };
   }
 
+  // Colour advice — answered from his own palette, not a generic blog post.
+  if (/(colou?rs? (work|go|match|suit)|colou?r combin|what colou?rs?|which colou?rs?)/.test(q)
+      || /(الوان|اللون|يليق|يلائم|تناسق|انساق)/.test(ar)) {
+    const favorites = (styleProfile.favoriteColors || []).filter(Boolean);
+    const paletteTip = favorites.length
+      ? lr(
+        `Your saved favourites are ${favorites.join(', ')} — pieces in those colours already anchor most of your wardrobe.`,
+        `ألوانك المفضلة المحفوظة هي ${favorites.join('، ')} — القطع بهذه الألوان تشكل أساس معظم خزانتك.`,
+        `ألوانك المفضلة عندك ${favorites.join('، ')} — أغلب دولابك متبني عليهم أصلاً.`,
+      )
+      : lr(
+        'Neutrals (white, beige, navy, grey) pair with almost everything; one strong colour per outfit keeps it clean.',
+        'الألوان المحايدة (أبيض، بيج، كحلي، رمادي) تتناسق مع كل شيء تقريباً؛ ولون قوي واحد في الإطلالة يحافظ على بساطتها.',
+        'الألوان المحايدة (أبيض، بيج، كحلي، رمادي) بتمشي مع أي حاجة تقريباً؛ ولون جامد واحد في اللوك يخليه نضيف.',
+      );
+    return {
+      text: `${intro} ${paletteTip}`,
+      outfit: null,
+      intent: 'chat',
+    };
+  }
+
+  // Shopping / budget — route him to the gap-based shopping list.
+  if (/(what should i buy|worth buying|shopping|budget|cheap|expensive)/.test(q)
+      || /(اشتري|اشترى|فلوس|رخيص|غالي|سعر|ميزانيه|تسوق|شوبينج)/.test(ar)) {
+    return {
+      text: lr(
+        'Check Smart Shopping on your profile — it lists the gaps in your wardrobe, so you buy what unlocks the most outfits instead of duplicates.',
+        'راجع Smart Shopping في ملفك — يعرض الفجوات في خزانتك، فتشتري ما يفتح أكثر إطلالات بدل القطع المكررة.',
+        'بص على Smart Shopping في البروفايل — بيجيبلك الفاضي في دولابك، عشان تشتري اللي يفتحلك لوكيات جديدة مش حاجة عندك زيها.',
+      ),
+      outfit: null,
+      intent: 'chat',
+    };
+  }
+
+  // Positive feedback on the last suggestion.
+  if (/(love it|like it|nice|great look|looks good|perfect|amazing|awesome)/.test(q)
+      || /(حلو|جميل|جامد|عظيم|تمام|عجبني|برفكت|تحفه)/.test(ar)) {
+    return {
+      text: lr(
+        'Glad it landed. Want a variation — more casual, or a different pair of shoes?',
+        'سعيد أنها عجبتك. هل تريد نسخة أخرى — أكثر عفوية، أو حذاء مختلف؟',
+        'جامد إنها عجبتك. تحب نسخة تانية — كاجوال أكتر، أو شوز مختلف؟',
+      ),
+      outfit: null,
+      intent: 'chat',
+    };
+  }
+
   // Anchored request: the user named a garment or a colour, so the reply must
   // actually contain it. The verb gate used to require an explicit
   // "wear/put/show", which meant "what about my navy shirt?" fell through to the
@@ -772,7 +860,7 @@ function chatReply(message: any, ctx: any = {}) {
   }
 
   // Occasion-led (covers "date", "interview", "university", ...).
-  const occasion = detectOccasion(q);
+  const occasion = detectOccasion(q) || detectArabicOccasion(ar);
   if (occasion || /(what.*wear|dress me|build me|suggest|outfit|recommend|help me)/.test(q)
       || /(اعمل|ابني|جهز|اقترح|لوك|اطلاله|إطلالة|ملابس|لبس)/.test(ar)) {
     const use = occasion || 'casual';

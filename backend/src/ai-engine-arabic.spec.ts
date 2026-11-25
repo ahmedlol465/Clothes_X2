@@ -77,3 +77,34 @@ describe('analyzeClothing with vision unavailable', () => {
     jest.dontMock('./clothing-vision');
   });
 });
+
+describe('wider intents (Arabic and English)', () => {
+  it('maps Arabic occasion words to occasions', () => {
+    expect(aiEngine.chatReply('عايز لبس للجامعة', ctx).occasion).toBe('university casual');
+    expect(aiEngine.chatReply('عندي فرح الاسبوع الجاي', ctx).occasion).toBe('formal dinner');
+    expect(aiEngine.chatReply('رايح الجيم', ctx).occasion).toBe('gym');
+  });
+
+  it('answers "who are you" in Egyptian Arabic', () => {
+    const r = aiEngine.chatReply('انت مين وبتعمل ايه', ctx);
+    expect(r.intent).toBe('chat');
+    expect(r.text).toMatch(ARABIC);
+    expect(r.text).toContain('ستيليست');
+  });
+
+  it('answers color questions in Arabic', () => {
+    const r = aiEngine.chatReply('ايه الألوان اللي تليق مع بعض', ctx);
+    expect(r.text).toMatch(ARABIC);
+  });
+
+  it('routes shopping questions to Smart Shopping', () => {
+    const r = aiEngine.chatReply('عايز اشتري هدوم جديدة، ايه رأيك', ctx);
+    expect(r.text).toMatch(ARABIC);
+    expect(r.text).toContain('Smart Shopping');
+  });
+
+  it('accepts praise gracefully in both languages', () => {
+    expect(aiEngine.chatReply('جامد، عجبني اللوك', ctx).text).toMatch(ARABIC);
+    expect(aiEngine.chatReply('love it', ctx).text).not.toMatch(ARABIC);
+  });
+});
