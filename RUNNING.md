@@ -98,8 +98,11 @@ cd backend && npm run dev
 ```
 
 ```
-flutter run -d chrome --web-port 8080
+flutter run -d web-server --web-port=8080 --release
 ```
+
+(the web-server device does not open a browser window - open
+http://localhost:8080 yourself)
 
 - Backend API: http://localhost:3002/api (health: /api/health)
 - Web app: http://localhost:8080 (start.sh serves it without opening a

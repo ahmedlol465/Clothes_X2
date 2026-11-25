@@ -45,7 +45,7 @@ done
   || die "backend did not come up." "Read the end of logs/backend.log - usually MySQL is not running or DB_USERNAME/DB_PASSWORD in backend/.env are wrong."
 
 printf '  web app   '
-setsid flutter run -d web-server --web-port 8080 >logs/flutter.log 2>&1 &
+setsid flutter run -d web-server --web-port=8080 --release >logs/flutter.log 2>&1 &
 APP_PID=$!
 UP=""
 for _ in $(seq 1 180); do

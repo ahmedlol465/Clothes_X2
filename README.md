@@ -21,6 +21,9 @@ bash setup.sh
 bash start.sh
 ```
 
+(start.sh runs `flutter run -d web-server --web-port=8080 --release` plus
+the backend; open http://localhost:8080 in your browser yourself)
+
 Backend runs at http://localhost:3002/api, the web app at
 http://localhost:8080. Demo login: karim@fashiontech.com / wardrobe2024.
 Both scripts print one line per step; details land in `setup.log` and
