@@ -98,12 +98,18 @@ export class ShopService {
     // Gender is a keyword heuristic on the product name: scraped catalogs
     // carry no gender field, so we only exclude obviously-opposite-gendered
     // items and keep everything unknown/unisex eligible.
+    // Keyword heuristic over the product title AND its URL handle: scraped
+    // catalogs carry no gender field, and store photos often show the
+    // garment on a model, so a feminine-coded name is the only signal we
+    // have. For men we filter aggressively - the user would rather see a
+    // smaller honest set than a women's piece in his outfit.
     const GENDER_MARKERS: Record<string, RegExp> = {
-      male: /\b(women'?s?|ladies|female|dress|skirt|blouse|bra|leggings?|heels?)\b/i,
-      female: /\b(men'?s?|male|menswear|boxers?)\b/i,
+      male: /(women'?s?|womens|ladies|female|girl|dress|skirt|skort|blouse|bra(let)?|leggings?|heels?|cami|crop(ped)?|sculpt|bustier|cardigan|tunic|midi|maxi|bikini|lingerie|maternity|petal|blush|boat[- ]neck|baby[- ]tee)/i,
+      female: /\b(men'?s?|mens|male|menswear|boxers?)\b/i,
     };
     const genderOk = (p: ShoppingItem) =>
-      !gender || !GENDER_MARKERS[gender].test(p.name ?? '');
+      !gender ||
+      !GENDER_MARKERS[gender].test(`${p.name ?? ''} ${p.productUrl ?? ''}`);
 
     const products = await this.productRepo.find({
       where: { inStock: true, currency },
@@ -145,6 +151,16 @@ export class ShopService {
       }
     }
 
+    const toProbe = (p: ShoppingItem) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color || 'Neutral',
+      category: p.category,
+      style: p.style || 'Casual',
+      season: p.season || 'All Season',
+      formality: p.style || 'Casual',
+    });
+
     const picked: ShoppingItem[] = [];
     let total = 0;
     const take = (slot: string): boolean => {
@@ -152,7 +168,24 @@ export class ShopService {
         (p) => !picked.includes(p) && total + p.price <= budget,
       );
       if (!candidates.length) return false;
-      const best = candidates[0];
+      // Coherence rule: among the strongest affordable candidates, pick the
+      // piece that scores best WITH the already-picked ones (color harmony,
+      // style, formality) instead of the globally best piece.
+      const shortlist = candidates.slice(0, 6);
+      let best = shortlist[0];
+      let bestScore = -1;
+      for (const c of shortlist) {
+        const score = picked.length
+          ? aiEngine.calculateCompatibility(
+              [...picked.map(toProbe), toProbe(c)],
+              { occasion, weather: { tempC: 24 } },
+            ).match
+          : c.compatibilityScore;
+        if (score > bestScore) {
+          bestScore = score;
+          best = c;
+        }
+      }
       picked.push(best);
       total += best.price;
       return true;
@@ -164,15 +197,7 @@ export class ShopService {
       take('accessory');
     }
 
-    const probeItems = picked.map((p) => ({
-      id: p.id,
-      name: p.name,
-      color: p.color || 'Neutral',
-      category: p.category,
-      style: p.style || 'Casual',
-      season: p.season || 'All Season',
-      formality: p.style || 'Casual',
-    }));
+    const probeItems = picked.map(toProbe);
     const compat = probeItems.length
       ? aiEngine.calculateCompatibility(probeItems, {
           occasion,
