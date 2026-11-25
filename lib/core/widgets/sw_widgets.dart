@@ -565,13 +565,16 @@ class SwProductImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fallback = SizedBox(
+    // Placeholder for missing/failed photos: reads as an intentional empty
+    // state, not a broken image.
+    final fallback = Container(
       height: height,
       width: width,
+      color: AppColors.tint,
       child: const Center(
         child: SwIconView(
           SwIcon.shirt,
-          size: 22,
+          size: 44,
           color: AppColors.textTertiary,
         ),
       ),
