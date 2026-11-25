@@ -437,6 +437,17 @@ class SmartWardrobeApi {
     await _client.post('/shop/wishlist', entry);
   }
 
+  Future<List<dynamic>> wishlist() async =>
+      List<dynamic>.from(
+        (Map<String, dynamic>.from(await _client.get('/shop/wishlist')))['wishlist']
+            as List? ??
+            const [],
+      );
+
+  Future<void> removeFromWishlist(String id) async {
+    await _client.delete('/shop/wishlist/$id');
+  }
+
   /// "Before you buy" check (`POST /shop/before-you-buy`): how well a
   /// candidate product matches what the user already owns.
   Future<Map<String, dynamic>> beforeYouBuy(

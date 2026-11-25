@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../common/decorators/auth.decorators';
@@ -57,5 +57,10 @@ export class ShopController {
     @Body() body: Record<string, any>,
   ) {
     return this.shop.addWishlist(userId, body);
+  }
+
+  @Delete('wishlist/:id')
+  removeWishlist(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.shop.removeWishlist(userId, id);
   }
 }

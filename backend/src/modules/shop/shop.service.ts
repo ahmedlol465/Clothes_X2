@@ -195,6 +195,7 @@ export class ShopService {
     const wishlist = await this.wishlistRepo.find({
       where: { userId },
       order: { createdAt: 'DESC' },
+      relations: { shoppingItem: true },
     });
     return { wishlist };
   }
@@ -207,5 +208,13 @@ export class ShopService {
     });
     const saved = await this.wishlistRepo.save(entry);
     return { entry: saved };
+  }
+
+  async removeWishlist(userId: string, id: string) {
+    // Scoped to the caller: deleting someone else's wishlist row is a no-op.
+    const row = await this.wishlistRepo.findOne({ where: { id, userId } });
+    if (!row) return { removed: false };
+    await this.wishlistRepo.remove(row);
+    return { removed: true };
   }
 }

@@ -47,14 +47,33 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
       final pick = widget._shopController.picks[index];
       try {
         await widget._shopController.api.addToWishlist({
+          if (pick.id != null && pick.id!.isNotEmpty)
+            'shoppingItemId': pick.id,
           'name': pick.name,
-          'price': pick.price,
-          'image': pick.image,
+          'price': double.tryParse(
+                pick.price.replaceAll(RegExp(r'[^0-9.]'), ''),
+              ) ??
+              0,
+          'imageUrl': pick.image,
         });
       } catch (_) {
         // Offline: keep the local wishlist state.
       }
     }
+  }
+
+  /// Saved-for-later list: everything hearted on this screen, removable.
+  void _openWishlist() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) =>
+          _WishlistSheet(shopController: widget._shopController),
+    );
   }
 
   /// Product details sheet with sale info, sizes and the Before You Buy
@@ -106,7 +125,10 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
                       ],
                     ),
                   ),
-                  const SwIconButton(icon: SwIconButtonKind.bag),
+                  SwIconButton(
+                    icon: SwIconButtonKind.bag,
+                    onTap: _openWishlist,
+                  ),
                 ],
               ),
             ),
@@ -527,6 +549,120 @@ class _ProductDetailSheetState extends State<_ProductDetailSheet> {
               ),
             ),
             const SizedBox(height: Insets.md),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The user's saved products (`GET /shop/wishlist`), each removable
+/// (`DELETE /shop/wishlist/:id`).
+class _WishlistSheet extends StatefulWidget {
+  const _WishlistSheet({required this.shopController});
+
+  final ShopController shopController;
+
+  @override
+  State<_WishlistSheet> createState() => _WishlistSheetState();
+}
+
+class _WishlistSheetState extends State<_WishlistSheet> {
+  List<dynamic>? _items;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final items = await widget.shopController.api.wishlist();
+      if (mounted) setState(() => _items = items);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Could not load your wishlist.');
+    }
+  }
+
+  Future<void> _remove(String id) async {
+    try {
+      await widget.shopController.api.removeFromWishlist(id);
+    } catch (_) {
+      // Keep the UI honest: only drop the row when the server accepted it.
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _items = [
+          for (final i in _items ?? const []) if ('${(i as Map)['id']}' != id) i,
+        ];
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _items;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(Insets.gutter),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Wishlist', style: AppText.h3),
+            const SizedBox(height: Insets.lg),
+            if (_error != null)
+              Text(_error!, style: AppText.caption)
+            else if (items == null)
+              const Center(
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation(AppColors.primary),
+                ),
+              )
+            else if (items.isEmpty)
+              Text(
+                'Nothing saved yet. Tap the heart on any product.',
+                style: AppText.caption,
+              )
+            else
+              for (final item in items)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: Insets.md),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: SwProductImage(
+                          image:
+                              '${(item as Map)['imageUrl'] ?? Img.teeWhite}',
+                          radius: Radii.sm,
+                        ),
+                      ),
+                      const SizedBox(width: Insets.md),
+                      Expanded(
+                        child: Text(
+                          '${item['name'] ?? ''}',
+                          style: AppText.bodyStrong,
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () => _remove('${item['id']}'),
+                        child: const Padding(
+                          padding: EdgeInsets.all(Insets.xs),
+                          child: SwIconView(
+                            SwIcon.close,
+                            size: 16,
+                            color: AppColors.textTertiary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
           ],
         ),
       ),
