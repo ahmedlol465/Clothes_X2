@@ -18,6 +18,7 @@ import 'features/profile/style_profile_screen.dart';
 import 'features/profile/coming_soon_screen.dart';
 import 'features/shop/smart_shopping_screen.dart';
 import 'features/stylist/stylist_screen.dart';
+import 'features/stylist/stylist_desk_screen.dart' as desk;
 import 'features/stylist/create_outfit_screen.dart';
 import 'features/stylist/style_avatar_screen.dart';
 import 'features/discover/discover_screen.dart';
@@ -50,6 +51,7 @@ abstract final class Routes {
   static const String outfitHistory = '/outfit-history';
   static const String createOutfit = '/create-outfit';
   static const String stylist = '/stylist';
+  static const String stylistClassic = '/stylist-classic';
   static const String styleAvatar = '/style-avatar';
 }
 
@@ -72,7 +74,8 @@ final Map<String, WidgetBuilder> appRouteTable = {
   Routes.outfitPlanner: (_) => OutfitPlannerScreen(),
   Routes.outfitHistory: (_) => const OutfitHistoryScreen(),
   Routes.createOutfit: (_) => const CreateOutfitScreen(),
-  Routes.stylist: (_) => StylistScreen(),
+  Routes.stylist: (_) => const desk.StylistDeskScreen(),
+  Routes.stylistClassic: (_) => StylistScreen(),
   Routes.styleAvatar: (_) => const StyleAvatarScreen(),
 };
 
