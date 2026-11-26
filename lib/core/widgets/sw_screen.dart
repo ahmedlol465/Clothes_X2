@@ -217,6 +217,7 @@ enum SwIconButtonKind {
   bag,
   search,
   planner,
+  heart,
 }
 
 extension on SwIconButtonKind {
@@ -232,5 +233,6 @@ extension on SwIconButtonKind {
     SwIconButtonKind.bag => SwIcon.bag,
     SwIconButtonKind.search => SwIcon.search,
     SwIconButtonKind.planner => SwIcon.calendar,
+    SwIconButtonKind.heart => SwIcon.heart,
   };
 }

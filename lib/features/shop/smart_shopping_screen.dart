@@ -9,6 +9,7 @@ import '../../core/widgets/sw_widgets.dart';
 import '../../app.dart' show Routes;
 import '../../data/app_state.dart';
 import '../../data/assets.dart';
+import '../../data/controllers/cart_controller.dart';
 import '../../data/controllers/shop_controller.dart';
 import '../../data/models.dart';
 
@@ -77,6 +78,20 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
     );
   }
 
+  /// Cart sheet: quantities, total and the simulated checkout.
+  void _openCart() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) =>
+          _CartSheet(cart: AppState.instance.cartController),
+    );
+  }
+
   /// Product details sheet with sale info, sizes and the Before You Buy
   /// wardrobe-compatibility check.
   void _openProduct(ShoppingPick pick) {
@@ -127,8 +142,20 @@ class _SmartShoppingScreenState extends State<SmartShoppingScreen> {
                     ),
                   ),
                   SwIconButton(
-                    icon: SwIconButtonKind.bag,
+                    icon: SwIconButtonKind.heart,
                     onTap: _openWishlist,
+                  ),
+                  const SizedBox(width: Insets.sm),
+                  ListenableBuilder(
+                    listenable: AppState.instance.cartController,
+                    builder: (context, _) {
+                      final count = AppState.instance.cartController.count;
+                      return SwIconButton(
+                        icon: SwIconButtonKind.bag,
+                        badge: count > 0 ? '$count' : null,
+                        onTap: _openCart,
+                      );
+                    },
                   ),
                 ],
               ),
@@ -580,6 +607,28 @@ class _ProductDetailSheetState extends State<_ProductDetailSheet> {
                 _checking ? 'Checking your wardrobe…' : 'Check with my wardrobe',
               ),
             ),
+            const SizedBox(height: Insets.sm),
+            OutlinedButton(
+              onPressed: pick.inStock
+                  ? () {
+                      AppState.instance.cartController.add(pick);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('${pick.name} added to your cart'),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  : null,
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(46),
+                textStyle: AppText.button,
+                shape: const RoundedRectangleBorder(
+                  borderRadius: Radii.pillRadius,
+                ),
+              ),
+              child: const Text('Add to cart'),
+            ),
             const SizedBox(height: Insets.md),
           ],
         ),
@@ -855,6 +904,317 @@ class _CatalogSectionState extends State<_CatalogSection> {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Cart sheet: the picks the user added, with quantity steppers, a total
+/// and the entry into the simulated checkout.
+class _CartSheet extends StatefulWidget {
+  const _CartSheet({required this.cart});
+
+  final CartController cart;
+
+  @override
+  State<_CartSheet> createState() => _CartSheetState();
+}
+
+class _CartSheetState extends State<_CartSheet> {
+  bool _checkingOut = false;
+  Map<String, dynamic>? _order;
+  String? _error;
+
+  Future<void> _checkout() async {
+    final profile = AppState.instance.profile;
+    final details = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => _CheckoutSheet(initialName: profile?.name),
+    );
+    if (details == null || !mounted) return;
+    setState(() {
+      _checkingOut = true;
+      _error = null;
+    });
+    final order = await widget.cart.checkout(
+      name: details['name'],
+      phone: details['phone'],
+      address: details['address'],
+    );
+    if (!mounted) return;
+    setState(() {
+      _checkingOut = false;
+      _order = order;
+      _error = order == null ? 'Checkout failed. Is the backend running?' : null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final order = _order;
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: Insets.gutter,
+          right: Insets.gutter,
+          top: Insets.gutter,
+          bottom: MediaQuery.of(context).viewInsets.bottom + Insets.gutter,
+        ),
+        child: order != null
+            ? _OrderPlacedView(order: order)
+            : ListenableBuilder(
+                listenable: widget.cart,
+                builder: (context, _) {
+                  final entries = widget.cart.entries;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Your Cart', style: AppText.h3),
+                      const SizedBox(height: Insets.md),
+                      if (entries.isEmpty)
+                        Padding(
+                          padding:
+                              const EdgeInsets.symmetric(vertical: Insets.xl),
+                          child: Text(
+                            'Your cart is empty. Add pieces from the picks below.',
+                            style: AppText.caption,
+                          ),
+                        )
+                      else ...[
+                        for (final entry in List.of(entries))
+                          Padding(
+                            padding:
+                                const EdgeInsets.only(bottom: Insets.sm),
+                            child: Row(
+                              children: [
+                                SwProductImage(
+                                  image: entry.pick.image,
+                                  height: 48,
+                                  width: 48,
+                                  radius: Radii.sm,
+                                ),
+                                const SizedBox(width: Insets.md),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(entry.pick.name,
+                                          style: AppText.bodyStrong,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis),
+                                      Text(entry.pick.price,
+                                          style: AppText.caption),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () => widget.cart
+                                      .setQty(entry, entry.qty - 1),
+                                  icon: const Icon(Icons.remove_circle_outline,
+                                      size: 20),
+                                ),
+                                Text('${entry.qty}', style: AppText.bodyStrong),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () => widget.cart
+                                      .setQty(entry, entry.qty + 1),
+                                  icon: const Icon(Icons.add_circle_outline,
+                                      size: 20),
+                                ),
+                              ],
+                            ),
+                          ),
+                        const Divider(),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text('Total', style: AppText.bodyStrong),
+                            ),
+                            Text(
+                              widget.cart.totalText,
+                              style: AppText.bodyStrong
+                                  .copyWith(color: AppColors.primary),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: Insets.sm),
+                        Text(
+                          'Demo checkout - no real payment is made.',
+                          style: AppText.caption,
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: Insets.sm),
+                          Text(
+                            _error!,
+                            style: AppText.caption
+                                .copyWith(color: AppColors.danger),
+                          ),
+                        ],
+                        const SizedBox(height: Insets.md),
+                        FilledButton(
+                          onPressed:
+                              _checkingOut || widget.cart.placing ? null : _checkout,
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size.fromHeight(46),
+                            textStyle: AppText.button,
+                            shape: const RoundedRectangleBorder(
+                              borderRadius: Radii.pillRadius,
+                            ),
+                          ),
+                          child: Text(
+                            _checkingOut || widget.cart.placing
+                                ? 'Placing your order…'
+                                : 'Checkout',
+                          ),
+                        ),
+                      ],
+                    ],
+                  );
+                },
+              ),
+      ),
+    );
+  }
+}
+
+/// Simulated checkout details: who and where. No payment fields - the order
+/// is stored as `simulated` on the backend.
+class _CheckoutSheet extends StatefulWidget {
+  const _CheckoutSheet({this.initialName});
+
+  final String? initialName;
+
+  @override
+  State<_CheckoutSheet> createState() => _CheckoutSheetState();
+}
+
+class _CheckoutSheetState extends State<_CheckoutSheet> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.initialName ?? '');
+  final TextEditingController _phone = TextEditingController();
+  final TextEditingController _address = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _phone.dispose();
+    _address.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: Insets.gutter,
+          right: Insets.gutter,
+          top: Insets.gutter,
+          bottom: MediaQuery.of(context).viewInsets.bottom + Insets.gutter,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Checkout', style: AppText.h3),
+            const SizedBox(height: Insets.sm),
+            Text(
+              'Simulated purchase - no real payment is made.',
+              style: AppText.caption,
+            ),
+            const SizedBox(height: Insets.md),
+            TextField(
+              controller: _name,
+              decoration: const InputDecoration(labelText: 'Name'),
+              textCapitalization: TextCapitalization.words,
+            ),
+            const SizedBox(height: Insets.sm),
+            TextField(
+              controller: _phone,
+              decoration: const InputDecoration(labelText: 'Phone'),
+              keyboardType: TextInputType.phone,
+            ),
+            const SizedBox(height: Insets.sm),
+            TextField(
+              controller: _address,
+              decoration: const InputDecoration(labelText: 'Delivery address'),
+              textCapitalization: TextCapitalization.sentences,
+            ),
+            const SizedBox(height: Insets.lg),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop({
+                'name': _name.text,
+                'phone': _phone.text,
+                'address': _address.text,
+              }),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(46),
+                textStyle: AppText.button,
+                shape: const RoundedRectangleBorder(
+                  borderRadius: Radii.pillRadius,
+                ),
+              ),
+              child: const Text('Place order'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Confirmation after a simulated order is placed.
+class _OrderPlacedView extends StatelessWidget {
+  const _OrderPlacedView({required this.order});
+
+  final Map<String, dynamic> order;
+
+  @override
+  Widget build(BuildContext context) {
+    final id = '${order['id'] ?? ''}';
+    final total = order['total'];
+    final currency = '${order['currency'] ?? ''}'.trim();
+    final items = (order['items'] as List?) ?? const [];
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: Insets.lg),
+        const SwIconBadge(icon: SwIcon.check, size: 56, iconSize: 26),
+        const SizedBox(height: Insets.md),
+        Text('Order placed', style: AppText.h3),
+        const SizedBox(height: Insets.sm),
+        Text(
+          '${items.length} item${items.length == 1 ? '' : 's'}'
+          '${total != null ? ' • $total${currency.isEmpty ? '' : ' $currency'}' : ''}',
+          style: AppText.bodyStrong,
+        ),
+        if (id.isNotEmpty) ...[
+          const SizedBox(height: Insets.xs),
+          Text(
+            'Order ${id.length > 8 ? id.substring(0, 8) : id} (simulated)',
+            style: AppText.caption,
+          ),
+        ],
+        const SizedBox(height: Insets.lg),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          style: FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(46),
+            textStyle: AppText.button,
+            shape: const RoundedRectangleBorder(
+              borderRadius: Radii.pillRadius,
+            ),
+          ),
+          child: const Text('Done'),
+        ),
+      ],
     );
   }
 }

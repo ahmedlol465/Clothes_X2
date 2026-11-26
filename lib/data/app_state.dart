@@ -11,6 +11,7 @@ import 'controllers/insights_controller.dart';
 import 'controllers/outfits_controller.dart';
 import 'controllers/planner_controller.dart';
 import 'controllers/shop_controller.dart';
+import 'controllers/cart_controller.dart';
 import 'controllers/stylist_controller.dart';
 import 'controllers/wardrobe_controller.dart';
 import 'models.dart';
@@ -42,6 +43,7 @@ class AppState extends ChangeNotifier {
     _outfits = OutfitsController(api: api, status: _status);
     _planner = PlannerController(api: api, status: _status);
     _shop = ShopController(api: api, status: _status);
+    _cart = CartController(api: api, status: _status);
     _stylist = StylistController(api: api, status: _status);
     _discover = DiscoverController(api: api, status: _status);
     _insights = InsightsController(api: api, status: _status);
@@ -55,6 +57,7 @@ class AppState extends ChangeNotifier {
       _outfits,
       _planner,
       _shop,
+      _cart,
       _stylist,
       _discover,
       _insights,
@@ -72,6 +75,7 @@ class AppState extends ChangeNotifier {
   late final OutfitsController _outfits;
   late final PlannerController _planner;
   late final ShopController _shop;
+  late final CartController _cart;
   late final StylistController _stylist;
   late final DiscoverController _discover;
   late final InsightsController _insights;
@@ -82,6 +86,7 @@ class AppState extends ChangeNotifier {
   OutfitsController get outfitsController => _outfits;
   PlannerController get plannerController => _planner;
   ShopController get shopController => _shop;
+  CartController get cartController => _cart;
   StylistController get stylistController => _stylist;
   DiscoverController get discoverController => _discover;
   InsightsController get insightsController => _insights;

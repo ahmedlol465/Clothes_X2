@@ -425,6 +425,15 @@ class SmartWardrobeApi {
   Future<Map<String, dynamic>> shopRecommended() async =>
       Map<String, dynamic>.from(await _client.get('/shop/recommended'));
 
+  /// Simulated checkout (`POST /shop/checkout`): the server re-prices the
+  /// cart and stores the order as `simulated`; no real payment happens.
+  Future<Map<String, dynamic>> shopCheckout(Map<String, dynamic> body) async =>
+      Map<String, dynamic>.from(await _client.post('/shop/checkout', body));
+
+  /// The user's simulated orders, newest first (`GET /shop/orders`).
+  Future<Map<String, dynamic>> shopOrders() async =>
+      Map<String, dynamic>.from(await _client.get('/shop/orders'));
+
   /// Budget outfit builder (`POST /shop/outfit-builder`): the server picks
   /// the best-value in-stock set that fits [budget].
   Future<Map<String, dynamic>> buildOutfitWithinBudget(
