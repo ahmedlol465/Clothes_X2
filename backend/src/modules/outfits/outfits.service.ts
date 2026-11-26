@@ -19,6 +19,7 @@ import { StyleProfile } from '../../database/entities/identity.entity';
 import { CreateOutfitDto } from './dto/create-outfit.dto';
 import { Wardrobe, WardrobeItem } from '../../database/entities/wardrobe.entity';
 import { applyFreshnessRotation } from '../../freshness';
+import * as weatherEngine from '../../weather';
 
 @Injectable()
 export class OutfitsService {
@@ -80,14 +81,41 @@ export class OutfitsService {
     await this.styleProfileRepo.save(row);
   }
 
-  recommended(userId: string, query: Record<string, unknown>) {
+  async recommended(userId: string, query: Record<string, unknown>) {
     const occasion = String(query.occasion ?? 'casual');
-    const tempC = Number(query.tempC ?? 24);
     const count = Number(query.count ?? 3);
-    const weather = {
-      tempC,
-      condition: tempC >= 26 ? 'sunny' : 'partly cloudy',
-    };
+    // Real weather when the caller does not pin a temperature (the app's
+    // weather pill already resolves GPS live weather; the recommendation
+    // should dress for the same sky). An explicit tempC still wins, so
+    // tests and dev tools keep a deterministic input.
+    let weather: Record<string, unknown>;
+    if (query.tempC != null && `${query.tempC}`.trim() !== '') {
+      const tempC = Number(query.tempC);
+      weather = {
+        tempC,
+        condition: tempC >= 26 ? 'sunny' : 'partly cloudy',
+      };
+    } else {
+      try {
+        const target: Record<string, unknown> = {};
+        if (query.lat != null && query.lon != null) {
+          target.latitude = Number(query.lat);
+          target.longitude = Number(query.lon);
+        }
+        if (query.city) target.city = String(query.city);
+        const live: any = await weatherEngine.resolve(
+          Object.keys(target).length ? target : undefined,
+        );
+        weather = {
+          tempC: live.tempC,
+          condition: live.condition,
+          tags: live.tags,
+          summary: live.summary,
+        };
+      } catch {
+        weather = { tempC: 24, condition: 'partly cloudy' };
+      }
+    }
     return this.userWardrobeIds(userId).then((itemIds) => {
       if (itemIds.length === 0) return Promise.resolve([]);
       return this.itemRepo.find({ where: { id: In(itemIds) } });

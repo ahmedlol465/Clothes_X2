@@ -348,13 +348,18 @@ class SmartWardrobeApi {
   // ---------------------------------------------------------- 8.5 Outfits
   Future<List<dynamic>> recommendedOutfits({
     String occasion = 'casual',
-    double tempC = 24,
+    double? tempC,
+    double? lat,
+    double? lon,
     int count = 3,
   }) async {
     final res = await _client.get('/outfits/recommended', {
       'occasion': occasion,
-      'tempC': '$tempC',
       'count': '$count',
+      // No tempC by default: the server dresses for live weather (GPS when
+      // we have it) instead of a hardcoded 24. Pass tempC to pin one.
+      if (tempC != null) 'tempC': '$tempC',
+      if (lat != null && lon != null) ...{'lat': '$lat', 'lon': '$lon'},
     });
     return List<dynamic>.from((res as Map)['outfits'] as List);
   }

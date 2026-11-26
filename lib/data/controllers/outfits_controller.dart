@@ -54,8 +54,16 @@ class OutfitsController extends ChangeNotifier {
   /// outfit call must never pin the weather pill, and vice versa.
   Future<void> loadToday({String occasion = 'casual'}) async {
     var outfitsOk = false;
+    // One GPS fix feeds both the recommendation and the weather pill so the
+    // outfit is picked for the same weather the card shows.
+    final coords = await currentCoords();
     try {
-      final outfits = await _api.recommendedOutfits(occasion: occasion, count: 1);
+      final outfits = await _api.recommendedOutfits(
+        occasion: occasion,
+        count: 1,
+        lat: coords?.lat,
+        lon: coords?.lon,
+      );
       if (outfits.isNotEmpty) {
         today = outfitFromJson(
           Map<String, dynamic>.from(outfits.first as Map),
@@ -66,7 +74,7 @@ class OutfitsController extends ChangeNotifier {
       _status.markOffline(e);
     }
     try {
-      final live = await _loadLiveWeather();
+      final live = await _loadLiveWeather(coords);
       if (live != null) weather = live;
       _status.markOnline();
       notifyListeners();
@@ -76,9 +84,10 @@ class OutfitsController extends ChangeNotifier {
     }
   }
 
-  Future<Map<String, dynamic>?> _loadLiveWeather() async {
+  Future<Map<String, dynamic>?> _loadLiveWeather(
+    ({double lat, double lon})? coords,
+  ) async {
     try {
-      final coords = await currentCoords();
       if (coords != null) {
         return await _api.weather(lat: coords.lat, lon: coords.lon);
       }
