@@ -410,7 +410,7 @@ class _SelectionCard extends StatelessWidget {
             child: FutureBuilder<Uint8List?>(
               future: collage,
               builder: (context, snap) => snap.hasData && snap.data != null
-                  ? Image.memory(snap.data!, fit: BoxFit.cover)
+                  ? Image.memory(snap.data!, fit: BoxFit.contain)
                   : SwPhoto(path: outfit.image),
             ),
           ),
