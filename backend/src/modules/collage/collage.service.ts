@@ -2,6 +2,8 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { execFileSync } from 'child_process';
+
 import { Injectable, NotFoundException } from '@nestjs/common';
 import sharp, { OverlayOptions } from 'sharp';
 
@@ -15,7 +17,7 @@ const COLLAGE_DIR = path.join(STORAGE_DIR, 'collages');
 const REPO_ASSETS = path.resolve(__dirname, '../../../../assets');
 
 /** Bumped whenever the layout changes so old cached files are not reused. */
-const LAYOUT_VERSION = 'v4-flatlay';
+const LAYOUT_VERSION = 'v6-flatlay';
 
 const CANVAS = 1024;
 const BACKGROUND = '#f4f0e8';
@@ -33,12 +35,12 @@ interface Slot {
  * shoes underneath, accessories to the side. No grid, pieces may breathe.
  */
 const SLOT_LAYOUT: Record<string, Slot> = {
-  outerwear: { cx: 250, cy: 310, w: 340 },
-  top: { cx: 580, cy: 270, w: 350 },
-  dress: { cx: 512, cy: 480, w: 470 },
-  bottom: { cx: 580, cy: 620, w: 370 },
-  shoes: { cx: 390, cy: 870, w: 300 },
-  accessory: { cx: 830, cy: 720, w: 220 },
+  outerwear: { cx: 240, cy: 300, w: 330 },
+  top: { cx: 590, cy: 240, w: 320 },
+  dress: { cx: 512, cy: 480, w: 460 },
+  bottom: { cx: 590, cy: 610, w: 340 },
+  shoes: { cx: 380, cy: 880, w: 290 },
+  accessory: { cx: 840, cy: 690, w: 200 },
 };
 /** Center spill-over for kinds beyond the six slots. */
 const FALLBACK_SLOT: Slot = { cx: 780, cy: 350, w: 240 };
@@ -170,10 +172,24 @@ export class CollageService {
    * leaves nothing usable, e.g. a busy bedroom photo.
    */
   private async cutout(bytes: Buffer, targetWidth: number): Promise<Buffer | null> {
-    // Downscale first: the flood fill is per-pixel, so this is ~4x cheaper.
+    // Downscale first: segmentation and the flood fill are per-pixel.
     const small = await sharp(bytes)
       .resize(640, 640, { fit: 'inside', withoutEnlargement: true })
       .toBuffer();
+    // Best cutout: rembg's u2netp segmentation model (free, local, handles
+    // white-on-white). Optional dependency; absent or failing, the plain
+    // flood fill below takes over.
+    const segmented = this.rembgCutout(small);
+    if (segmented) {
+      const ok = await this.usableCutout(segmented);
+      if (ok) {
+        return await sharp(segmented)
+          .trim({ threshold: 12 })
+          .resize(targetWidth, null, { fit: 'inside', withoutEnlargement: true })
+          .png()
+          .toBuffer();
+      }
+    }
     try {
       const png = await removePlainBackground(small);
       // Sanity: a white garment on a near-white studio background gets eaten
@@ -203,6 +219,39 @@ export class CollageService {
         .toBuffer();
     } catch {
       return this.roundedOriginal(small, targetWidth);
+    }
+  }
+
+  /** rembg cutout via the bundled python helper, or null when unavailable. */
+  private rembgCutout(bytes: Buffer): Buffer | null {
+    try {
+      const script = path.resolve(__dirname, '../../../tools/rembg_cut.py');
+      const out = execFileSync('python3', [script], {
+        input: bytes,
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: 30000,
+      });
+      return out.length > 100 ? out : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** True when a cutout kept a plausible garment-shaped share of pixels. */
+  private async usableCutout(png: Buffer): Promise<boolean> {
+    try {
+      const { data, info } = await sharp(png)
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      let kept = 0;
+      const total = info.width * info.height;
+      for (let i = 3; i < data.length; i += info.channels) {
+        if (data[i] > 8) kept++;
+      }
+      const ratio = kept / total;
+      return ratio >= 0.03 && ratio <= 0.97;
+    } catch {
+      return false;
     }
   }
 
