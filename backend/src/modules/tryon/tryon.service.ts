@@ -16,7 +16,7 @@ const REPO_ASSETS = path.resolve(__dirname, '../../../../assets');
 const PERSON_ASSET = path.join(REPO_ASSETS, 'images', 'tryon_person.jpg');
 
 /** Bumped whenever the prompt or input layout changes. */
-const TRYON_VERSION = 'v1-flux-klein';
+const TRYON_VERSION = 'v2-flux-klein';
 
 const MODEL = '@cf/black-forest-labs/flux-2-klein-4b';
 const OUT_W = 512;
@@ -25,9 +25,15 @@ const OUT_H = 768;
 const MAX_INPUT_PX = 512;
 const REQUEST_TIMEOUT_MS = 45_000;
 
-const PROMPT =
+const PROMPT_NO_LAYER =
   'Photorealistic studio photo of the man from the first image wearing ' +
   'the top from the second image, the full-length pants from the third ' +
+  'image (not shorts), and the shoes and belt from the fourth image. ' +
+  'Keep his face, pose, body and background unchanged.';
+const PROMPT_WITH_LAYER =
+  'Photorealistic studio photo of the man from the first image wearing ' +
+  'the two upper-body garments from the second image, the shirt under ' +
+  'the open outer layer, plus the full-length pants from the third ' +
   'image (not shorts), and the shoes and belt from the fourth image. ' +
   'Keep his face, pose, body and background unchanged.';
 
@@ -36,10 +42,12 @@ interface OutfitSlots {
   bottom?: { item: any; bytes: Buffer };
   shoes?: { item: any; bytes: Buffer };
   accessory?: { item: any; bytes: Buffer };
+  outerwear?: { item: any; bytes: Buffer };
 }
 
 function slotOf(item: any): keyof OutfitSlots {
   const cat = `${item?.category ?? ''} ${item?.name ?? ''}`.toLowerCase();
+  if (/outerwear|jacket|blazer|coat|cardigan|hoodie/.test(cat)) return 'outerwear';
   if (/shoe|sneaker|boot|heel|footwear|loafer|sandals?/.test(cat)) return 'shoes';
   if (/bottom|pants|jeans|trouser|chino|skirt|shorts?/.test(cat)) return 'bottom';
   if (/top|shirt|tee|blouse|knit|sweater|polo|tank|t-shirt/.test(cat)) return 'top';
@@ -122,12 +130,21 @@ export class TryonService {
       throw new Error('outfit has no top or bottom to wear');
     }
 
-    // Input 0: the person. Input 1: top. Input 2: bottoms.
-    // Input 3: shoes and accessory side by side (four inputs max).
+    // Input 0: the person. Input 1: top, or top + outerwear side by side
+    // when the outfit layers. Input 2: bottoms. Input 3: shoes and
+    // accessory side by side (four inputs max).
     const inputs: Buffer[] = [
       await this.downscale(fs.readFileSync(PERSON_ASSET)),
     ];
-    if (slots.top) inputs.push(await this.downscale(slots.top.bytes));
+    let prompt = PROMPT_NO_LAYER;
+    if (slots.top && slots.outerwear) {
+      inputs.push(await this.sideBySide([slots.top.bytes, slots.outerwear.bytes]));
+      prompt = PROMPT_WITH_LAYER;
+    } else if (slots.top) {
+      inputs.push(await this.downscale(slots.top.bytes));
+    } else if (slots.outerwear) {
+      inputs.push(await this.downscale(slots.outerwear.bytes));
+    }
     if (slots.bottom) inputs.push(await this.downscale(slots.bottom.bytes));
     const extras: Buffer[] = [];
     if (slots.shoes) extras.push(slots.shoes.bytes);
@@ -135,7 +152,7 @@ export class TryonService {
     if (extras.length) inputs.push(await this.sideBySide(extras));
 
     const form = new FormData();
-    form.append('prompt', PROMPT);
+    form.append('prompt', prompt);
     form.append('width', `${OUT_W}`);
     form.append('height', `${OUT_H}`);
     inputs.forEach((bytes, i) => {
