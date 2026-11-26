@@ -82,3 +82,33 @@ export class OutfitBuilderDto {
   @IsString({ each: true })
   excludeIds?: string[];
 }
+
+export class CheckoutLineDto {
+  @IsString()
+  shoppingItemId: string;
+
+  @IsOptional()
+  @IsNumber()
+  @IsPositive()
+  qty?: number;
+}
+
+export class CheckoutDto {
+  @IsArray()
+  items: CheckoutLineDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address?: string;
+}

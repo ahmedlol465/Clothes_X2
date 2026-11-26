@@ -39,6 +39,7 @@ export {
 
 export {
   Purchase,
+  ShopOrder,
   ShoppingItem,
   WishlistItem,
 } from './shopping.entity';
@@ -102,6 +103,7 @@ import {
 } from './planner.entity';
 import {
   Purchase,
+  ShopOrder,
   ShoppingItem,
   WishlistItem,
 } from './shopping.entity';
@@ -143,6 +145,7 @@ export const ALL_ENTITIES = [
   ShoppingItem,
   WishlistItem,
   Purchase,
+  ShopOrder,
   AIConversation,
   AIInteraction,
   AppNotification,

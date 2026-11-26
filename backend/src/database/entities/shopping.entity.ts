@@ -255,3 +255,45 @@ export class Purchase {
   @UpdateDateColumn()
   updatedAt: Date;
 }
+
+@Entity('shop_orders')
+export class ShopOrder {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Index()
+  @Column()
+  userId: string;
+
+  /** Line snapshots: [{shoppingItemId, name, qty, price, currency, imageUrl, store}] */
+  @Column({ type: 'json' })
+  items: Array<Record<string, unknown>>;
+
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    transformer: {
+      to: (value: number | null) => (value === null ? null : value),
+      from: (value: string | null) => (value === null ? null : Number(value)),
+    },
+  })
+  total: number;
+
+  @Column({ length: 3, default: 'USD' })
+  currency: string;
+
+  /** Simulated checkout: no real payment provider is involved. */
+  @Column({ length: 20, default: 'simulated' })
+  status: string;
+
+  /** Delivery details entered at checkout: {name, phone, address}. */
+  @Column({ type: 'json', nullable: true })
+  contact: Record<string, unknown> | null;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+}

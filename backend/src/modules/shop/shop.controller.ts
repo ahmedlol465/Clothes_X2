@@ -24,6 +24,7 @@ import sharp from 'sharp';
 import { removePlainBackground } from './cutout.util';
 import {
   BeforeYouBuyDto,
+  CheckoutDto,
   OutfitBuilderDto,
   WishlistEntryDto,
 } from './dto/shop.dto';
@@ -110,6 +111,18 @@ export class ShopController {
     @Body() body: BeforeYouBuyDto,
   ) {
     return this.shop.beforeYouBuy(userId, body);
+  }
+
+  /** Simulated checkout: prices verified server-side, no real payment. */
+  @Post('checkout')
+  checkout(@CurrentUser('id') userId: string, @Body() body: CheckoutDto) {
+    return this.shop.checkout(userId, body);
+  }
+
+  /** The user's simulated orders, newest first. */
+  @Get('orders')
+  orders(@CurrentUser('id') userId: string) {
+    return this.shop.orders(userId);
   }
 
   @Get('wishlist')

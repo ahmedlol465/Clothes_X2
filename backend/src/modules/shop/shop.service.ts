@@ -1,11 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { aiEngine } from '../../common/legacy/legacy-modules';
 import { toLegacyItem } from '../planner/planner.service';
 import { Wardrobe, WardrobeItem } from '../../database/entities/wardrobe.entity';
-import { ShoppingItem, WishlistItem } from '../../database/entities/shopping.entity';
+import { ShoppingItem, ShopOrder, WishlistItem } from '../../database/entities/shopping.entity';
+import { CheckoutDto } from './dto/shop.dto';
 
 @Injectable()
 export class ShopService {
@@ -18,6 +19,8 @@ export class ShopService {
     private readonly productRepo: Repository<ShoppingItem>,
     @InjectRepository(WishlistItem)
     private readonly wishlistRepo: Repository<WishlistItem>,
+    @InjectRepository(ShopOrder)
+    private readonly orderRepo: Repository<ShopOrder>,
   ) {}
 
   private async userWardrobeLegacyItems(userId: string) {
@@ -290,5 +293,83 @@ export class ShopService {
     if (!row) return { removed: false };
     await this.wishlistRepo.remove(row);
     return { removed: true };
+  }
+
+  /**
+   * Simulated checkout: prices are re-read from the catalog server-side
+   * (client totals are never trusted) and the order is stored with status
+   * "simulated" - no payment provider, no real charge.
+   */
+  async checkout(userId: string, dto: CheckoutDto) {
+    const lines = Array.isArray(dto?.items) ? dto.items : [];
+    if (!lines.length || lines.length > 20) {
+      throw new BadRequestException('Checkout needs 1-20 items.');
+    }
+    const orderItems: Array<Record<string, unknown>> = [];
+    let total = 0;
+    let currency = 'USD';
+    for (const line of lines) {
+      const qty = Math.min(5, Math.max(1, Math.floor(Number(line?.qty) || 1)));
+      const product = await this.productRepo.findOne({
+        where: { id: `${line?.shoppingItemId ?? ''}` },
+      });
+      if (!product) {
+        throw new BadRequestException(
+          `Unknown product: ${`${line?.shoppingItemId ?? ''}`.slice(0, 40)}`,
+        );
+      }
+      if ((product as any).inStock === false) {
+        throw new BadRequestException(`${product.name} is out of stock.`);
+      }
+      const price = Number((product as any).price) || 0;
+      currency = `${(product as any).currency || currency}`;
+      total += price * qty;
+      orderItems.push({
+        shoppingItemId: product.id,
+        name: product.name,
+        qty,
+        price,
+        currency,
+        imageUrl: (product as any).imageUrl ?? null,
+        store: (product as any).store ?? null,
+      });
+    }
+    const contact: Record<string, unknown> = {};
+    if (dto.name?.trim()) contact.name = dto.name.trim();
+    if (dto.phone?.trim()) contact.phone = dto.phone.trim();
+    if (dto.address?.trim()) contact.address = dto.address.trim();
+    const order = await this.orderRepo.save(
+      this.orderRepo.create({
+        userId,
+        items: orderItems,
+        total: Math.round(total * 100) / 100,
+        currency,
+        status: 'simulated',
+        contact: Object.keys(contact).length ? contact : null,
+      }),
+    );
+    return { order: this.orderDto(order) };
+  }
+
+  /** The user's simulated orders, newest first. */
+  async orders(userId: string) {
+    const rows = await this.orderRepo.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+      take: 50,
+    });
+    return { orders: rows.map((row) => this.orderDto(row)), total: rows.length };
+  }
+
+  private orderDto(order: ShopOrder) {
+    return {
+      id: order.id,
+      items: order.items,
+      total: Number(order.total),
+      currency: order.currency,
+      status: order.status,
+      contact: order.contact,
+      createdAt: order.createdAt,
+    };
   }
 }

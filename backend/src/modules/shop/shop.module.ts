@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import {
   ShoppingItem,
+  ShopOrder,
   Wardrobe,
   WardrobeItem,
   WishlistItem,
@@ -12,7 +13,7 @@ import { ShopService } from './shop.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([WardrobeItem, Wardrobe, ShoppingItem, WishlistItem]),
+    TypeOrmModule.forFeature([WardrobeItem, Wardrobe, ShoppingItem, WishlistItem, ShopOrder]),
   ],
   controllers: [ShopController],
   providers: [ShopService],
