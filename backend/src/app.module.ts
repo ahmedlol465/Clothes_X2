@@ -21,9 +21,11 @@ import { StylistModule } from './modules/stylist/stylist.module';
 import { PlannerModule } from './modules/planner/planner.module';
 import { ContentModule } from './modules/content/content.module';
 import { InsightsModule } from './modules/insights/insights.module';
+import { CollageModule } from './modules/collage/collage.module';
 
 @Module({
   imports: [
+    CollageModule,
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,

@@ -1,6 +1,7 @@
 import 'api_client.dart';
 import 'api_config.dart';
 import 'dart:convert';
+import 'dart:typed_data';
 
 /// Typed wrapper over every backend module (§8 API Overview).
 /// Auth token is held by the underlying [ApiClient].
@@ -417,6 +418,10 @@ class SmartWardrobeApi {
       packingList(destination: destination, days: days);
 
   // --------------------------------------------------------- 8.7 Shopping
+  /// Today's recommended outfit as one merged flat-lay image
+  /// (`GET /collage/daily`); null when nothing can be composed yet.
+  Future<Uint8List?> dailyCollageBytes() => _client.getBytes('/collage/daily');
+
   Future<Map<String, dynamic>> shopRecommended() async =>
       Map<String, dynamic>.from(await _client.get('/shop/recommended'));
 

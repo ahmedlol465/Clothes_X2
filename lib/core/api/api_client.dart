@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
@@ -68,6 +69,20 @@ class ApiClient {
   ///              rule engine answered instead; the reply still arrives
   ///   `error` → `{error, recoverable?}` terminal, no reply is coming
   ///   `done`  → the assembled turn (reply, outfit, weather, memory, source)
+  /// Raw bytes for binary endpoints (e.g. the daily outfit collage).
+  /// Returns null on 404 so callers can fall back quietly.
+  Future<Uint8List?> getBytes(String path) async {
+    final uri = Uri.parse('${ApiConfig.baseUrl}$path');
+    final response = await _http
+        .get(uri, headers: _headers)
+        .timeout(ApiConfig.timeout);
+    if (response.statusCode == 404) return null;
+    if (response.statusCode >= 400) {
+      throw ApiException('Request failed (${response.statusCode}).');
+    }
+    return response.bodyBytes;
+  }
+
   Stream<({String event, Map<String, dynamic> data})> streamPost(
     String path,
     Map<String, dynamic> body, {

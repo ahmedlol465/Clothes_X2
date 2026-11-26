@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
@@ -47,6 +49,10 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final OutfitsController _outfitsController;
+  /// One merged flat-lay of today's outfit (`GET /collage/daily`); null when
+  /// the backend cannot compose one, in which case the card shows its
+  /// regular photo.
+  Future<Uint8List?>? _collage;
   late final WardrobeController _wardrobeController;
   late final PlannerController _plannerController;
   late final AccountController _accountController;
@@ -61,6 +67,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _accountController = widget.accountController ?? AppState.instance.accountController;
     _backendStatus = widget.backendStatus ?? AppState.instance.backendStatus;
     _outfitsController.loadToday();
+    _collage = AppState.instance.shopController.api.dailyCollageBytes();
     _wardrobeController.load();
     _plannerController.loadEvents();
   }
@@ -122,6 +129,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
                 child: _SelectionCard(
                   outfit: today,
+                  collage: _collage,
                   onView: today == null
                       ? null
                       : () => _push(
@@ -363,9 +371,10 @@ String _advice(Map<String, dynamic>? weather) {
 
 /// Large hero card for the outfit the AI picked today.
 class _SelectionCard extends StatelessWidget {
-  const _SelectionCard({required this.outfit, required this.onView});
+  const _SelectionCard({required this.outfit, this.collage, required this.onView});
 
   final Outfit? outfit;
+  final Future<Uint8List?>? collage;
   final VoidCallback? onView;
 
   @override
@@ -398,7 +407,12 @@ class _SelectionCard extends StatelessWidget {
         children: [
           AspectRatio(
             aspectRatio: 1.94,
-            child: SwPhoto(path: outfit.image),
+            child: FutureBuilder<Uint8List?>(
+              future: collage,
+              builder: (context, snap) => snap.hasData && snap.data != null
+                  ? Image.memory(snap.data!, fit: BoxFit.cover)
+                  : SwPhoto(path: outfit.image),
+            ),
           ),
           Padding(
             padding: const EdgeInsets.all(Insets.lg),
