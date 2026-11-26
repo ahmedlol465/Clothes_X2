@@ -49,9 +49,10 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final OutfitsController _outfitsController;
-  /// One merged flat-lay of today's outfit (`GET /collage/daily`); null when
+  /// Today's outfit rendered on a person (`GET /tryon/daily`, AI with a
   /// the backend cannot compose one, in which case the card shows its
   /// regular photo.
+  /// flat-lay collage fallback); null when nothing can be composed yet.
   Future<Uint8List?>? _collage;
   late final WardrobeController _wardrobeController;
   late final PlannerController _plannerController;
@@ -67,7 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _accountController = widget.accountController ?? AppState.instance.accountController;
     _backendStatus = widget.backendStatus ?? AppState.instance.backendStatus;
     _outfitsController.loadToday();
-    _collage = AppState.instance.shopController.api.dailyCollageBytes();
+    _collage = AppState.instance.shopController.api.dailyTryOnBytes();
     _wardrobeController.load();
     _plannerController.loadEvents();
   }

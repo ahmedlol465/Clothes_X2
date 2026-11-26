@@ -10,5 +10,6 @@ import { CollageService } from './collage.service';
   imports: [OutfitsModule],
   controllers: [CollageController],
   providers: [CollageService],
+  exports: [CollageService],
 })
 export class CollageModule {}

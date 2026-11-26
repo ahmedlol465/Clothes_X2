@@ -427,6 +427,11 @@ class SmartWardrobeApi {
   /// (`GET /collage/daily`); null when nothing can be composed yet.
   Future<Uint8List?> dailyCollageBytes() => _client.getBytes('/collage/daily');
 
+  /// Today's outfit rendered on a person by Cloudflare Workers AI
+  /// (`GET /tryon/daily`); the server itself falls back to the flat-lay
+  /// collage when the AI path is unavailable, and caches per outfit.
+  Future<Uint8List?> dailyTryOnBytes() => _client.getBytes('/tryon/daily');
+
   Future<Map<String, dynamic>> shopRecommended() async =>
       Map<String, dynamic>.from(await _client.get('/shop/recommended'));
 

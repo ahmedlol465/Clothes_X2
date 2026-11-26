@@ -22,10 +22,12 @@ import { PlannerModule } from './modules/planner/planner.module';
 import { ContentModule } from './modules/content/content.module';
 import { InsightsModule } from './modules/insights/insights.module';
 import { CollageModule } from './modules/collage/collage.module';
+import { TryonModule } from './modules/tryon/tryon.module';
 
 @Module({
   imports: [
     CollageModule,
+    TryonModule,
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
