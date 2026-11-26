@@ -251,7 +251,7 @@ function toOutfit(c, occasion, idx) {
     itemIds: c.pieces.map((p) => p.id),
     pieces: c.pieces.map((p) => p.name),
     items: c.pieces,
-    image: c.pieces[0]?.image,
+    image: c.pieces[0]?.image ?? c.pieces[0]?.imageUrl,
   };
 }
 
@@ -433,7 +433,7 @@ function finishRemix(items, original, rule, ctx, variant, wasRegenerated, note =
       itemIds: items.map((p) => p.id),
       pieces: items.map((p) => p.name),
       items,
-      image: items[0]?.image,
+      image: items[0]?.image ?? items[0]?.imageUrl,
       keptFromOriginal: items.filter((k) => original.some((o) => o.id === k.id)).length,
       regenerated: !!wasRegenerated,
       ...(note ? { note } : {}),
