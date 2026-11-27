@@ -96,7 +96,9 @@ Outfit outfitFromJson(Map<String, dynamic> json) => Outfit(
         for (final b in (json['breakdown'] as List? ?? const []))
           if (b is Map) matchFactorFromJson(Map<String, dynamic>.from(b)),
       ],
-      explanation: (json['explanation'] ?? json['reason']) as String?,
+      // The engine's one-line reason first; older payloads only
+      // carried `explanation` (a pieces recap, not a real reason).
+      explanation: (json['reason'] ?? json['explanation']) as String?,
       favorite: json['favorite'] == true,
       completeness: (json['completeness'] as num?)?.toDouble(),
       variant: json['variant'] as String?,

@@ -71,6 +71,114 @@ class _HomeScreenState extends State<HomeScreen> {
     _collage = AppState.instance.shopController.api.dailyTryOnBytes();
     _wardrobeController.load();
     _plannerController.loadEvents();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _applyOnboarding());
+  }
+
+  /// Pre-select today's occasion from the 3-tap onboarding answers; ask
+  /// the questions once when he has not answered yet.
+  Future<void> _applyOnboarding() async {
+    try {
+      final ob = await AppState.instance.shopController.api.onboarding();
+      if (!mounted) return;
+      final defaultOccasion = ob?['defaultOccasion'];
+      if (defaultOccasion is String && defaultOccasion.isNotEmpty) {
+        _outfitsController.todayOccasion = defaultOccasion;
+        _refreshToday();
+        return;
+      }
+      if (ob == null) await _showOnboardingSheet();
+    } catch (_) {
+      // Onboarding is a nicety, never a blocker for the home screen.
+    }
+  }
+
+  void _refreshToday() {
+    setState(() {
+      _outfitsController.loadToday();
+      _collage = AppState.instance.shopController.api.dailyTryOnBytes();
+    });
+  }
+
+  static const _occasionChoices = <String, String>{
+    'Casual': 'casual',
+    'Work': 'work',
+    'Smart casual': 'smart casual',
+    'Formal': 'formal',
+    'Date': 'date',
+  };
+
+  Future<void> _showOnboardingSheet() async {
+    if (!mounted) return;
+    String? usualDay;
+    String? formalDays;
+    await showModalBottomSheet<void>(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => Padding(
+          padding: const EdgeInsets.all(Insets.lg),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Two quick questions', style: AppText.h4),
+              const SizedBox(height: Insets.md),
+              Text('What does a usual day look like?', style: AppText.cardTitle),
+              Wrap(spacing: Insets.sm, children: [
+                for (final e in const {
+                  'University': 'university',
+                  'Office': 'office',
+                  'Remote': 'remote',
+                  'Mixed': 'mixed',
+                }.entries)
+                  ChoiceChip(
+                    label: Text(e.key),
+                    selected: usualDay == e.value,
+                    onSelected: (_) => setSheet(() => usualDay = e.value),
+                  ),
+              ]),
+              const SizedBox(height: Insets.md),
+              Text('How often are your days formal?', style: AppText.cardTitle),
+              Wrap(spacing: Insets.sm, children: [
+                for (final e in const {
+                  'Rarely': 'rarely',
+                  'Sometimes': 'sometimes',
+                  'Often': 'often',
+                }.entries)
+                  ChoiceChip(
+                    label: Text(e.key),
+                    selected: formalDays == e.value,
+                    onSelected: (_) => setSheet(() => formalDays = e.value),
+                  ),
+              ]),
+              const SizedBox(height: Insets.lg),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: usualDay == null || formalDays == null
+                      ? null
+                      : () => Navigator.of(ctx).pop(),
+                  child: const Text('Done'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (usualDay == null || formalDays == null) return;
+    try {
+      final saved = await AppState.instance.shopController.api
+          .saveOnboarding(usualDay!, formalDays!);
+      final occ = saved['defaultOccasion'];
+      if (occ is String && occ.isNotEmpty) {
+        _outfitsController.todayOccasion = occ;
+      }
+    } catch (_) {
+      // Saved answers are a bonus; the Today row still works without them.
+    }
+    if (mounted) _refreshToday();
   }
 
   void _push(BuildContext context, String routeName, {Object? arguments}) {
@@ -122,6 +230,34 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Text("Today's AI Selection", style: AppText.h4),
                     ),
                     if (today != null) SwMatchBadge(match: today.match),
+                  ],
+                ),
+              ),
+              const SizedBox(height: Insets.sm),
+              // Today row: what is today for him? Pre-selected from the
+              // onboarding answers; one tap re-dresses the day.
+              SizedBox(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Insets.gutter,
+                  ),
+                  children: [
+                    for (final e in _occasionChoices.entries)
+                      Padding(
+                        padding: const EdgeInsets.only(right: Insets.sm),
+                        child: ChoiceChip(
+                          label: Text(e.key),
+                          selected: _outfitsController.todayOccasion
+                                  .toLowerCase() ==
+                              e.value,
+                          onSelected: (_) {
+                            _outfitsController.todayOccasion = e.value;
+                            _refreshToday();
+                          },
+                        ),
+                      ),
                   ],
                 ),
               ),

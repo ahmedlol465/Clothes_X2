@@ -52,7 +52,13 @@ class OutfitsController extends ChangeNotifier {
 
   /// Today's pick + live weather. The two loads are independent: a failing
   /// outfit call must never pin the weather pill, and vice versa.
-  Future<void> loadToday({String occasion = 'casual'}) async {
+  /// Occasion the Today row on home is set to; pre-filled from the
+  /// onboarding answers, changeable with one tap, remembered per session.
+  String todayOccasion = 'casual';
+
+  Future<void> loadToday({String? occasion}) async {
+    occasion ??= todayOccasion;
+    todayOccasion = occasion;
     var outfitsOk = false;
     // One GPS fix feeds both the recommendation and the weather pill so the
     // outfit is picked for the same weather the card shows.

@@ -115,7 +115,53 @@ export class UsersService {
 
   async styleProfile(userId: string) {
     const [user, styleProfile] = await this.requireUserWithProfile(userId);
-    return readStyleProfile(toLegacyUser(user, styleProfile));
+    const dimensions = (styleProfile?.dimensions ?? {}) as Record<string, unknown>;
+    return {
+      ...readStyleProfile(toLegacyUser(user, styleProfile)),
+      onboarding: dimensions.onboarding ?? null,
+    };
+  }
+
+  /**
+   * The 3-tap onboarding answers ("what does a usual day look like", "how
+   * often are formal days"). Stored on the style profile, and the engine
+   * learns from them: the usual day becomes the default occasion on the
+   * home Today row, and frequent formal days nudge formalityBias upward.
+   */
+  async saveOnboarding(userId: string, body: Record<string, unknown>) {
+    const usualDay = `${body.usualDay ?? ''}`.toLowerCase();
+    const formalDays = `${body.formalDays ?? ''}`.toLowerCase();
+    if (!['university', 'office', 'remote', 'mixed'].includes(usualDay)) {
+      throw new BadRequestException('usualDay must be university, office, remote or mixed');
+    }
+    if (!['rarely', 'sometimes', 'often'].includes(formalDays)) {
+      throw new BadRequestException('formalDays must be rarely, sometimes or often');
+    }
+    const defaultOccasion =
+      usualDay === 'office'
+        ? 'work'
+        : usualDay === 'mixed'
+          ? 'smart casual'
+          : 'casual';
+
+    const [, styleProfile] = await this.requireUserWithProfile(userId);
+    let sp = styleProfile;
+    if (!sp) sp = this.styleProfileRepo.create({ userId });
+    sp.dimensions = {
+      ...((sp.dimensions as Record<string, unknown>) ?? {}),
+      onboarding: {
+        usualDay,
+        formalDays,
+        defaultOccasion,
+        answeredAt: new Date().toISOString(),
+      },
+    };
+    // Learning: formal-heavy weeks shift his formality baseline up a notch.
+    if (formalDays === 'often') {
+      sp.formalityBias = Math.min(1, Number(sp.formalityBias ?? 0) + 0.2);
+    }
+    await this.styleProfileRepo.save(sp);
+    return { onboarding: sp.dimensions['onboarding' as keyof typeof sp.dimensions] ?? (sp.dimensions as any).onboarding };
   }
 
   async updateStyleProfile(userId: string, body: Record<string, unknown>) {

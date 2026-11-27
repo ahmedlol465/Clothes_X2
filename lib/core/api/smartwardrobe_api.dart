@@ -107,6 +107,25 @@ class SmartWardrobeApi {
     return Map<String, dynamic>.from((res as Map)['styleProfile'] as Map);
   }
 
+  /// The 3-tap onboarding answers (usual day, formal days) or null when
+  /// he has not answered yet.
+  Future<Map<String, dynamic>?> onboarding() async {
+    final profile = await styleProfile();
+    final ob = profile['onboarding'];
+    return ob is Map ? Map<String, dynamic>.from(ob) : null;
+  }
+
+  Future<Map<String, dynamic>> saveOnboarding(
+    String usualDay,
+    String formalDays,
+  ) async {
+    final res = await _client.post('/users/me/onboarding', {
+      'usualDay': usualDay,
+      'formalDays': formalDays,
+    });
+    return Map<String, dynamic>.from((res as Map)['onboarding'] as Map);
+  }
+
   /// Persists the style blueprint and returns the saved values echoed by the
   /// backend, so the UI renders what was actually stored rather than what was
   /// optimistically typed.

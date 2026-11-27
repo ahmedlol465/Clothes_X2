@@ -51,6 +51,14 @@ export class UsersController {
     return { styleProfile: await this.users.styleProfile(userId) };
   }
 
+  @Post('me/onboarding')
+  saveOnboarding(
+    @CurrentUser('id') userId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.users.saveOnboarding(userId, body);
+  }
+
   @Patch('me/style-profile')
   updateStyleProfile(
     @CurrentUser('id') userId: string,
