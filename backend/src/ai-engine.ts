@@ -123,6 +123,13 @@ function rankSlot(pool: any, slot: any, ctx: any = {}) {
     })
     .sort((a, b) => b.score - a.score);
 
+  // Very cold: shorts and tank tops are out while anything else exists.
+  if (Number(weather.tempC ?? 24) <= 10) {
+    const bare = (c: any) => /short|tank|sleeveless|crop/.test(
+      tax.normalize(`${c.item.subcategory || ''} ${c.item.legacy?.analysis?.subcategory || ''} ${c.item.name || ''}`));
+    const covered = scored.filter((c) => !bare(c));
+    if (covered.length) scored.splice(0, scored.length, ...covered);
+  }
   const viable = scored.filter((c) => c.climate >= CLIMATE_FLOOR);
   const useable = viable.length ? viable : scored;
   return useable.slice(0, BEAM_PER_SLOT).map((c) => c.item);
