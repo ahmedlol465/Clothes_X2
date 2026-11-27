@@ -102,6 +102,13 @@ function rankSlot(pool: any, slot: any, ctx: any = {}) {
       let score = 0;
       if (target != null) score += Math.max(0, 1 - Math.abs(tax.formalityOf(item) - target) / 5) * 30;
       const climate = tax.weatherScore(item, weather);
+      // Dressy occasions: pieces that read as sportswear or beachwear lose
+      // out to anything dressier, even when the climate score favours them.
+      if (target != null && target >= 4) {
+        const f = tax.formalityOf(item);
+        if (f <= 2) score -= 25;
+        else if (f <= 3) score -= 8;
+      }
       score += climate * climateWeight;
       score += memoryStore.itemAffinity(memory, item) * 24;
       if (focus) score += retrieval.lexicalScore(focus, item) * 26;
