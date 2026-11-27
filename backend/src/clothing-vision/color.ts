@@ -65,11 +65,6 @@ const CONFIG = {
   maxCoverage: 0.9,
   // Coverage band that earns full confidence.
   idealCoverage: [0.08, 0.7],
-  // Hue concentration below this reads as a print rather than a colour.
-  // Measured on solid catalog garments: median 0.9-1.0 even for dark navy,
-  // whose hue votes are the noisiest (0.44 at the low end), so the line sits
-  // under that.
-  hueConcentration: 0.45,
   // Lightness spread (Lab L p90 - p10) above this reads as a print. Measured
   // on solid catalog garments: dark fabrics spread 60-90 from folds and
   // shading alone (brown p90 = 87), so the old 55 mislabelled plain pieces as
@@ -79,7 +74,18 @@ const CONFIG = {
   // Chroma (CIELAB C) below this is a neutral, whatever hue says. Measured:
   // true neutrals sit at C 1.5-3.5, while navy reads ~7.5 and brown ~6, so 9
   // forced dark colours into the neutral path (navy came out "Black").
-  neutralChroma: 5,
+  neutralChroma: 7,
+  // Pixels at or above this chroma vote on hue (kept separate from the
+  // naming threshold above so retuning one does not move the other).
+  hueVoteChroma: 5,
+  // Garment-level hue concentration under this, with real chroma, reads as a
+  // print. Retuned on the 1450-photo labelled set: 0.45 sent ~75 plain blue and
+  // navy pieces to Multicolor (their hue is noisy at chroma ~12, not mixed).
+  multicolorHueConcentration: 0.1,
+  multicolorMinChroma: 15,
+  // Lightness cut-offs retuned on the same set.
+  blackMaxL: 34,
+  navyMaxL: 42,
   k: 4,
   kmeansIterations: 12,
   // Pixels shaved off the mask boundary before the colour is measured.
@@ -438,7 +444,17 @@ function segment(lab, w, h) {
  */
 function chromaticName(L, C, h) {
   // Reds, pinks, magentas. Lab hue wraps, so this band is split in two.
-  if (h < 24) return C > 55 ? 'Red' : 'Burgundy';
+  // Pink and purple share the hue wheel's wrap-around (h >= 320 or h < 24).
+  // Pink is a light, moderately saturated version of it; dark magenta-hued
+  // pieces are purple, and low-chroma ones are really dark blues whose hue
+  // wanders. (Retuned on the labelled set: purple and pink were swapped.)
+  if (h < 24 || h >= 320) {
+    if (h >= 320 && L < 50 && C < 12) return L < CONFIG.navyMaxL ? 'Navy' : 'Blue';
+    if (h >= 320 && L < 50) return C < 40 ? 'Purple' : 'Magenta';
+    if (L >= 50 && C < 70) return 'Pink';
+    if (h >= 320) return C > 55 ? 'Magenta' : 'Pink';
+    return C > 55 ? 'Red' : 'Burgundy';
+  }
   // Dark, low-chroma warm hues are brown leather and chocolate knits, not red:
   // a true red keeps C well above 20 even in shadow.
   if (h < 44) {
@@ -465,12 +481,11 @@ function chromaticName(L, C, h) {
   // Blues. Navy and denim are the same hue and differ almost only in lightness.
   if (h < 292) {
     if (L >= 65 && C < 28) return 'Light Blue';
-    if (L < 34) return 'Navy';
+    if (L < CONFIG.navyMaxL) return 'Navy';
     return 'Blue';
   }
   if (h < 306) return C > 45 ? 'Indigo' : 'Blue';
-  if (h < 320) return C > 40 ? 'Purple' : 'Blue';
-  return L >= 62 && C < 45 ? 'Pink' : C > 55 ? 'Magenta' : 'Pink';
+  return C > 40 ? 'Purple' : 'Blue';
 }
 
 /**
@@ -492,7 +507,7 @@ function neutralName(L, a, b) {
   if (L >= 72) return warmth > 2 ? 'Cream' : 'Off-White';
   if (L >= 58) return warmth > 6 ? 'Cream' : 'Light Grey';
   if (L >= 38) return 'Grey';
-  if (L >= 28) return 'Charcoal';
+  if (L >= CONFIG.blackMaxL) return 'Charcoal';
   return 'Black';
 }
 
@@ -572,7 +587,7 @@ async function analyzeColor(input) {
     // hue toward whatever the shadows are. Weighting by chroma also means a
     // saturated panel counts more than a tinted one, which is what "the colour
     // of this garment" means.
-    if (pxChroma >= CONFIG.neutralChroma) {
+    if (pxChroma >= CONFIG.hueVoteChroma) {
       // atan2 is already in radians. Converting again (as the HSV branch above
       // had to, because HSV hue is stored in degrees) collapses every hue to
       // roughly 0, which is how a whole palette of blues and browns ends up
@@ -605,7 +620,8 @@ async function analyzeColor(input) {
   let multicolor = false;
   if (!isChromatic) {
     name = neutralName(L, A, B);
-  } else if (hueConcentration < CONFIG.hueConcentration || lightnessSpread > CONFIG.lightnessSpread) {
+  } else if ((hueConcentration < CONFIG.multicolorHueConcentration && chroma >= CONFIG.multicolorMinChroma)
+    || lightnessSpread > CONFIG.lightnessSpread) {
     name = 'Multicolor';
     multicolor = true;
   } else {
