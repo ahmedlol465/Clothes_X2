@@ -82,6 +82,8 @@ function monthForWeather(weather: any = {}, fallback?: number) {
   return 1; // winter
 }
 
+const VARIETY_JITTER = 7;
+
 function rankSlot(pool: any, slot: any, ctx: any = {}) {
   const { occasion = '', weather = {}, styleProfile = {}, memory = null, focus = '' } = ctx;
   // Absolute exclusions ("I never wear sneakers") are filtered, not scored.
@@ -106,6 +108,9 @@ function rankSlot(pool: any, slot: any, ctx: any = {}) {
       // Rotation pressure: unworn pieces climb.
       const worn = Number(item.timesWorn || 0);
       score += worn === 0 ? 8 : Math.max(0, 6 - worn * 0.35);
+      // Small random nudge so repeat requests don't return the same few
+      // outfits. Off under test so specs stay deterministic.
+      if (process.env.NODE_ENV !== 'test') score += Math.random() * VARIETY_JITTER;
       // Hard disqualification, but only while something wearable survives.
       return { item, score, climate };
     })
