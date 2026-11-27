@@ -189,7 +189,8 @@ function formalityFor(verdict) {
     Coat: 'Smart Casual', Jacket: 'Casual', Hoodie: 'Casual', Sweater: 'Casual', Cardigan: 'Casual',
     'T-Shirt': 'Casual', Polo: 'Smart Casual', Blouse: 'Smart Casual', 'Tank Top': 'Casual',
     Skirt: 'Casual', Dress: 'Elegant', Jeans: 'Casual', Chinos: 'Smart Casual', Pants: 'Smart Casual',
-    Shorts: 'Casual', Sneakers: 'Casual', Boots: 'Casual', Belt: 'Smart Casual', Scarf: 'Smart Casual',
+    Shorts: 'Casual', Sneakers: 'Casual', Boots: 'Casual', Sandals: 'Casual',
+    'Flip Flops': 'Casual', Flats: 'Casual', Belt: 'Smart Casual', Scarf: 'Smart Casual',
     Sunglasses: 'Casual', Handbag: 'Smart Casual',
   };
   const byStyle = {

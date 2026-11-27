@@ -53,9 +53,9 @@ const NEGATIVE_TEMPLATES = [
  * app uses (OUTFIT_SLOTS); `subcategory` is what a shopper would call it.
  */
 const GARMENTS = [
-  { subcategory: 'T-Shirt', category: 'Tops', phrases: ['t-shirt', 't shirt', 'tee shirt', 'plain cotton t-shirt'] },
+  { subcategory: 'T-Shirt', category: 'Tops', phrases: ['t-shirt', 't shirt', 'tee shirt', 'plain cotton t-shirt', 'crew neck t-shirt', 'graphic t-shirt', 'round neck short sleeve tee'] },
   { subcategory: 'Shirt', category: 'Tops', phrases: ['dress shirt', 'button up shirt', 'collared shirt', 'floral shirt', 'oxford shirt'] },
-  { subcategory: 'Polo Shirt', category: 'Tops', phrases: ['polo shirt'] },
+  { subcategory: 'Polo Shirt', category: 'Tops', phrases: ['polo shirt', 'polo shirt with a collar', 'collared polo shirt with a button placket'] },
   { subcategory: 'Blouse', category: 'Tops', phrases: ['blouse', 'silk blouse'] },
   { subcategory: 'Tank Top', category: 'Tops', phrases: ['tank top', 'sleeveless top', 'camisole'] },
   { subcategory: 'Sweater', category: 'Tops', phrases: ['sweater', 'knit sweater', 'cable knit sweater', 'wool sweater', 'jumper'] },
@@ -84,8 +84,13 @@ const GARMENTS = [
   },
   { subcategory: 'Dress', category: 'Bottoms', phrases: ['dress', 'womens dress', 'maxi dress', 'little black dress', 'evening gown'] },
   { subcategory: 'Sneakers', category: 'Shoes', phrases: ['sneakers', 'running shoes', 'trainers', 'white sneakers'] },
-  { subcategory: 'Dress Shoes', category: 'Shoes', phrases: ['dress shoes', 'oxford shoes', 'loafers', 'high heels', 'leather dress shoes'] },
-  { subcategory: 'Boots', category: 'Shoes', phrases: ['boots', 'leather boots', 'ankle boots', 'chelsea boots'] },
+  { subcategory: 'Dress Shoes', category: 'Shoes', phrases: ['dress shoes', 'oxford shoes', 'loafers', 'high heels', 'stiletto heels', 'heeled pumps', 'stiletto heel sandals', 'women heeled shoes', 'wedge heels', 'leather dress shoes', 'derby shoes', 'monk strap shoes'] },
+  { subcategory: 'Boots', category: 'Shoes', phrases: ['boots', 'leather boots', 'ankle boots', 'chelsea boots', 'knee high boots', 'combat boots'] },
+  // The 1478-image stress test showed sandals and flip-flops landing on
+  // 'Sunglasses' (13x) because no footwear entry matched them at all.
+  { subcategory: 'Sandals', category: 'Shoes', phrases: ['flat sandals', 'strappy flat sandals', 'leather flat sandals', 'sport sandals', 'slide sandals', 'gladiator sandals'] },
+  { subcategory: 'Flip Flops', category: 'Shoes', phrases: ['rubber flip flops', 'beach flip flops', 'foam flip flop slippers'] },
+  { subcategory: 'Flats', category: 'Shoes', phrases: ['ballet flats', 'ballerina shoes', 'flat shoes', 'ballet flat shoes'] },
   {
     subcategory: 'Belt',
     category: 'Accessories',
