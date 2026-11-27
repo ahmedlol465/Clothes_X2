@@ -409,6 +409,45 @@ function trendScore(items, occasion) {
   return Math.min(97, score);
 }
 
+/** Bottoms with an elastic waistband take no belt - joggers, sweats, track. */
+function takesABelt(item: any = {}) {
+  const hay = normalize(`${item.category || ''} ${item.name || ''}`);
+  return !/sweat|jogger|track|athletic|lounge|gym|elastic/.test(hay);
+}
+
+function isBelt(item: any = {}) {
+  return /belt/.test(normalize(`${item.category || ''} ${item.name || ''}`));
+}
+
+/** Clearly athletic shoes - fine under chinos, wrong under a suit. */
+function isAthleticShoe(item: any = {}) {
+  const hay = normalize(`${item.category || ''} ${item.name || ''} ${item.style || ''}`);
+  return /sneaker|runner|trainer|athletic|sport/.test(hay);
+}
+
+/** Clearly dressy shoes - right under trousers, odd under joggers. */
+function isDressShoe(item: any = {}) {
+  const hay = normalize(`${item.category || ''} ${item.name || ''} ${item.style || ''}`);
+  return /oxford|loafer|derby|brogue|dress|heel|monk|formal/.test(hay);
+}
+
+/** A bottom that reads dressed-up: suit, dress trousers, formal styles. */
+function isFormalBottom(item: any = {}) {
+  const hay = normalize(`${item.category || ''} ${item.name || ''} ${item.style || ''} ${item.occasion || ''}`);
+  return /suit|tuxedo|dress trouser|dress pant|formal/.test(hay);
+}
+
+/**
+ * Shoes stay on their own side of the formality line: no dress shoes under
+ * joggers, no sneakers under a suit. Everything in between is taste, not a
+ * rule, so it stays with the scoring.
+ */
+function shoesMatchBottom(shoes: any = {}, bottom: any = {}) {
+  if (!takesABelt(bottom) && isDressShoe(shoes)) return false;
+  if (isFormalBottom(bottom) && isAthleticShoe(shoes)) return false;
+  return true;
+}
+
 export {
   HUE,
   COLOR_FAMILY,
@@ -426,6 +465,12 @@ export {
   hueDistance,
   colorHarmony,
   formalityOf,
+  takesABelt,
+  isBelt,
+  isAthleticShoe,
+  isDressShoe,
+  isFormalBottom,
+  shoesMatchBottom,
   occasionTarget,
   detectOccasions,
   occasionFit,

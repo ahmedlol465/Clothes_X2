@@ -140,9 +140,23 @@ function beamSearch(pool: any, ctx: any = {}) {
 
     const next = [];
     for (const beam of beams) {
-      for (const candidate of candidates) {
+      const bottom = beam.pieces.find((p) => tax.slotOf(p) === 'bottom');
+      // Shoes keep to their side of the formality line (no dress shoes
+      // under joggers, no sneakers under a suit) - unless every option
+      // would break the rule, in which case the best mismatch still beats
+      // bare feet.
+      let usable = candidates;
+      if (slot === 'shoes' && bottom) {
+        const matched = candidates.filter((c) => tax.shoesMatchBottom(c, bottom));
+        if (matched.length) usable = matched;
+      }
+      for (const candidate of usable) {
         // Never pick the same garment twice.
         if (beam.pieces.some((p) => p.id === candidate.id)) continue;
+        // A belt only goes with pants that take one - never with joggers
+        // or sweats. The accessory slot is optional, so skip the pairing.
+        if (slot === 'accessory' && bottom
+          && tax.isBelt(candidate) && !tax.takesABelt(bottom)) continue;
         const pieces = [...beam.pieces, candidate];
         next.push({ pieces, score: scoring.scoreOutfit(pieces, scoreCtx).match });
         if (next.length >= MAX_COMBOS) break;
