@@ -65,7 +65,17 @@ export class OutfitReasonService {
       );
       if (!res.ok) throw new Error(`Cloudflare ${res.status}`);
       const payload: any = await res.json();
-      const text = `${payload?.result?.response ?? ''}`.trim();
+      // Workers AI answers in three shapes depending on the model:
+      // {result:{response:"..."}}, {result:{response:{content:"..."}}},
+      // or OpenAI-style {result:{choices:[{message:{content:"..."}}]}}.
+      const r: any = payload?.result;
+      const text = (
+        typeof r?.response === 'string'
+          ? r.response
+          : typeof r?.response?.content === 'string'
+            ? r.response.content
+            : `${r?.choices?.[0]?.message?.content ?? ''}`
+      ).trim();
       if (!text) throw new Error('empty response');
       return text;
     } catch (e) {

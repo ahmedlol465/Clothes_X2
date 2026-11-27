@@ -10,6 +10,7 @@ import {
   WardrobeItem,
 } from '../../database/entities';
 import { OutfitsController } from './outfits.controller';
+import { OutfitIntentService } from './outfit-intent.service';
 import { OutfitReasonService } from './outfit-reason.service';
 import { OutfitsService } from './outfits.service';
 
@@ -25,7 +26,7 @@ import { OutfitsService } from './outfits.service';
     ]),
   ],
   controllers: [OutfitsController],
-  providers: [OutfitsService, OutfitReasonService],
+  providers: [OutfitsService, OutfitIntentService, OutfitReasonService],
   exports: [OutfitsService],
 })
 export class OutfitsModule {}

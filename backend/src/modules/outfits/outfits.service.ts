@@ -20,6 +20,7 @@ import { CreateOutfitDto } from './dto/create-outfit.dto';
 import { Wardrobe, WardrobeItem } from '../../database/entities/wardrobe.entity';
 import { applyFreshnessRotation } from '../../freshness';
 import * as weatherEngine from '../../weather';
+import { OutfitIntentService } from './outfit-intent.service';
 import { OutfitReasonService } from './outfit-reason.service';
 
 @Injectable()
@@ -38,6 +39,7 @@ export class OutfitsService {
     @InjectRepository(StyleProfile)
     private readonly styleProfileRepo: Repository<StyleProfile>,
     private readonly reasons: OutfitReasonService,
+    private readonly intent: OutfitIntentService,
   ) {}
 
   private async userWardrobeIds(userId: string): Promise<string[]> {
@@ -84,8 +86,19 @@ export class OutfitsService {
   }
 
   async recommended(userId: string, query: Record<string, unknown>) {
-    const occasion = String(query.occasion ?? 'casual');
     const count = Number(query.count ?? 3);
+    // His own words, when given, translate into the engine's usual inputs:
+    // the occasion he means and a focus the search scores for. The rule
+    // engine still makes every decision.
+    let occasion = String(query.occasion ?? 'casual');
+    let focus = '';
+    let intentSource: string | undefined;
+    if (query.query != null && `${query.query}`.trim() !== '') {
+      const parsed = await this.intent.parse(`${query.query}`);
+      if (parsed.occasion) occasion = parsed.occasion;
+      focus = parsed.focus;
+      intentSource = parsed.source;
+    }
     // Real weather when the caller does not pin a temperature (the app's
     // weather pill already resolves GPS live weather; the recommendation
     // should dress for the same sky). An explicit tempC still wins, so
@@ -126,6 +139,7 @@ export class OutfitsService {
             occasion,
             weather,
             styleProfile: readStyleProfile(null),
+            focus,
             count,
           });
           const rotated = applyFreshnessRotation(
@@ -144,6 +158,7 @@ export class OutfitsService {
             outfits: withReasons,
             weather,
             occasion,
+            ...(intentSource ? { intent: { focus, source: intentSource } } : {}),
           };
         });
   }
