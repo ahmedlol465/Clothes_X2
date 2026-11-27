@@ -21,16 +21,27 @@ export class OutfitReasonService {
   ): Promise<string> {
     const pieces: any[] = outfit?.items ?? [];
     const names = pieces.map((i) => i?.name).filter(Boolean);
+    // Ground the explanation in what the items actually are (colour +
+    // measured subcategory), not their names: a name like "Piece 12345"
+    // tells the model nothing, so it invents garments (the stress test
+    // caught it praising a "black tie" that was never in the outfit).
+    const descs = pieces
+      .map((i) => {
+        const sub = i?.legacy?.analysis?.subcategory;
+        return [i?.color, sub || i?.category].filter(Boolean).join(' ');
+      })
+      .filter((d) => d.trim().length > 0);
     const tempC = Number(weather?.tempC ?? 24);
     const condition = `${weather?.condition ?? ''}`.trim() || 'mild';
+    const list = descs.length ? descs : names;
     const fallback =
       `Picked for ${occasion} at ${Math.round(tempC)}°C: ` +
-      `${names.slice(0, 3).join(', ')}${names.length > 3 ? ' and more' : ''}.`;
+      `${list.slice(0, 3).join(', ')}${list.length > 3 ? ' and more' : ''}.`;
 
     if (process.env.NODE_ENV === 'test') return fallback;
     const accountId = process.env.CF_ACCOUNT_ID;
     const token = process.env.CF_API_TOKEN;
-    if (!accountId || !token || !names.length) return fallback;
+    if (!accountId || !token || !list.length) return fallback;
 
     try {
       const res = await fetch(
@@ -48,14 +59,16 @@ export class OutfitReasonService {
                 content:
                   'You explain outfit recommendations in one short plain ' +
                   'sentence (max 18 words). Mention the occasion and ' +
-                  'weather and one concrete reason. No adjectives like ' +
-                  '"perfect" or "stunning".',
+                  'weather and one concrete reason. Describe only the ' +
+                  'listed items; never add items, colours or details that ' +
+                  'are not listed. No adjectives like "perfect" or "stunning".',
               },
               {
                 role: 'user',
                 content:
                   `Occasion: ${occasion}. Weather: ${Math.round(tempC)}°C, ` +
-                  `${condition}. Outfit: ${names.join(', ')}. Why does this work?`,
+                  `${condition}. Items: ${list.join('; ')}. ` +
+                  'In one sentence, why do these exact items work here?',
               },
             ],
             max_tokens: 60,
