@@ -14,9 +14,25 @@ const TRYON_DIR = path.join(STORAGE_DIR, 'tryon');
 // Flutter bundle's files, which live next to backend/ in the repo.
 const REPO_ASSETS = path.resolve(__dirname, '../../../../assets');
 const PERSON_ASSET = path.join(REPO_ASSETS, 'images', 'tryon_person.jpg');
+/**
+ * Bundled stand-ins for slots the outfit (or wardrobe) lacks: the try-on
+ * always dresses a full look, so missing shoes or a missing belt come
+ * from these saved defaults for that render only - they are never added
+ * to anyone's wardrobe.
+ */
+const DEFAULT_SHOES_ASSET = path.join(
+  REPO_ASSETS,
+  'images',
+  'shoes_black_loafers.jpg',
+);
+const DEFAULT_BELT_ASSET = path.join(
+  REPO_ASSETS,
+  'images',
+  'accessory_belt_black.jpg',
+);
 
 /** Bumped whenever the prompt or input layout changes. */
-const TRYON_VERSION = 'v2-flux-klein';
+const TRYON_VERSION = 'v3-flux-klein';
 
 const MODEL = '@cf/black-forest-labs/flux-2-klein-4b';
 const OUT_W = 512;
@@ -129,6 +145,9 @@ export class TryonService {
     if (!slots.top && !slots.bottom) {
       throw new Error('outfit has no top or bottom to wear');
     }
+    for (const asset of [DEFAULT_SHOES_ASSET, DEFAULT_BELT_ASSET]) {
+      if (!fs.existsSync(asset)) throw new Error('default garment missing');
+    }
 
     // Input 0: the person. Input 1: top, or top + outerwear side by side
     // when the outfit layers. Input 2: bottoms. Input 3: shoes and
@@ -146,10 +165,18 @@ export class TryonService {
       inputs.push(await this.downscale(slots.outerwear.bytes));
     }
     if (slots.bottom) inputs.push(await this.downscale(slots.bottom.bytes));
+    // Shoes and belt share the fourth input; a slot the outfit lacks is
+    // filled from the bundled defaults so the render is never barefoot.
     const extras: Buffer[] = [];
-    if (slots.shoes) extras.push(slots.shoes.bytes);
-    if (slots.accessory) extras.push(slots.accessory.bytes);
-    if (extras.length) inputs.push(await this.sideBySide(extras));
+    extras.push(
+      slots.shoes ? slots.shoes.bytes : fs.readFileSync(DEFAULT_SHOES_ASSET),
+    );
+    extras.push(
+      slots.accessory
+        ? slots.accessory.bytes
+        : fs.readFileSync(DEFAULT_BELT_ASSET),
+    );
+    inputs.push(await this.sideBySide(extras));
 
     const form = new FormData();
     form.append('prompt', prompt);
