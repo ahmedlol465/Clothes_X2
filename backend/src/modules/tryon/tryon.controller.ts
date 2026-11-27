@@ -1,4 +1,4 @@
-import { Controller, Get, Res } from '@nestjs/common';
+import { Controller, Get, Query, Res } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 
@@ -18,8 +18,12 @@ export class TryonController {
    * which one was served.
    */
   @Get('daily')
-  async daily(@CurrentUser('id') userId: string, @Res() res: Response) {
-    const { bytes, source } = await this.tryon.dailyTryOn(userId);
+  async daily(
+    @CurrentUser('id') userId: string,
+    @Res() res: Response,
+    @Query('occasion') occasion?: string,
+  ) {
+    const { bytes, source } = await this.tryon.dailyTryOn(userId, { occasion });
     res.set({
       'Content-Type': 'image/jpeg',
       'Cache-Control': 'private, max-age=300',

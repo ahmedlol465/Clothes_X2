@@ -114,8 +114,15 @@ export class TryonService {
    */
   async dailyTryOn(
     userId: string,
+    opts: { occasion?: string } = {},
   ): Promise<{ file: string; bytes: Buffer; source: 'ai' | 'collage' }> {
-    const rec: any = await this.outfits.recommended(userId, { count: 1 });
+    // The occasion reaches the recommendation so the render matches the
+    // outfit the home screen is showing for the selected Today chip; the
+    // cache key below is per outfit, so each occasion renders once.
+    const rec: any = await this.outfits.recommended(userId, {
+      count: 1,
+      ...(opts.occasion ? { occasion: opts.occasion } : {}),
+    });
     const outfit = rec?.outfits?.[0];
     const items: any[] = outfit?.items ?? [];
     if (!items.length) {
