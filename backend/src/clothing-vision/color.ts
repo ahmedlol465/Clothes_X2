@@ -66,14 +66,20 @@ const CONFIG = {
   // Coverage band that earns full confidence.
   idealCoverage: [0.08, 0.7],
   // Hue concentration below this reads as a print rather than a colour.
-  hueConcentration: 0.55,
-  // Lightness spread (Lab L p90 - p10) above this reads as a print. A solid
-  // garment still spreads ~15-25 across its own shading, so this is deliberately
-  // generous; it exists to catch stripes and colour blocks, not to second-guess
-  // a measured median.
-  lightnessSpread: 55,
-  // Chroma (CIELAB C) below this is a neutral, whatever hue says.
-  neutralChroma: 9,
+  // Measured on solid catalog garments: median 0.9-1.0 even for dark navy,
+  // whose hue votes are the noisiest (0.44 at the low end), so the line sits
+  // under that.
+  hueConcentration: 0.45,
+  // Lightness spread (Lab L p90 - p10) above this reads as a print. Measured
+  // on solid catalog garments: dark fabrics spread 60-90 from folds and
+  // shading alone (brown p90 = 87), so the old 55 mislabelled plain pieces as
+  // Multicolor. 95 keeps solids solid and still catches black-and-white
+  // stripes and colour blocks.
+  lightnessSpread: 95,
+  // Chroma (CIELAB C) below this is a neutral, whatever hue says. Measured:
+  // true neutrals sit at C 1.5-3.5, while navy reads ~7.5 and brown ~6, so 9
+  // forced dark colours into the neutral path (navy came out "Black").
+  neutralChroma: 5,
   k: 4,
   kmeansIterations: 12,
   // Pixels shaved off the mask boundary before the colour is measured.
@@ -433,7 +439,12 @@ function segment(lab, w, h) {
 function chromaticName(L, C, h) {
   // Reds, pinks, magentas. Lab hue wraps, so this band is split in two.
   if (h < 24) return C > 55 ? 'Red' : 'Burgundy';
-  if (h < 44) return L >= 58 && C > 50 ? 'Orange' : 'Red';
+  // Dark, low-chroma warm hues are brown leather and chocolate knits, not red:
+  // a true red keeps C well above 20 even in shadow.
+  if (h < 44) {
+    if (L < 45 && C < 20) return 'Brown';
+    return L >= 58 && C > 50 ? 'Orange' : 'Red';
+  }
   if (h < 56) return L < 40 ? 'Brown' : 'Rust';
   if (h < 72) {
     if (L >= 50) return C > 50 ? 'Orange' : 'Tan';
@@ -473,11 +484,15 @@ function chromaticName(L, C, h) {
 function neutralName(L, a, b) {
   const warmth = a * 0.6 + b;
 
-  if (L >= 92) return 'White';
-  if (L >= 82) return warmth > 2 ? 'Cream' : 'Off-White';
-  if (L >= 66) return warmth > 6 ? 'Cream' : 'Light Grey';
-  if (L >= 40) return 'Grey';
-  if (L >= 20) return 'Charcoal';
+  // Bands measured against labelled catalog garments: black cloth reads
+  // L 12-28 (it reflects far more light than a theoretical black), charcoal
+  // 28-38, grey 38-58, and a white garment medians ~75-85 against a white
+  // studio background - so White starts at 85, not 92.
+  if (L >= 85) return 'White';
+  if (L >= 72) return warmth > 2 ? 'Cream' : 'Off-White';
+  if (L >= 58) return warmth > 6 ? 'Cream' : 'Light Grey';
+  if (L >= 38) return 'Grey';
+  if (L >= 28) return 'Charcoal';
   return 'Black';
 }
 
@@ -629,6 +644,7 @@ async function analyzeColor(input) {
         v: round(val),
       },
       lightnessSpread: round(lightnessSpread),
+      hueConcentration: round(hueConcentration),
       chromatic: !!isChromatic,
     },
   };
