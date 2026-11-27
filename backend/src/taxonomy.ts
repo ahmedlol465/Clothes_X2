@@ -277,8 +277,12 @@ const WEATHER_SLOPE = 1.1;
 
 function weatherScore(item: any, weather: any = {}) {
   const temp = Number(weather.tempC ?? 24);
+  // The measured garment type counts too: a piece called "Piece 1234" whose
+  // photo was read as "Blazer" or "Sweater" is still a blazer or a sweater
+  // (the audit found blazers recommended at 35C because only the name was read).
+  const measuredType = item.subcategory || item.legacy?.analysis?.subcategory || '';
   const hay = normalize(
-    `${item.name || ''} ${item.style || ''} ${item.material || ''} ${item.category || ''}`,
+    `${item.name || ''} ${measuredType} ${item.style || ''} ${item.material || ''} ${item.category || ''}`,
   );
   const fabric = FABRIC_WARMTH.find(([re]: [RegExp, number]) => re.test(hay));
   let warmth = fabric ? (fabric[1] as number) : 1;

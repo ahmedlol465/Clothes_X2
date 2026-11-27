@@ -67,6 +67,21 @@ const MAX_COMBOS = 400;
 const CLIMATE_WEIGHT = { outerwear: 0.55, shoes: 0.3, top: 0.28, bottom: 0.25, accessory: 0.15 };
 const CLIMATE_FLOOR = 40; // below this the piece is actively wrong for the weather
 
+/**
+ * Season the weather is actually in. The calendar month is the wrong signal
+ * when the caller pins a temperature (or the live weather disagrees with the
+ * date): the audit found winter-labelled pieces recommended at 35C because
+ * the season score only read today's date.
+ */
+function monthForWeather(weather: any = {}, fallback?: number) {
+  const t = Number(weather?.tempC);
+  if (weather?.tempC == null || !Number.isFinite(t)) return fallback ?? (new Date().getMonth() + 1);
+  if (t >= 28) return 7; // summer
+  if (t >= 21) return 5; // spring (mild, next to summer)
+  if (t >= 12) return 10; // autumn
+  return 1; // winter
+}
+
 function rankSlot(pool: any, slot: any, ctx: any = {}) {
   const { occasion = '', weather = {}, styleProfile = {}, memory = null, focus = '' } = ctx;
   // Absolute exclusions ("I never wear sneakers") are filtered, not scored.
@@ -110,7 +125,7 @@ function rankSlot(pool: any, slot: any, ctx: any = {}) {
  */
 function beamSearch(pool: any, ctx: any = {}) {
   const { weather = {}, occasion = '' } = ctx;
-  const month = ctx.month ?? (new Date().getMonth() + 1);
+  const month = ctx.month ?? monthForWeather(weather);
   const scoreCtx = { occasion, weather, styleProfile: ctx.styleProfile, memory: ctx.memory, month };
   const anchor = ctx.anchor || null;
 
@@ -124,7 +139,9 @@ function beamSearch(pool: any, ctx: any = {}) {
     const needsOuter = slot === 'outerwear'
       && (anchorSlot === 'outerwear'
         || Number(weather.tempC ?? 24) <= 21
-        || (tax.occasionTarget(occasion) ?? 2) >= 4);
+        // A dressy occasion wants a jacket only when it is not hot: a blazer
+        // at 35C is the audit's top failure.
+        || ((tax.occasionTarget(occasion) ?? 2) >= 4 && Number(weather.tempC ?? 24) <= 27));
     if (slot === 'outerwear' && !needsOuter) continue;
 
     // When the user names a garment, that garment is not a hint - it is a
@@ -209,7 +226,7 @@ function generateOutfits(wardrobe: any[] = [], opts: any = {}) {
   });
   if (!beams.length) return [];
 
-  const month = opts.month ?? (new Date().getMonth() + 1);
+  const month = opts.month ?? monthForWeather(weather);
   const scored = beams.map((b) => {
     const result = scoring.scoreOutfit(b.pieces, {
       occasion, weather, styleProfile, memory, month,
