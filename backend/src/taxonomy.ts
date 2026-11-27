@@ -190,6 +190,11 @@ const OCCASION_FORMALITY = {
   meeting: 3, presentation: 3, work: 3, office: 3, business: 3,
   interview: 4, client: 4, dinner: 4, 'date night': 4, date: 4,
   evening: 4, birthday: 4, party: 5, wedding: 6, gala: 6, elegant: 5,
+  // The app's own occasion chips send these two literally; without them a
+  // "Formal" or "Smart casual" request matched nothing and the engine
+  // ignored formality entirely (stress test: occasion=formal picked a
+  // casual tee, jeans and sneakers out of a wardrobe full of blazers).
+  formal: 4, 'smart casual': 2,
 };
 
 /**
