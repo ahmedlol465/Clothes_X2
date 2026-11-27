@@ -179,6 +179,16 @@ function beamSearch(pool: any, ctx: any = {}) {
         const matched = candidates.filter((c) => tax.shoesMatchBottom(c, bottom));
         if (matched.length) usable = matched;
       }
+      // Open shoes stay out of the cold and out of dressy occasions, while
+      // any closed pair is available.
+      if (slot === 'shoes') {
+        const cold = Number(weather.tempC ?? 24) <= 12;
+        const dressy = (tax.occasionTarget(occasion) ?? 2) >= 4;
+        if (cold || dressy) {
+          const closed = usable.filter((c) => !tax.isOpenShoe(c));
+          if (closed.length) usable = closed;
+        }
+      }
       // Colours that fight (red with green, red with pink, 3+ loud colours):
       // skip them while a calmer option exists for this beam.
       const calm = usable.filter(

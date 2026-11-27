@@ -493,7 +493,14 @@ function shoesMatchBottom(shoes: any = {}, bottom: any = {}) {
   return true;
 }
 
+/** Open footwear: sandals, flip flops, slides. */
+function isOpenShoe(item: any = {}) {
+  const hay = normalize(`${item.subcategory || ''} ${item.legacy?.analysis?.subcategory || ''} ${item.name || ''}`);
+  return /sandal|flip ?flop|slide|slipper/.test(hay);
+}
+
 export {
+  isOpenShoe,
   HUE,
   COLOR_FAMILY,
   NEUTRAL_COLORS,
