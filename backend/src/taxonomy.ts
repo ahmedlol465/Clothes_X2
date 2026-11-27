@@ -93,6 +93,41 @@ function hueDistance(a, b) {
  * classic "one bold piece against neutrals". Penalises: two or more saturated
  * hues fighting for attention, and true clashes (complementary at full chroma).
  */
+/**
+ * Plain-word colour groups for the "do these fight each other" rule.
+ * Neutrals (black, white, grey, navy, beige, brown, denim blue) never clash.
+ */
+const CLASH_GROUP = [
+  [/(red|burgundy|maroon|crimson)/, 'red'],
+  [/(green|olive|emerald|lime|teal)/, 'green'],
+  [/(pink|magenta|rose|fuchsia)/, 'pink'],
+  [/(orange|rust|coral|peach)/, 'orange'],
+  [/(purple|violet|lavender|indigo|mauve)/, 'purple'],
+  [/(yellow|mustard|gold)/, 'yellow'],
+];
+const CLASH_PAIRS = [
+  ['red', 'green'], ['red', 'pink'], ['red', 'orange'], ['red', 'purple'],
+  ['orange', 'pink'], ['orange', 'purple'], ['yellow', 'purple'],
+  ['yellow', 'pink'], ['green', 'pink'],
+];
+
+function loudGroups(items) {
+  const out = new Set();
+  for (const i of items || []) {
+    const c = normalize(i.color || '');
+    const hit = CLASH_GROUP.find(([re]) => (re as RegExp).test(c));
+    if (hit) out.add(hit[1]);
+  }
+  return out;
+}
+
+/** True when the outfit puts two colours that fight together, or 3+ loud ones. */
+function colorClash(items) {
+  const g = [...loudGroups(items)];
+  if (g.length >= 3) return true;
+  return CLASH_PAIRS.some(([a, b]) => g.includes(a) && g.includes(b));
+}
+
 function colorHarmony(items) {
   const colors = (items || []).map((i) => i.color).filter(Boolean);
   if (colors.length < 2) return 88;
@@ -473,6 +508,7 @@ export {
   hueOf,
   hueDistance,
   colorHarmony,
+  colorClash,
   formalityOf,
   takesABelt,
   isBelt,

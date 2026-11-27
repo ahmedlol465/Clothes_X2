@@ -167,6 +167,12 @@ function beamSearch(pool: any, ctx: any = {}) {
         const matched = candidates.filter((c) => tax.shoesMatchBottom(c, bottom));
         if (matched.length) usable = matched;
       }
+      // Colours that fight (red with green, red with pink, 3+ loud colours):
+      // skip them while a calmer option exists for this beam.
+      const calm = usable.filter(
+        (c) => !tax.colorClash([...beam.pieces, c]),
+      );
+      if (calm.length) usable = calm;
       for (const candidate of usable) {
         // Never pick the same garment twice.
         if (beam.pieces.some((p) => p.id === candidate.id)) continue;
