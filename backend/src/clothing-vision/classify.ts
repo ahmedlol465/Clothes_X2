@@ -87,7 +87,21 @@ async function classify(vec) {
     .slice(0, garments.length)
     .reduce((a, x) => a + x, 0);
 
-  const category = decide(garments);
+  let category = decide(garments);
+  // Photo-anchor arbitration for look-alike pairs. When both the text
+  // winner and the runner-up carry example photos, let the photos
+  // arbitrate: text-only scoring systematically favours "polo shirt" on
+  // plain crew-neck tees, which the stress test surfaced as the biggest
+  // subtype confusion (93 of 260 tees).
+  const winnerAnchor = category.winner.anchorVec;
+  const runnerAnchor = category.runnerUp?.anchorVec;
+  if (winnerAnchor && runnerAnchor
+      && encoder.dot(vec, runnerAnchor) > encoder.dot(vec, winnerAnchor)) {
+    category = decide([
+      { entry: category.runnerUp, sim: category.runnerUpSimilarity },
+      { entry: category.winner, sim: category.winnerSimilarity },
+    ]);
+  }
   const rejected = margin < GATE.clothingMargin || clothingMass < GATE.clothingMass;
 
   if (rejected) {

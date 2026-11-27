@@ -156,6 +156,40 @@ function sentences(phrases, templates) {
 }
 
 /**
+ * Photo anchors: a handful of real example photos per look-alike label, in
+ * assets/vision-anchors/<label-slug>/. Text prompts alone cannot separate
+ * some pairs — the model scores a plain crew-neck tee closer to the
+ * "polo shirt" centroid no matter how the phrases are worded — so labels
+ * that carry anchors can compare the photo against the example photos
+ * directly. A missing folder just means no anchor: text-only, as before.
+ */
+const ANCHORS_DIR = path.join(__dirname, '..', '..', 'assets', 'vision-anchors');
+
+function anchorSlug(label) {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+async function loadAnchor(label) {
+  try {
+    const dir = path.join(ANCHORS_DIR, anchorSlug(label));
+    const files = (await fs.promises.readdir(dir)).filter((f) => /\.(jpe?g|png)$/i.test(f));
+    if (!files.length) return null;
+    const vecs = [];
+    for (const f of files) {
+      const img = await state.tf.RawImage.read(path.join(dir, f));
+      vecs.push(await embedImage(img));
+    }
+    const dim = state.dim;
+    const acc = new Array(dim).fill(0);
+    for (const v of vecs) for (let j = 0; j < dim; j++) acc[j] += v[j];
+    for (let j = 0; j < dim; j++) acc[j] /= vecs.length;
+    return normalize(acc);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Build one centroid per declared value.
  *
  * The centroid averages normalised embeddings over every (phrase x template)
@@ -168,7 +202,7 @@ async function buildBank() {
     vec: await embedSentences(sentences(entry.phrases, templates)),
   })));
 
-  const [garments, nonClothing, styles, seasons, patterns, materials] = await Promise.all([
+  const [garments0, nonClothing, styles, seasons, patterns, materials] = await Promise.all([
     build(P.GARMENTS, P.GARMENT_TEMPLATES),
     build(P.NON_CLOTHING, P.NEGATIVE_TEMPLATES),
     build(P.STYLES, P.GARMENT_TEMPLATES),
@@ -176,6 +210,11 @@ async function buildBank() {
     build(P.PATTERNS, P.GARMENT_TEMPLATES),
     build(P.MATERIALS, P.GARMENT_TEMPLATES),
   ]);
+
+  const garments = await Promise.all(garments0.map(async (g) => {
+    const anchorVec = await loadAnchor(g.subcategory);
+    return anchorVec ? { ...g, anchorVec } : g;
+  }));
 
   return { garments, nonClothing, styles, seasons, patterns, materials };
 }
