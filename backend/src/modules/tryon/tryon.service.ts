@@ -15,24 +15,39 @@ const TRYON_DIR = path.join(STORAGE_DIR, 'tryon');
 const REPO_ASSETS = path.resolve(__dirname, '../../../../assets');
 const PERSON_ASSET = path.join(REPO_ASSETS, 'images', 'tryon_person.jpg');
 /**
- * Bundled stand-ins for slots the outfit (or wardrobe) lacks: the try-on
- * always dresses a full look, so missing shoes or a missing belt come
- * from these saved defaults for that render only - they are never added
- * to anyone's wardrobe.
+ * Bundled stand-ins for slots the outfit (or wardrobe) lacks, chosen to
+ * match the outfit's own formality: a casual look gets sneakers and no
+ * belt, a formal one gets loafers and a belt. Used for that render only,
+ * never added to anyone's wardrobe.
  */
-const DEFAULT_SHOES_ASSET = path.join(
-  REPO_ASSETS,
-  'images',
-  'shoes_black_loafers.jpg',
-);
-const DEFAULT_BELT_ASSET = path.join(
-  REPO_ASSETS,
-  'images',
-  'accessory_belt_black.jpg',
-);
+const DEFAULTS = {
+  casual: {
+    shoes: path.join(REPO_ASSETS, 'images', 'sneakers_minimal.jpg'),
+    belt: null as string | null, // joggers and tees take no belt
+  },
+  formal: {
+    shoes: path.join(REPO_ASSETS, 'images', 'shoes_black_loafers.jpg'),
+    belt: path.join(REPO_ASSETS, 'images', 'accessory_belt_black.jpg'),
+  },
+};
+
+/**
+ * Casual unless something in the outfit explicitly reads formal - a tee
+ * with sweatpants never earns dress shoes, and one blazer does not make
+ * joggers formal.
+ */
+function formalityOf(items: any[]): 'casual' | 'formal' {
+  const text = items
+    .map((i) => `${i?.category ?? ''} ${i?.name ?? ''} ${i?.style ?? ''}`)
+    .join(' ')
+    .toLowerCase();
+  return /formal|suit|tux|oxford|dress shirt|wool blazer/.test(text)
+    ? 'formal'
+    : 'casual';
+}
 
 /** Bumped whenever the prompt or input layout changes. */
-const TRYON_VERSION = 'v3-flux-klein';
+const TRYON_VERSION = 'v4-flux-klein';
 
 const MODEL = '@cf/black-forest-labs/flux-2-klein-4b';
 const OUT_W = 512;
@@ -145,7 +160,7 @@ export class TryonService {
     if (!slots.top && !slots.bottom) {
       throw new Error('outfit has no top or bottom to wear');
     }
-    for (const asset of [DEFAULT_SHOES_ASSET, DEFAULT_BELT_ASSET]) {
+    for (const asset of [DEFAULTS.casual.shoes, DEFAULTS.formal.shoes]) {
       if (!fs.existsSync(asset)) throw new Error('default garment missing');
     }
 
@@ -165,18 +180,29 @@ export class TryonService {
       inputs.push(await this.downscale(slots.outerwear.bytes));
     }
     if (slots.bottom) inputs.push(await this.downscale(slots.bottom.bytes));
-    // Shoes and belt share the fourth input; a slot the outfit lacks is
-    // filled from the bundled defaults so the render is never barefoot.
+    // Shoes and belt share the fourth input. A slot the outfit lacks is
+    // filled from the bundled defaults that match the outfit's own
+    // formality; a casual look gets sneakers and no belt at all.
+    const formality = formalityOf(items);
     const extras: Buffer[] = [];
-    extras.push(
-      slots.shoes ? slots.shoes.bytes : fs.readFileSync(DEFAULT_SHOES_ASSET),
-    );
-    extras.push(
-      slots.accessory
-        ? slots.accessory.bytes
-        : fs.readFileSync(DEFAULT_BELT_ASSET),
-    );
-    inputs.push(await this.sideBySide(extras));
+    let wantsBelt = !!slots.accessory;
+    if (slots.shoes) {
+      extras.push(slots.shoes.bytes);
+    } else {
+      extras.push(fs.readFileSync(DEFAULTS[formality].shoes));
+    }
+    if (!slots.accessory && formality === 'formal' && DEFAULTS.formal.belt) {
+      extras.push(fs.readFileSync(DEFAULTS.formal.belt));
+      wantsBelt = true;
+    } else if (slots.accessory) {
+      extras.push(slots.accessory!.bytes);
+    }
+    if (extras.length === 1) {
+      inputs.push(await this.downscale(extras[0]));
+    } else {
+      inputs.push(await this.sideBySide(extras));
+    }
+    if (!wantsBelt) prompt = prompt.replace(' and belt', '');
 
     const form = new FormData();
     form.append('prompt', prompt);
