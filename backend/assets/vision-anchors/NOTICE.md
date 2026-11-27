@@ -10,3 +10,6 @@ when two labels look alike in text space (see clothing-vision/encoder.ts).
   "Fumarel piqué polo shirt" (CC0) and Uniqlo polo shirt photos by
   BrokenSphere / Wikimedia Commons contributors (CC BY-SA 4.0,
   https://creativecommons.org/licenses/by-sa/4.0/).
+- `dress-shoes/` (heels and formal shoes), `sandals/`, `flip-flops/`, `flats/`:
+  product photos sampled from the same Fashion Product Images (Small)
+  dataset (Public Domain), used to tell the four shoe types apart.
