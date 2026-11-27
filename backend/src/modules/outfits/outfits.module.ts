@@ -10,6 +10,7 @@ import {
   WardrobeItem,
 } from '../../database/entities';
 import { OutfitsController } from './outfits.controller';
+import { OutfitReasonService } from './outfit-reason.service';
 import { OutfitsService } from './outfits.service';
 
 @Module({
@@ -24,7 +25,7 @@ import { OutfitsService } from './outfits.service';
     ]),
   ],
   controllers: [OutfitsController],
-  providers: [OutfitsService],
+  providers: [OutfitsService, OutfitReasonService],
   exports: [OutfitsService],
 })
 export class OutfitsModule {}

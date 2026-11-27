@@ -20,6 +20,7 @@ import { CreateOutfitDto } from './dto/create-outfit.dto';
 import { Wardrobe, WardrobeItem } from '../../database/entities/wardrobe.entity';
 import { applyFreshnessRotation } from '../../freshness';
 import * as weatherEngine from '../../weather';
+import { OutfitReasonService } from './outfit-reason.service';
 
 @Injectable()
 export class OutfitsService {
@@ -36,6 +37,7 @@ export class OutfitsService {
     private readonly wardrobeRepo: Repository<Wardrobe>,
     @InjectRepository(StyleProfile)
     private readonly styleProfileRepo: Repository<StyleProfile>,
+    private readonly reasons: OutfitReasonService,
   ) {}
 
   private async userWardrobeIds(userId: string): Promise<string[]> {
@@ -119,18 +121,27 @@ export class OutfitsService {
     return this.userWardrobeIds(userId).then((itemIds) => {
       if (itemIds.length === 0) return Promise.resolve([]);
       return this.itemRepo.find({ where: { id: In(itemIds) } });
-    }).then((items) => {
+    }).then(async (items) => {
           const outfits = aiEngine.generateOutfits(items, {
             occasion,
             weather,
             styleProfile: readStyleProfile(null),
             count,
           });
+          const rotated = applyFreshnessRotation(
+            outfits,
+            new Map(items.map((item) => [item.id, item])),
+          );
+          // One plain sentence on why each pick works; AI phrasing when
+          // available, an honest template otherwise. Never blocks the list.
+          const withReasons = await Promise.all(
+            rotated.map(async (outfit: any) => ({
+              ...outfit,
+              reason: await this.reasons.explain(outfit, weather, occasion),
+            })),
+          );
           return {
-            outfits: applyFreshnessRotation(
-              outfits,
-              new Map(items.map((item) => [item.id, item])),
-            ),
+            outfits: withReasons,
             weather,
             occasion,
           };

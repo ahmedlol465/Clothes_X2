@@ -425,6 +425,18 @@ class _SelectionCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(outfit.name, style: AppText.cardTitle),
+                      if (outfit.explanation != null) ...[
+                        const SizedBox(height: 3),
+                        // One-line "why this outfit" from the engine
+                        // (AI-phrased, rule-based facts).
+                        Text(
+                          outfit.explanation!,
+                          style: AppText.caption
+                              .copyWith(fontStyle: FontStyle.italic),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                       const SizedBox(height: 3),
                       Text(
                         outfit.summary ?? outfit.pieces.join(' + '),
