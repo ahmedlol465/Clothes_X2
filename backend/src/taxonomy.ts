@@ -100,6 +100,7 @@ function hueDistance(a, b) {
 const CLASH_GROUP = [
   [/(red|burgundy|maroon|crimson)/, 'red'],
   [/(green|olive|emerald|lime|teal)/, 'green'],
+  [/^(blue|sky blue|light blue|royal blue|turquoise)$/, 'blue'],
   [/(pink|magenta|rose|fuchsia)/, 'pink'],
   [/(orange|rust|coral|peach)/, 'orange'],
   [/(purple|violet|lavender|indigo|mauve)/, 'purple'],
@@ -108,7 +109,7 @@ const CLASH_GROUP = [
 const CLASH_PAIRS = [
   ['red', 'green'], ['red', 'pink'], ['red', 'orange'], ['red', 'purple'],
   ['orange', 'pink'], ['orange', 'purple'], ['yellow', 'purple'],
-  ['yellow', 'pink'], ['green', 'pink'],
+  ['yellow', 'pink'], ['green', 'pink'], ['blue', 'green'], ['blue', 'orange'],
 ];
 
 function loudGroups(items) {
