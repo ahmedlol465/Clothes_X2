@@ -50,7 +50,7 @@ function explainOutfit(items: any, ctx: any = {}, compat: any = null) {
 // ----------------------------------------------------------------- ranking
 
 /** Number of candidates to keep per slot during the beam search. */
-const BEAM_PER_SLOT = 6;
+const BEAM_PER_SLOT = 10;
 const BEAM_WIDTH = 8;
 const MAX_COMBOS = 400;
 
