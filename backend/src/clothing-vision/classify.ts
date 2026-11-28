@@ -102,7 +102,14 @@ async function classify(vec) {
       { entry: category.winner, sim: category.winnerSimilarity },
     ]);
   }
-  const rejected = margin < GATE.clothingMargin || clothingMass < GATE.clothingMass;
+  const strictRejected = margin < GATE.clothingMargin || clothingMass < GATE.clothingMass;
+  // Worn photo: nearest non-clothing is a person and a garment label is clear.
+  const worn = strictRejected
+    && nonClothing[0].entry.group === 'people and animals'
+    && margin >= GATE.wornMargin
+    && clothingMass >= GATE.wornMass
+    && category.winnerShare >= GATE.wornGarmentShare;
+  const rejected = strictRejected && !worn;
 
   if (rejected) {
     // Report the failing measure, not just "not clothing".
@@ -153,6 +160,7 @@ async function classify(vec) {
 
   return {
     isClothing: true,
+    worn,
     agreement,
     agreementParts: {
       winnerShare: Number(category.winnerShare.toFixed(4)),

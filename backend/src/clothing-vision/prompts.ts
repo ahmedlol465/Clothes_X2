@@ -186,6 +186,14 @@ const GATE = {
   logitScale: 100,
   clothingMargin: 0.01,
   clothingMass: 0.4,
+  // Worn-photo path: a person wearing the garment (legs in trousers, a jacket
+  // on a body) is closest to "a person" and lands just under the plain gate.
+  // When the nearest non-clothing group is people AND a garment label holds a
+  // real share, the floors drop to these. Objects (mugs, phones, chairs) and
+  // faces never get the relaxed floors.
+  wornMargin: -0.02,
+  wornMass: 0.3,
+  wornGarmentShare: 0.3,
   // Below this top-class share the attribute is reported but flagged uncertain.
   attributeFloor: 0.5,
   // A runner-up holding at least this share means two classes are live, so the
