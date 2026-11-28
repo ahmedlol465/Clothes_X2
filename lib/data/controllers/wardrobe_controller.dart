@@ -19,6 +19,9 @@ class WardrobeController extends ChangeNotifier {
   static const String notClothingMessage =
       "This photo doesn't look like clothing. Tap it to retry with a garment photo.";
 
+  static const String sessionExpiredMessage =
+      'Your session expired. Sign out and sign in again, then retry the photo.';
+
   final SmartWardrobeApi _api;
   final BackendStatus _status;
 
@@ -76,6 +79,9 @@ class WardrobeController extends ChangeNotifier {
         if (e.status == 422) {
           throw ApiException(notClothingMessage, status: 422);
         }
+        if (e.status == 401) {
+          throw ApiException(sessionExpiredMessage, status: 401);
+        }
         rethrow;
       }
       return (url: url, analysis: <String, dynamic>{}, source: 'heuristic');
@@ -121,6 +127,9 @@ class WardrobeController extends ChangeNotifier {
       } on ApiException catch (e) {
         if (e.status == 422) {
           throw ApiException(notClothingMessage, status: 422);
+        }
+        if (e.status == 401) {
+          throw ApiException(sessionExpiredMessage, status: 401);
         }
         if (e.status != null) rethrow;
         // Unreachable backend → keep filename heuristics below.
