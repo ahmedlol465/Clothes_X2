@@ -496,6 +496,10 @@ function shoesMatchBottom(shoes: any = {}, bottom: any = {}) {
 /** One-piece garments (dress, gown, jumpsuit, kurta) cover top and bottom. */
 function isOnePiece(item: any = {}) {
   const sub = normalize(`${item.subcategory || ''} ${item.legacy?.analysis?.subcategory || ''}`);
+  // The user's own category wins: a "dress" they re-filed under Tops or
+  // Outerwear is worn as a top, not as a whole outfit.
+  const cat = normalize(item.category || '');
+  if (cat && !cat.includes('bottom')) return false;
   return /\b(dress|gown|jumpsuit|kurta|romper)\b/.test(sub);
 }
 
