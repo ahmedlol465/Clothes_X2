@@ -30,6 +30,7 @@ import * as path from 'node:path';
 import * as encoder from './encoder';
 import { classify } from './classify';
 import { analyzeColor } from './color';
+import { predictColor, COLOR_HEAD_MIN_SHARE } from './color-head';
 import { MODEL } from './prompts';
 
 const MAX_BYTES = 12 * 1024 * 1024;
@@ -102,9 +103,11 @@ async function analyzeClothingImage(bytes: any, opts: any = {}) {
   }
 
   let verdict;
+  let headColor = null;
   try {
     const vec = await encoder.embedImage(image);
     verdict = await classify(vec);
+    headColor = predictColor(vec);
   } catch (e) {
     return {
       ...base,
@@ -135,6 +138,18 @@ async function analyzeClothingImage(bytes: any, opts: any = {}) {
       confidence: 0,
       method: 'failed',
       error: String(e.message || e).slice(0, 160),
+    };
+  }
+
+  // The embedding head names colour better than the pixel read when it is
+  // reasonably sure; otherwise the pixel colour stands.
+  if (headColor && headColor.share >= COLOR_HEAD_MIN_SHARE) {
+    color = {
+      ...color,
+      color: headColor.color,
+      method: `embedding-head (pixels: ${color.color ?? 'none'})`,
+      confidence: Number(headColor.share.toFixed(4)),
+      pixelColor: color.color,
     };
   }
 
