@@ -223,7 +223,7 @@ function recentUsage(items) {
 
 /** Completeness: does this actually form a wearable outfit? */
 function wardrobeAvailability(items) {
-  const slots = new Set(items.map(tax.slotOf).filter(Boolean));
+  const slots = new Set(items.flatMap(tax.slotsOf));
   if (!slots.size) return 40;
   const required = tax.requiredSlots();
   const filled = required.filter((s) => slots.has(s)).length / required.length;
@@ -277,7 +277,7 @@ function seasonMatch(items, month) {
  * complete blazer-and-trousers look.
  */
 function completeness(items) {
-  const slots = new Set((items || []).map(tax.slotOf).filter(Boolean));
+  const slots = new Set((items || []).flatMap(tax.slotsOf));
   const required = tax.requiredSlots();
   const filled = required.filter((s) => slots.has(s)).length;
   return { ratio: filled / required.length, filled, required: required.length };

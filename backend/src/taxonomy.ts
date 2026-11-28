@@ -493,6 +493,19 @@ function shoesMatchBottom(shoes: any = {}, bottom: any = {}) {
   return true;
 }
 
+/** One-piece garments (dress, gown, jumpsuit, kurta) cover top and bottom. */
+function isOnePiece(item: any = {}) {
+  const sub = normalize(`${item.subcategory || ''} ${item.legacy?.analysis?.subcategory || ''}`);
+  return /\b(dress|gown|jumpsuit|kurta|romper)\b/.test(sub);
+}
+
+/** Every slot this garment fills: a dress fills top and bottom. */
+function slotsOf(item: any = {}) {
+  if (isOnePiece(item)) return ['top', 'bottom'];
+  const s = slotOf(item);
+  return s ? [s] : [];
+}
+
 /** Open footwear: sandals, flip flops, slides. */
 function isOpenShoe(item: any = {}) {
   const hay = normalize(`${item.subcategory || ''} ${item.legacy?.analysis?.subcategory || ''} ${item.name || ''}`);
@@ -500,6 +513,8 @@ function isOpenShoe(item: any = {}) {
 }
 
 export {
+  isOnePiece,
+  slotsOf,
   isOpenShoe,
   HUE,
   COLOR_FAMILY,

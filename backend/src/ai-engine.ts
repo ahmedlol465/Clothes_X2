@@ -166,9 +166,16 @@ function beamSearch(pool: any, ctx: any = {}) {
     // When the user names a garment, that garment is not a hint - it is a
     // requirement. Ranking alone used to drop it, so the reply would claim it
     // was "anchored" on a piece the outfit did not contain.
+    // Dresses rank first for dressy occasions and would fill every bottom
+    // candidate: rank them apart from separates and keep only the best four.
     const candidates = anchor && tax.slotOf(anchor) === slot
       ? [anchor]
-      : rankSlot(pool, slot, ctx);
+      : slot === 'bottom'
+        ? [
+          ...rankSlot(pool.filter((i) => !tax.isOnePiece(i)), slot, ctx),
+          ...rankSlot(pool.filter((i) => tax.isOnePiece(i)), slot, ctx).slice(0, 4),
+        ]
+        : rankSlot(pool, slot, ctx);
     if (!candidates.length) {
       if (required) continue; // tolerate an incomplete wardrobe
       continue;
@@ -176,6 +183,11 @@ function beamSearch(pool: any, ctx: any = {}) {
 
     const next = [];
     for (const beam of beams) {
+      // A beam that already wears a dress has no bottom to add.
+      if (slot === 'bottom' && beam.pieces.some((p) => tax.isOnePiece(p))) {
+        next.push(beam);
+        continue;
+      }
       const bottom = beam.pieces.find((p) => tax.slotOf(p) === 'bottom');
       // Shoes keep to their side of the formality line (no dress shoes
       // under joggers, no sneakers under a suit) - unless every option
@@ -209,7 +221,13 @@ function beamSearch(pool: any, ctx: any = {}) {
         // or sweats. The accessory slot is optional, so skip the pairing.
         if (slot === 'accessory' && bottom
           && tax.isBelt(candidate) && !tax.takesABelt(bottom)) continue;
-        const pieces = [...beam.pieces, candidate];
+        // A dress is a whole outfit base: it replaces the chosen top rather
+        // than being worn as trousers under it.
+        let base = beam.pieces;
+        if (slot === 'bottom' && tax.isOnePiece(candidate)) {
+          base = beam.pieces.filter((p) => tax.slotOf(p) !== 'top' || p === anchor);
+        }
+        const pieces = [...base, candidate];
         next.push({ pieces, score: scoring.scoreOutfit(pieces, scoreCtx).match });
         if (next.length >= MAX_COMBOS) break;
       }
@@ -217,7 +235,14 @@ function beamSearch(pool: any, ctx: any = {}) {
     }
     if (!next.length) continue;
     next.sort((a, b) => b.score - a.score);
-    beams = next.slice(0, BEAM_WIDTH);
+    // Dress looks are a minority of any wardrobe: keep at most four in the
+    // beam, or one well-scoring dress drowns out every other outfit.
+    let dresses = 0;
+    beams = next.filter((b) => {
+      if (!b.pieces.some((p) => tax.isOnePiece(p))) return true;
+      dresses += 1;
+      return dresses <= 4;
+    }).slice(0, BEAM_WIDTH);
   }
 
   return beams;
