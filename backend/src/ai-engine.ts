@@ -198,6 +198,11 @@ function beamSearch(pool: any, ctx: any = {}) {
         const matched = candidates.filter((c) => tax.shoesMatchBottom(c, bottom));
         if (matched.length) usable = matched;
       }
+      // Sport: athletic shoes only, while any exist in the pool.
+      if (slot === 'shoes' && /sport|gym|workout|run|train/.test(String(occasion).toLowerCase())) {
+        const athletic = usable.filter((c) => tax.isAthleticShoe(c));
+        if (athletic.length) usable = athletic;
+      }
       // Open shoes stay out of the cold and out of dressy occasions, while
       // any closed pair is available.
       if (slot === 'shoes') {
